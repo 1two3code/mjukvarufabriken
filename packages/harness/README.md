@@ -26,6 +26,10 @@ Runs a scripted 3-turn Swedish conversation and prints the resulting spec, size 
 
 `npm test -- --project @mf/harness` — estimator rules and the engine with a fake client (canned `tool_use` responses), including a question → answer → complete sequence.
 
+## QA gates (M4)
+
+`src/job/gates.ts` — `runGates` runs `verify → acceptance-tests → review → acceptance-check` after the last merge, one `GateReport` (from `@mf/models`) per gate, emitted as a `gate` event; the first red gate stops the chain (fail closed), a throwing port is red, an abort stops without a report. `src/job/gateSessions.ts` holds the live Agent SDK gates (`acceptanceTestsGate`, `reviewGate`, `acceptanceCheckGate`): read-only sessions use `readOnlyTools` + a JSON-schema `outputSchema` (Zod-validated `structured_output`), fix sessions get the full worker tools and exactly one attempt. `runJob` emits `notify` for the admins on `failed`/`killed`. Tests: `test/job/gates.test.ts` (control flow with fake ports), `test/job/gateSessions.test.ts` (each gate with a mocked `runSession` on a real temp git repo). `npm run gates:demo -- --repo <dir> --spec <json>` runs the gates alone on a built repo (see apps/job/README.md).
+
 ## Build-job orchestrator (M3, skeleton)
 
 `runJob(spec, budget)` is a typed placeholder; `JobSpec`, `JobBudget`, `JobStatus` and `JobResult` are the contract the api and the job container will share. `JobSpec.spec` is the frozen `Spec` from `@mf/models`.

@@ -1,5 +1,5 @@
 import { EntityNotFound } from '#/lib/entityError.ts'
-import { createMockJob } from '#/plugins/__mocks__/db.ts'
+import { createMockJob, createMockJobEvent } from '#/plugins/__mocks__/db.ts'
 import { mockTaskArn } from '#/plugins/__mocks__/ecs.ts'
 import { createMockSpec, createMockSpecDraft } from '#/services/__mocks__/specService.ts'
 import { budgetForSize, JobAlreadyActive, SpecNotFrozen } from '#/services/jobService.ts'
@@ -132,6 +132,34 @@ describe('Job Service', () => {
 		it('Passes the cursor through to the repository', async () => {
 			await app.jobService.listEvents('job-1', 42, user)
 			expect(app.db.jobs.listEvents).toHaveBeenCalledWith('job-1', 42)
+		})
+
+		it('Hides notify events and gate details from customers, not from admins', async () => {
+			const gate = {
+				...createMockJobEvent({ id: 2, type: 'gate' }),
+				payload: {
+					name: 'review',
+					ok: true,
+					summary: '1 finding(s), none high/medium open',
+					details: { findings: [{ file: 'apps/api/src/routes/login.ts', line: 40 }] },
+				},
+			}
+			const notify = {
+				...createMockJobEvent({ id: 3, type: 'notify' }),
+				payload: { to: 'admins', subject: 'Build job job-1 failed', text: 'secret-ish' },
+			}
+			vi.spyOn(app.db.jobs, 'listEvents').mockResolvedValue([createMockJobEvent(), gate, notify])
+
+			const forCustomer = await app.jobService.listEvents('job-1', 0, user)
+			const forAdmin = await app.jobService.listEvents('job-1', 0, admin)
+
+			expect(forCustomer.map(event => event.type)).toEqual(['started', 'gate'])
+			expect(forCustomer[1]!.payload).toEqual({
+				name: 'review',
+				ok: true,
+				summary: '1 finding(s), none high/medium open',
+			})
+			expect(forAdmin).toEqual([createMockJobEvent(), gate, notify])
 		})
 
 		it('Filters the order list by org for users', async () => {

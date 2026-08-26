@@ -1,3 +1,4 @@
+import { acceptanceCheckGate, acceptanceTestsGate, reviewGate } from './gateSessions.ts'
 import { mergeTask } from './merge.ts'
 import { createPlanner } from './planner.ts'
 import { runTask, verifyRepo } from './worker.ts'
@@ -12,7 +13,7 @@ export type LivePortsOptions = {
 	workerModel?: string
 }
 
-/** The real planner / Agent SDK workers / git merge / lint+test verification */
+/** The real planner / Agent SDK workers / git merge / lint+test verification / M4 gate sessions */
 export const createLivePorts = ({
 	client,
 	planModel,
@@ -24,5 +25,8 @@ export const createLivePorts = ({
 		runTask: input => runTask({ ...input, model: workerModel }),
 		mergeTask: input => mergeTask({ ...input, model: workerModel }),
 		verify: ({ repoDir, signal }) => verifyRepo(repoDir, signal),
+		acceptanceTests: input => acceptanceTestsGate(input, { model: workerModel }),
+		review: input => reviewGate(input, { model: workerModel }),
+		acceptanceCheck: input => acceptanceCheckGate(input, { model: workerModel }),
 	}
 }

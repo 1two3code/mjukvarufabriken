@@ -44,6 +44,8 @@
   "job.event.taskFailed": "Uppgift {{taskId}} misslyckades: {{reason}}",
   "job.event.taskFinished": "Uppgift {{taskId}} klar ({{tokens}} tokens)",
   "job.event.taskStarted": "Startade uppgift: {{title}}",
+  "job.event.gateFailed": "Grind {{name}} underkänd: {{summary}}",
+  "job.event.gateOk": "Grind {{name}} godkänd: {{summary}}",
   "job.event.verifyFailed": "Slutlig verifiering misslyckades: {{output}}",
   "job.event.verifyOk": "Slutlig lint + tester godkända",
   "job.log.empty": "Inga händelser ännu.",

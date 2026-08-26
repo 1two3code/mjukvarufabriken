@@ -44,6 +44,8 @@
   "job.event.taskFailed": "Task {{taskId}} failed: {{reason}}",
   "job.event.taskFinished": "Task {{taskId}} finished ({{tokens}} tokens)",
   "job.event.taskStarted": "Started task: {{title}}",
+  "job.event.gateFailed": "Gate {{name}} failed: {{summary}}",
+  "job.event.gateOk": "Gate {{name}} passed: {{summary}}",
   "job.event.verifyFailed": "Final verification failed: {{output}}",
   "job.event.verifyOk": "Final lint + tests passed",
   "job.log.empty": "No events yet.",

@@ -85,6 +85,9 @@ const createFakePorts = ({
 			return { ok: true, tokens: 0 }
 		}),
 		verify: vi.fn(async () => ({ ok: true, output: 'green' })),
+		acceptanceTests: vi.fn(async () => ({ ok: true, tokens: 0, summary: 'tests green' })),
+		review: vi.fn(async () => ({ ok: true, tokens: 0, summary: 'no findings' })),
+		acceptanceCheck: vi.fn(async () => ({ ok: true, tokens: 0, summary: 'all met' })),
 	}
 
 	const release = async (id: string) => {
@@ -143,7 +146,7 @@ describe('runJob', () => {
 		expect(types().filter(t => t === 'task_started')).toHaveLength(4)
 		expect(types().filter(t => t === 'task_finished')).toHaveLength(4)
 		expect(types().filter(t => t === 'merge')).toHaveLength(4)
-		expect(types().slice(-2)).toEqual(['verify', 'done'])
+		expect(types().slice(-5)).toEqual(['gate', 'gate', 'gate', 'gate', 'done'])
 		// planner 600 + 4 × 100
 		expect(outcome.tokensUsed).toBe(1000)
 		expect(tokens.at(-1)).toBe(1000)
@@ -172,7 +175,7 @@ describe('runJob', () => {
 		expect(fake.started).toContain('c')
 		expect(fake.merged).toEqual(['a', 'c'])
 		expect(types()).toContain('task_failed')
-		expect(types().at(-1)).toBe('failed')
+		expect(types().slice(-2)).toEqual(['failed', 'notify'])
 		expect(fake.ports.verify).not.toHaveBeenCalled()
 	})
 
@@ -202,7 +205,7 @@ describe('runJob', () => {
 
 		expect(outcome.status).toBe('failed')
 		expect(outcome.reason).toMatch(/a: git checkout main failed/)
-		expect(types().at(-1)).toBe('failed')
+		expect(types().slice(-2)).toEqual(['failed', 'notify'])
 		expect(clearSpy).toHaveBeenCalledTimes(1)
 		clearSpy.mockRestore()
 	})
@@ -215,8 +218,10 @@ describe('runJob', () => {
 		const outcome = await runJob(job(), { ports: fake.ports, hooks })
 
 		expect(outcome.status).toBe('failed')
-		expect(outcome.reason).toMatch(/final verification failed:\nspawn npm ENOENT/)
-		expect(types().slice(-2)).toEqual(['verify', 'failed'])
+		expect(outcome.reason).toMatch(
+			/gate\(s\) failed: verify\nverify: gate crashed: spawn npm ENOENT/
+		)
+		expect(types().slice(-3)).toEqual(['gate', 'failed', 'notify'])
 	})
 
 	it('Reports killed when a merge rejects because of the kill abort', async () => {
@@ -232,7 +237,7 @@ describe('runJob', () => {
 		const outcome = await runJob(job(), { ports: fake.ports, hooks })
 
 		expect(outcome.status).toBe('killed')
-		expect(types().at(-1)).toBe('killed')
+		expect(types().slice(-2)).toEqual(['killed', 'notify'])
 	})
 
 	it('Fails when the final verification is red', async () => {
@@ -244,7 +249,7 @@ describe('runJob', () => {
 
 		expect(outcome.status).toBe('failed')
 		expect(outcome.reason).toMatch(/npm test failed/)
-		expect(types().slice(-2)).toEqual(['verify', 'failed'])
+		expect(types().slice(-3)).toEqual(['gate', 'failed', 'notify'])
 	})
 
 	it('Aborts every in-flight session when the token budget is exceeded', async () => {
@@ -265,7 +270,7 @@ describe('runJob', () => {
 		expect(outcome.status).toBe('failed')
 		expect(outcome.reason).toBe('budget exceeded')
 		expect(signals.every(signal => signal.aborted)).toBe(true)
-		expect(types().at(-1)).toBe('failed')
+		expect(types().slice(-2)).toEqual(['failed', 'notify'])
 		expect(fake.started).not.toContain('d')
 	})
 
@@ -322,7 +327,7 @@ describe('runJob', () => {
 		expect(outcome.reason).toBe('killed')
 		expect(signals.length).toBeGreaterThan(0)
 		expect(signals.every(signal => signal.aborted)).toBe(true)
-		expect(types().at(-1)).toBe('killed')
+		expect(types().slice(-2)).toEqual(['killed', 'notify'])
 	})
 
 	it('Reports a planner failure without running tasks', async () => {
@@ -334,7 +339,7 @@ describe('runJob', () => {
 
 		expect(outcome.status).toBe('failed')
 		expect(outcome.reason).toMatch(/planning failed: model did not call/)
-		expect(types()).toEqual(['started', 'failed'])
+		expect(types()).toEqual(['started', 'failed', 'notify'])
 	})
 
 	it('Keeps going when the event sink throws', async () => {

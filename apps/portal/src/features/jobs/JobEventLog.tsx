@@ -26,6 +26,14 @@ const toneByType: Partial<Record<JobEventType, string>> = {
 	task_failed: styles.error,
 }
 
+/** Tone of a `gate` event depends on its verdict, not its type */
+const toneOf = (event: JobEvent) =>
+	event.type === 'gate'
+		? event.payload.ok
+			? styles.success
+			: styles.error
+		: (toneByType[event.type] ?? '')
+
 const eventText = (event: JobEvent, t: TFunction) => {
 	const { payload } = event
 	switch (event.type) {
@@ -58,6 +66,11 @@ const eventText = (event: JobEvent, t: TFunction) => {
 			return t(`job.event.${event.type}`, { reason: payload.reason ?? '' })
 		case 'started':
 			return t('job.event.started')
+		case 'gate':
+			return t(payload.ok ? 'job.event.gateOk' : 'job.event.gateFailed', {
+				name: payload.name,
+				summary: payload.summary ?? '',
+			})
 		default:
 			return JSON.stringify(payload)
 	}
@@ -84,7 +97,7 @@ export function JobEventLog({ job }: JobEventLogProps) {
 			{events.length === 0 && <p className={styles.empty}>{t('job.log.empty')}</p>}
 			<ol className={styles.list}>
 				{events.map(event => (
-					<li key={event.id} className={[styles.item, toneByType[event.type] ?? ''].join(' ')}>
+					<li key={event.id} className={[styles.item, toneOf(event)].join(' ')}>
 						<time className={styles.time} dateTime={event.createdAt}>
 							{new Date(event.createdAt).toLocaleTimeString(i18n.language)}
 						</time>

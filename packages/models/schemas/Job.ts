@@ -27,6 +27,8 @@ export const jobEventType = [
 	'task_failed',
 	'merge',
 	'verify',
+	'gate',
+	'notify',
 	'done',
 	'failed',
 	'killed',
@@ -71,6 +73,60 @@ export const JobBudgetSchema = z.object({
 })
 export type JobBudget = z.infer<typeof JobBudgetSchema>
 
+// MARK: Gates
+/** QA gates in the order they run after the last merge; the first red gate fails the job */
+export const gateName = ['verify', 'acceptance-tests', 'review', 'acceptance-check'] as const
+export type GateName = (typeof gateName)[number]
+
+export const reviewSeverity = ['high', 'medium', 'low'] as const
+export type ReviewSeverity = (typeof reviewSeverity)[number]
+
+/** One finding of the independent review gate; `id` is what `Job.gateWaivers` refers to */
+export const ReviewFindingSchema = z.object({
+	/** `<file>:<line>` — stable across re-reviews so an admin can waive it up front */
+	id: z.string().min(1),
+	severity: z.enum(reviewSeverity),
+	file: z.string().min(1),
+	line: z.number().int().nonnegative(),
+	claim: z.string().min(1),
+	failureScenario: z.string().min(1),
+})
+export type ReviewFinding = z.infer<typeof ReviewFindingSchema>
+
+export const acceptanceStatus = ['met', 'unmet', 'unknown'] as const
+export type AcceptanceStatus = (typeof acceptanceStatus)[number]
+
+export const AcceptanceEvidenceSchema = z.object({
+	/** Passing acceptance test file(s) and, for UI criteria, what the test asserts */
+	evidence: z.array(z.string()),
+	status: z.enum(acceptanceStatus),
+})
+export type AcceptanceEvidence = z.infer<typeof AcceptanceEvidenceSchema>
+
+/** Criterion id (`f<n>.c<m>`) → evidence; every criterion of the spec must be present and `met` */
+export const AcceptanceReportSchema = z.record(z.string(), AcceptanceEvidenceSchema)
+export type AcceptanceReport = z.infer<typeof AcceptanceReportSchema>
+
+/** Outcome of one gate, emitted as a `gate` event and stored on the job (`jobs.gates`) */
+export const GateReportSchema = z.object({
+	name: z.enum(gateName),
+	ok: z.boolean(),
+	startedAt: z.iso.datetime(),
+	durationMs: z.number().int().nonnegative(),
+	tokens: z.number().int().nonnegative(),
+	summary: z.string(),
+	details: z.record(z.string(), z.unknown()).optional(),
+})
+export type GateReport = z.infer<typeof GateReportSchema>
+
+/** Payload of the `notify` job event — the api forwards it as an email to the admins */
+export const NotifyPayloadSchema = z.object({
+	to: z.literal('admins'),
+	subject: z.string().min(1),
+	text: z.string(),
+})
+export type NotifyPayload = z.infer<typeof NotifyPayloadSchema>
+
 // MARK: Job
 export const JobSchema = z.object({
 	id: z.string(),
@@ -83,6 +139,10 @@ export const JobSchema = z.object({
 	plan: PlanSchema.optional(),
 	/** Human-readable reason when `status` is `failed` or `killed` */
 	reason: z.string().optional(),
+	/** QA gate reports in run order (M4); absent until the first gate has run */
+	gates: z.array(GateReportSchema).optional(),
+	/** Review finding ids (`<file>:<line>`) an admin has waived for this job */
+	gateWaivers: z.array(z.string()).optional(),
 	/** ECS task ARN once the job runs on Fargate */
 	taskArn: z.string().optional(),
 	repositoryUrl: z.string().optional(),

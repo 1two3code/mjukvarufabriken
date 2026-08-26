@@ -123,9 +123,82 @@ export const verifyRepo = async (repoDir: string, signal?: AbortSignal): Promise
 	return { ok: true, output: outputs.join('\n') }
 }
 
+/** One test file of a Vitest `--reporter=json` run */
+export type VitestFileResult = {
+	name: string
+	status: string
+	assertionResults?: { fullName?: string; title?: string; status: string }[]
+}
+export type VitestReport = { success?: boolean; testResults?: VitestFileResult[] }
+
+/**
+ * Pure verdict on a Vitest JSON report: every acceptance file must appear, hold at least one
+ * test, and have nothing but passing tests — a file the runner never picked up (not part of any
+ * project, no `test` script) or an empty file is red, never a vacuous pass.
+ */
+export const evaluateVitestReport = (report: VitestReport, files: string[]): VerifyOutcome => {
+	const results = report.testResults ?? []
+	const problems: string[] = []
+	for (const file of files) {
+		const result = results.find(entry => entry.name === file || entry.name.endsWith(`/${file}`))
+		if (!result) {
+			problems.push(`${file}: not executed`)
+			continue
+		}
+		const tests = result.assertionResults ?? []
+		const failed = tests.filter(test => test.status !== 'passed')
+		if (!tests.length) problems.push(`${file}: no tests`)
+		else if (result.status !== 'passed' || failed.length) {
+			problems.push(
+				`${file}: ${failed.map(test => `${test.fullName ?? test.title ?? '?'} ${test.status}`).join(', ') || result.status}`
+			)
+		}
+	}
+	if (problems.length) {
+		return { ok: false, output: `acceptance tests not green:\n${problems.join('\n')}` }
+	}
+	return { ok: true, output: `${files.length} acceptance test file(s) executed and green` }
+}
+
+const jsonFromOutput = (stdout: string): VitestReport | undefined => {
+	const start = stdout.indexOf('{')
+	if (start < 0) return undefined
+	try {
+		return JSON.parse(stdout.slice(start)) as VitestReport
+	} catch {
+		return undefined
+	}
+}
+
+/**
+ * Runs exactly the given acceptance test files through the repo's Vitest (root config, so a
+ * file outside every configured project is "not executed") and checks each one passed.
+ */
+export const runAcceptanceTests = async (
+	repoDir: string,
+	files: string[],
+	signal?: AbortSignal
+): Promise<VerifyOutcome> => {
+	if (!files.length) return { ok: false, output: 'no acceptance test files to run' }
+	const result = await exec('npx', ['vitest', 'run', '--reporter=json', '--', ...files], {
+		cwd: repoDir,
+		signal,
+	})
+	const report = jsonFromOutput(result.stdout)
+	if (!report) {
+		return {
+			ok: false,
+			output: `vitest produced no JSON report (${result.code}):\n${tail(`${result.stdout}\n${result.stderr}`, 40)}`,
+		}
+	}
+	return evaluateVitestReport(report, files)
+}
+
 // MARK: Agent session
 
 export const workerTools = ['Read', 'Edit', 'Write', 'Bash', 'Glob', 'Grep'] as const
+/** Tools of a session that must not change the repo (review, acceptance check) */
+export const readOnlyTools = ['Read', 'Glob', 'Grep', 'Bash'] as const
 
 export type SessionInput = {
 	cwd: string
@@ -135,9 +208,19 @@ export type SessionInput = {
 	onUsage: (usage: TokenUsage) => void
 	model?: string
 	maxTurns?: number
+	/** Tool allowlist (default: the full worker set) */
+	tools?: readonly string[]
+	/** JSON schema the session's final answer must match; parsed into `structuredOutput` */
+	outputSchema?: Record<string, unknown>
 }
 
-export type SessionOutcome = { ok: boolean; tokens: number; result: string }
+export type SessionOutcome = {
+	ok: boolean
+	tokens: number
+	result: string
+	/** The structured answer when `outputSchema` was given and the session produced one */
+	structuredOutput?: unknown
+}
 
 const messageUsage = (message: SDKMessage): TokenUsage | undefined => {
 	if (message.type !== 'assistant') return undefined
@@ -166,6 +249,8 @@ export const runSession = async ({
 	onUsage,
 	model,
 	maxTurns = 200,
+	tools = workerTools,
+	outputSchema,
 }: SessionInput): Promise<SessionOutcome> => {
 	const controller = new AbortController()
 	const onAbort = () => controller.abort(signal.reason)
@@ -176,8 +261,11 @@ export const runSession = async ({
 		cwd,
 		model: resolveWorkerModel(model),
 		systemPrompt,
-		tools: [...workerTools],
-		allowedTools: [...workerTools],
+		tools: [...tools],
+		allowedTools: [...tools],
+		...(outputSchema
+			? { outputFormat: { type: 'json_schema' as const, schema: outputSchema } }
+			: {}),
 		permissionMode: 'bypassPermissions',
 		allowDangerouslySkipPermissions: true,
 		settingSources: [],
@@ -190,6 +278,7 @@ export const runSession = async ({
 	const usage = createUsageAccumulator(onUsage)
 	let ok = false
 	let result = ''
+	let structuredOutput: unknown
 	let reported = 0
 	let turns = 0
 	try {
@@ -205,6 +294,7 @@ export const runSession = async ({
 					0
 				)
 				ok = message.subtype === 'success' && !message.is_error
+				if (message.subtype === 'success') structuredOutput = message.structured_output
 				result =
 					message.subtype === 'success'
 						? message.result
@@ -227,7 +317,7 @@ export const runSession = async ({
 	}
 	// Top up with anything the per-message stream missed (subagents, compaction)
 	usage.reconcile(reported)
-	return { ok, tokens: usage.total, result }
+	return { ok, tokens: usage.total, result, structuredOutput }
 }
 
 // MARK: Task runner

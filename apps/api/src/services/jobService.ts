@@ -22,6 +22,14 @@ declare module 'fastify' {
 	}
 }
 
+/**
+ * TODO(m3-hardening): when the job reports its events through the api's per-job endpoint instead
+ * of writing to Postgres directly, forward every `notify` event (`NotifyPayload` from @mf/models:
+ * `{ to: 'admins', subject, text }`) to the admins through the api's email transport
+ * (`AUTH_ADMIN_EMAILS`), and persist `gate` event payloads onto `jobs.gates` (migration 0005).
+ * The job container has no email access by design.
+ */
+
 /** The spec must be frozen before a build starts */
 export class SpecNotFrozen extends EntityInvalid {
 	constructor(orderId: string) {
@@ -49,6 +57,20 @@ export const budgetForSize: Record<SizeClass, JobBudget> = {
 }
 
 const isAdmin = (session: BackendSession) => session.role === 'admin'
+
+/**
+ * What a customer may see of the event log: `notify` events are addressed to the admins and
+ * `gate` details carry the full review findings / test output of the delivered code — both stay
+ * admin-only. Customers get the gate's name, verdict, timing, tokens and one-line summary.
+ */
+export const redactEventsForCustomer = (events: JobEvent[]): JobEvent[] =>
+	events
+		.filter(event => event.type !== 'notify')
+		.map(event => {
+			if (event.type !== 'gate') return event
+			const { details: _details, ...payload } = event.payload
+			return { ...event, payload }
+		})
 
 const plugin: FastifyPluginAsync = async app => {
 	const { db, ecs, specService } = app
@@ -107,7 +129,8 @@ const plugin: FastifyPluginAsync = async app => {
 		},
 		listEvents: async (jobId, after, session) => {
 			await get(jobId, session)
-			return db.jobs.listEvents(jobId, after)
+			const events = await db.jobs.listEvents(jobId, after)
+			return isAdmin(session) ? events : redactEventsForCustomer(events)
 		},
 		kill: async jobId => {
 			const job = await db.jobs.get(jobId)

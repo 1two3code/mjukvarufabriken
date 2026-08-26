@@ -1,4 +1,13 @@
-import type { Job, JobBudget, JobEvent, JobStatus, NewJobEvent, Plan, Spec } from '@mf/models'
+import type {
+	GateReport,
+	Job,
+	JobBudget,
+	JobEvent,
+	JobStatus,
+	NewJobEvent,
+	Plan,
+	Spec,
+} from '@mf/models'
 import type { Db } from './index.ts'
 import type { JobsRepository } from './repositories.ts'
 
@@ -16,6 +25,8 @@ type JobRow = {
 	max_duration_minutes: number
 	plan: Plan | null
 	reason: string | null
+	gates: GateReport[] | null
+	gate_waivers: string[] | null
 	task_arn: string | null
 	repository_url: string | null
 	started_at: Date | null
@@ -47,6 +58,8 @@ export const toJob = (row: JobRow): Job => ({
 	tokensUsed: row.tokens_used,
 	plan: row.plan ?? undefined,
 	reason: row.reason ?? undefined,
+	gates: row.gates ?? undefined,
+	gateWaivers: row.gate_waivers?.length ? row.gate_waivers : undefined,
 	taskArn: row.task_arn ?? undefined,
 	repositoryUrl: row.repository_url ?? undefined,
 	startedAt: iso(row.started_at),
@@ -81,6 +94,8 @@ export type JobUpdate = Partial<{
 	tokensUsed: number
 	plan: Plan
 	reason: string
+	gates: GateReport[]
+	gateWaivers: string[]
 	taskArn: string
 	repositoryUrl: string
 	startedAt: Date
@@ -131,6 +146,9 @@ export const updateJob = async (
 		tokens_used: update.tokensUsed,
 		plan: update.plan === undefined ? undefined : sql.json(update.plan as never),
 		reason: update.reason,
+		gates: update.gates === undefined ? undefined : sql.json(update.gates as never),
+		gate_waivers:
+			update.gateWaivers === undefined ? undefined : sql.json(update.gateWaivers as never),
 		task_arn: update.taskArn,
 		repository_url: update.repositoryUrl,
 		started_at: update.startedAt,

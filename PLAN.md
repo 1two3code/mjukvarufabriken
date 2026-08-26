@@ -46,10 +46,10 @@ Everything that needs someone else's approval lives in TODO-EXTERNAL.md and is N
 
 ### M4 — QA gates
 - [ ] M3 hardening: the job reports status/events/usage to the api over an authenticated per-job endpoint instead of holding the RDS master secret (remove `DATABASE_SECRET_ARN` grant + job↔DB SG rule; docs/M3-REVIEW.md #18)
-- [ ] Tests generated from acceptance criteria and must pass
-- [ ] Independent review agent (correctness + security), findings must be fixed or waived
-- [ ] Acceptance-check agent: every criterion mapped to evidence
-- [ ] Job fails closed: no green gates → no delivery, human notified
+- [x] Tests generated from acceptance criteria and must pass — 2026-08-26, unit-verified, live run pending (`acceptance-tests` gate: one `<id>.test.ts[x]` per criterion, one fix session on app code only)
+- [x] Independent review agent (correctness + security), findings must be fixed or waived — 2026-08-26, unit-verified, live run pending (read-only session → strict `ReviewFinding[]`, one fix + re-review, `jobs.gate_waivers`)
+- [x] Acceptance-check agent: every criterion mapped to evidence — 2026-08-26, unit-verified, live run pending (`AcceptanceReport`, any unmet/unknown fails)
+- [x] Job fails closed: no green gates → no delivery, human notified — 2026-08-26, unit-verified, live run pending (`GateReport` per gate as `gate` event, `notify` event to admins; api forwarding + `jobs.gates` persistence pending m3-hardening/persistence). Live check: `npm run gates:demo -- --repo <built repo> --spec <json>`
 
 ### M5 — Delivery
 - [ ] GitHub repo created, README + handover doc, transferred to customer
