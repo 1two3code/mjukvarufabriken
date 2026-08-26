@@ -3,7 +3,7 @@ import { mergeDeep } from '@mf/utils/object'
 
 import type { FastifyInstance, FastifyPluginAsync } from 'fastify'
 import type { PartialDeep } from 'type-fest'
-import type { ResidentUsageRecord } from '@mf/models'
+import type { ResidentInstallation, ResidentUsageRecord, ResidentUsageSummary } from '@mf/models'
 
 const defaultUsageRecord: ResidentUsageRecord = {
 	installationId: 'acme-shop',
@@ -30,6 +30,35 @@ export const createMockResidentUsageRecord = (
 	overrides?: PartialDeep<ResidentUsageRecord>
 ): ResidentUsageRecord => mergeDeep(defaultUsageRecord, overrides)
 
+const defaultInstallation: ResidentInstallation = {
+	id: 'acme-shop',
+	orgId: 'org-1',
+	billingCustomerId: 'cus_acme',
+	createdAt: '2026-09-01T00:00:00.000Z',
+	updatedAt: '2026-09-01T00:00:00.000Z',
+}
+
+export const createMockResidentInstallation = (
+	overrides?: PartialDeep<ResidentInstallation>
+): ResidentInstallation => mergeDeep(defaultInstallation, overrides)
+
+const defaultSummary: ResidentUsageSummary = {
+	installationId: 'acme-shop',
+	orgId: 'org-1',
+	repository: 'acme/shop',
+	month: '2026-09',
+	days: 3,
+	totalTokens: 3_300_000,
+	listPriceUsd: 13.5,
+	billableUsd: 20.25,
+	tasks: { started: 6, succeeded: 3, failed: 3, pullRequestsOpened: 3 },
+	monthlyCap: { tokens: 50_000_000, usedTokens: 3_300_000 },
+}
+
+export const createMockResidentUsageSummary = (
+	overrides?: PartialDeep<ResidentUsageSummary>
+): ResidentUsageSummary => mergeDeep(defaultSummary, overrides)
+
 const mockPlugin: FastifyPluginAsync = async app => {
 	const mock: FastifyInstance['residentService'] = {
 		authenticate: vi.fn().mockResolvedValue('acme-shop'),
@@ -37,6 +66,17 @@ const mockPlugin: FastifyPluginAsync = async app => {
 			Promise.resolve({ id: `${record.installationId}/${record.day}`, stored: true as const })
 		),
 		listUsage: vi.fn().mockResolvedValue([createMockResidentUsageRecord()]),
+		summarizeUsage: vi.fn().mockResolvedValue([createMockResidentUsageSummary()]),
+		listInstallations: vi.fn().mockResolvedValue([createMockResidentInstallation()]),
+		upsertInstallation: vi.fn((id: string, update) =>
+			Promise.resolve(
+				createMockResidentInstallation({
+					id,
+					orgId: update.orgId ?? undefined,
+					billingCustomerId: update.billingCustomerId ?? undefined,
+				})
+			)
+		),
 	}
 
 	app.decorate('residentService', mock)

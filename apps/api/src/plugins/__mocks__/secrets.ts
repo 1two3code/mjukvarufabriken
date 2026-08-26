@@ -16,6 +16,7 @@ const mockPlugin: FastifyPluginAsync = async app => {
 		anthropicApiKey: 'sk-ant-test',
 		residentInstallations: { 'acme-shop': 'installation-token' },
 		githubOauth: { clientId: 'gh-client-id', clientSecret: 'gh-client-secret' },
+		residentBilling: { meterEvent: 'resident_usage_usd_cents', priceId: 'price_resident' },
 		infra: { jobSubnetIds: [], jobApiUrl: 'https://api.example.com' },
 	})
 }

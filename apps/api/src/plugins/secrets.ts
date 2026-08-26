@@ -52,6 +52,15 @@ declare module 'fastify' {
 			 * missing — the GitHub sign-in routes answer 404 and the magic link is the only way in.
 			 */
 			githubOauth?: { clientId: string; clientSecret: string }
+			/**
+			 * Resident usage-based billing (M8): the Stripe billing meter's `event_name` the
+			 * month's billable cents are reported under (`RESIDENT_USAGE_METER_EVENT`) and, for
+			 * reference, the metered price id customers are subscribed to (`RESIDENT_USAGE_PRICE_ID`)
+			 */
+			residentBilling: {
+				meterEvent: string
+				priceId?: string
+			}
 			/** Infra handles (set by the CDK web stack) */
 			infra: {
 				databaseSecretArn?: string
@@ -78,6 +87,9 @@ declare module 'fastify' {
 }
 
 const required = ['AUTH_AUDIENCE'] as const
+
+/** Meter event name unless configured: value = billable US cents */
+export const defaultResidentMeterEvent = 'resident_usage_usd_cents'
 
 /**
  * Secrets Manager values are either the raw string or a JSON object with a single key
@@ -190,6 +202,10 @@ const plugin: FastifyPluginAsync = async app => {
 			githubClientId && githubClientSecret
 				? { clientId: githubClientId, clientSecret: githubClientSecret }
 				: undefined,
+		residentBilling: {
+			meterEvent: process.env.RESIDENT_USAGE_METER_EVENT || defaultResidentMeterEvent,
+			priceId: process.env.RESIDENT_USAGE_PRICE_ID || undefined,
+		},
 		infra: {
 			databaseSecretArn: process.env.DATABASE_SECRET_ARN,
 			jobApiUrl: process.env.JOB_API_URL || authIssuer,

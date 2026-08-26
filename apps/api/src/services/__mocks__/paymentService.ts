@@ -37,6 +37,20 @@ const mockPlugin: FastifyPluginAsync = async app => {
 		completeFakeSession: vi.fn((sessionId: string) =>
 			Promise.resolve(createMockPayment({ sessionId, provider: 'fake', status: 'paid' }))
 		),
+		billResidentUsage: vi.fn((month: string) =>
+			Promise.resolve({
+				month,
+				provider: 'stripe' as const,
+				results: [
+					{
+						installationId: 'acme-shop',
+						outcome: 'reported' as const,
+						usdCents: 2_025,
+						totalUsdCents: 2_025,
+					},
+				],
+			})
+		),
 	}
 
 	app.decorate('paymentService', mock)

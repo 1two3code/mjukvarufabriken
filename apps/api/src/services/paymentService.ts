@@ -1,5 +1,7 @@
+import { createHash } from 'node:crypto'
+
 import fp from 'fastify-plugin'
-import { canTransitionOrder, paymentAmounts } from '@mf/models'
+import { canTransitionOrder, paymentAmounts, usdCentsOf } from '@mf/models'
 
 import { EntityInvalid, EntityNotFound } from '#/lib/entityError.ts'
 import { InvalidWebhookSignature } from '#/plugins/stripe.ts'
@@ -12,6 +14,9 @@ import type {
 	Payment,
 	PaymentKind,
 	PaymentProvider,
+	ResidentBillingResult,
+	ResidentBillingRunResponse,
+	ResidentUsageSummary,
 } from '@mf/models'
 import type { PaymentEvent } from '#/plugins/stripe.ts'
 
@@ -40,6 +45,19 @@ declare module 'fastify' {
 			 * Org-scoped like the order; rejects unless the fake provider is active.
 			 */
 			completeFakeSession: (sessionId: string, session: BackendSession) => Promise<Payment>
+			/**
+			 * Resident usage-based billing (M8): reports each installation's billable cents for
+			 * the month to the provider's meter. Idempotent — the cumulative reported amount is
+			 * stored per installation and month, so a re-run only reports what came in since
+			 * (nothing when the month is unchanged). Each report is reserved on the row before
+			 * the provider is called and confirmed after: a run that dies in between is retried
+			 * with the same event, and a concurrent run loses the compare-and-set
+			 * (`in_progress`). Installations without a billing customer are skipped
+			 * (`no_customer`) unless the fake provider is active; reports made through another
+			 * provider do not count. A month whose total fell below what was reported is flagged
+			 * `overreported` — the credit is an admin's job at the provider.
+			 */
+			billResidentUsage: (month: string) => Promise<ResidentBillingRunResponse>
 			/** The provider in use, so the portal can label the fake one */
 			provider: PaymentProvider
 		}
@@ -94,10 +112,44 @@ const webhookSession = (orgId: string): BackendSession => ({
 
 const isUniqueViolation = (error: unknown) => (error as { code?: string })?.code === '23505'
 
+/** Stripe rejects meter event identifiers longer than this */
+export const maxUsageIdentifierLength = 100
+
+/**
+ * How long a pending report counts as in flight (its run may still be at the provider or
+ * confirming); after that a run that died mid-way is assumed and the report is retried
+ */
+export const usageReportInFlightMs = 5 * 60_000
+
+/**
+ * The idempotency key of one usage report: the cumulative cents in it make a retry of the
+ * same report a no-op at the provider. A long installation id is replaced by its hash so
+ * the key stays within the provider's limit (the installation stays billable)
+ */
+export const usageReportIdentifier = (
+	installationId: string,
+	month: string,
+	totalUsdCents: number
+) => {
+	const identifier = `${installationId}/${month}/${totalUsdCents}`
+	if (identifier.length <= maxUsageIdentifierLength) return identifier
+	const hash = createHash('sha256').update(installationId).digest('hex').slice(0, 32)
+	return `${hash}/${month}/${totalUsdCents}`
+}
+
 type Applied = { payment: Payment; refundDue: boolean }
 
 const plugin: FastifyPluginAsync = async app => {
-	const { db, paymentProvider, orderService, jobService, userService, secrets, email } = app
+	const {
+		db,
+		paymentProvider,
+		orderService,
+		jobService,
+		userService,
+		residentService,
+		secrets,
+		email,
+	} = app
 
 	const orderPageUrl = (orderId: string) => `${secrets.portalUrl}/orders/${orderId}`
 
@@ -211,8 +263,130 @@ const plugin: FastifyPluginAsync = async app => {
 		}
 	}
 
+	// MARK: Resident usage billing (M8)
+
+	/** Reports the month's unbilled cents of one installation; never throws */
+	const billInstallation = async (
+		summary: ResidentUsageSummary
+	): Promise<ResidentBillingResult> => {
+		const { installationId, month } = summary
+		const provider = paymentProvider.kind
+		const totalUsdCents = usdCentsOf(summary.billableUsd)
+		// A report of another provider never reached this one: its months are unbilled here
+		const report = summary.report?.provider === provider ? summary.report : undefined
+		if (summary.report && !report) {
+			app.log.warn(
+				{ installationId, month, reportProvider: summary.report.provider, provider },
+				'resident usage report of another provider ignored'
+			)
+		}
+		const reportedUsdCents = report?.usdCents ?? 0
+		// An unconfirmed reservation is retried as-is: same cents, same identifier → the provider
+		// dedupes it if the earlier attempt did go through. New usage waits for the next run.
+		const pending =
+			report?.pendingUsdCents !== undefined && report.pendingIdentifier !== undefined
+				? { toUsdCents: report.pendingUsdCents, identifier: report.pendingIdentifier }
+				: {
+						toUsdCents: totalUsdCents,
+						identifier: usageReportIdentifier(installationId, month, totalUsdCents),
+					}
+		const usdCents = pending.toUsdCents - reportedUsdCents
+		const unchanged = {
+			installationId,
+			outcome: 'unchanged',
+			usdCents: 0,
+			totalUsdCents: reportedUsdCents,
+		} as const
+		const inFlightSince = report?.pendingAt && Date.parse(report.pendingAt)
+		if (inFlightSince && Date.now() - inFlightSince < usageReportInFlightMs) {
+			return {
+				...unchanged,
+				outcome: 'in_progress',
+				reason: `A report of ${pending.toUsdCents} cents is in flight since ${report?.pendingAt}`,
+			}
+		}
+		if (usdCents < 0) {
+			// A corrected (lower) day: the meter cannot be reduced from here, an admin credits it
+			const creditUsdCents = -usdCents
+			app.log.warn({ installationId, month, creditUsdCents }, 'resident usage OVERREPORTED')
+			return {
+				...unchanged,
+				outcome: 'overreported',
+				reason: `Reported ${reportedUsdCents} cents, the month now totals ${pending.toUsdCents}: credit ${creditUsdCents} cents at the provider`,
+			}
+		}
+		if (usdCents === 0) return unchanged
+
+		const installation = await db.resident.getInstallation(installationId)
+		const customerId = installation?.billingCustomerId
+		if (!customerId && provider !== 'fake') {
+			return {
+				...unchanged,
+				outcome: 'no_customer',
+				reason: 'No billing customer id on the installation',
+			}
+		}
+		// Reserve first: the row records what is about to be sent, and a stale read or a
+		// concurrent run fails the compare-and-set instead of reporting the same cents twice
+		const reserved = await db.resident.reserveUsageReport({
+			installationId,
+			month,
+			provider,
+			fromUsdCents: reportedUsdCents,
+			toUsdCents: pending.toUsdCents,
+			identifier: pending.identifier,
+		})
+		if (!reserved) {
+			return {
+				...unchanged,
+				outcome: 'in_progress',
+				reason: 'Another billing run holds this month — re-run to pick up its result',
+			}
+		}
+		try {
+			const { reference } = await paymentProvider.reportUsage({
+				installationId,
+				month,
+				customerId,
+				usdCents,
+				identifier: pending.identifier,
+			})
+			const confirmed = await db.resident.confirmUsageReport(
+				installationId,
+				month,
+				pending.identifier,
+				reference
+			)
+			if (!confirmed) throw new Error('The reservation was taken over by another run')
+			app.log.info({ installationId, month, usdCents, reference }, 'resident usage reported')
+			return {
+				installationId,
+				outcome: 'reported',
+				usdCents,
+				totalUsdCents: confirmed.usdCents,
+			}
+		} catch (error) {
+			// The reservation stays: the next run retries the identical event (at once when the
+			// release lands, after the in-flight timeout when the database is the problem)
+			app.log.error({ err: error, installationId, month }, 'resident usage report failed')
+			await db.resident
+				.releaseUsageReport(installationId, month, pending.identifier)
+				.catch(releaseError => {
+					app.log.error({ err: releaseError, installationId, month }, 'Could not release')
+				})
+			return { ...unchanged, outcome: 'failed', reason: (error as Error).message }
+		}
+	}
+
 	app.decorate('paymentService', {
 		provider: paymentProvider.kind,
+		billResidentUsage: async month => {
+			const summaries = await residentService.summarizeUsage({ month })
+			const results: ResidentBillingResult[] = []
+			// Sequential: one meter event at a time keeps the provider's rate limit and the log readable
+			for (const summary of summaries) results.push(await billInstallation(summary))
+			return { month, provider: paymentProvider.kind, results }
+		},
 		checkout: async (orderId, kind, session) => {
 			// getDetail syncs the order with its latest job (building → delivered) before the gate
 			const { order, payments } = await orderService.getDetail(orderId, session)
@@ -282,5 +456,6 @@ export default fp(plugin, {
 		'#internal/orderService',
 		'#internal/jobService',
 		'#internal/userService',
+		'#internal/residentService',
 	],
 })

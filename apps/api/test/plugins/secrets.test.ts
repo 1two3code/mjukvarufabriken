@@ -44,6 +44,7 @@ describe('Secrets plugin (secrets)', () => {
 		vi.stubEnv('AUTH_JWT_PRIVATE_KEY', '{"kty":"OKP"}')
 		vi.stubEnv('AUTH_EMAIL_FROM', 'hello@example.com')
 		vi.stubEnv('RESIDENT_INSTALLATIONS', 'acme-shop:tok-a, beta-crm:tok:b,broken,')
+		vi.stubEnv('RESIDENT_USAGE_PRICE_ID', 'price_123')
 
 		// Act
 		const app = await createTestApp({ skipMock: '#/plugins/secrets.ts' })
@@ -62,6 +63,7 @@ describe('Secrets plugin (secrets)', () => {
 			anthropicApiKey: 'sk-ant-env',
 			specModel: 'claude-opus-5',
 			residentInstallations: { 'acme-shop': 'tok-a', 'beta-crm': 'tok:b' },
+			residentBilling: { meterEvent: 'resident_usage_usd_cents', priceId: 'price_123' },
 			infra: expect.objectContaining({
 				artifactsBucket: 'mf-artifacts',
 				jobSubnetIds: ['subnet-a', 'subnet-b'],

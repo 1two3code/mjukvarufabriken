@@ -5,6 +5,9 @@ RUN apk add --no-cache git bash coreutils ripgrep
 
 WORKDIR /usr/src
 
+# RDS TLS (M9): @mf/db ships the pinned RDS CA bundle (packages/db/certs) and trusts it for
+# the Postgres connection only — no download at build time, nothing added to Node's store.
+
 # Workspace dependencies (same layout as apps/api/Dockerfile) — nothing customer-specific
 COPY package*.json ./
 COPY tsconfig*.json ./

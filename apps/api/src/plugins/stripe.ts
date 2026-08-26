@@ -37,6 +37,20 @@ export type PaymentEvent = {
 
 export type SessionReceipts = { hostedInvoiceUrl?: string; receiptUrl?: string }
 
+/** One usage report for the resident's metered subscription (M8 usage-based billing) */
+export type UsageReportInput = {
+	installationId: string
+	month: string
+	/** The provider's customer id (Stripe `cus_…`); required by the Stripe provider */
+	customerId?: string
+	/** Billable US cents to add for the month (a delta, not the month's total) */
+	usdCents: number
+	/** Unique per report: the provider deduplicates retries on it */
+	identifier: string
+}
+
+export type UsageReport = { reference: string }
+
 export type PaymentProvider = {
 	kind: PaymentProviderKind
 	createCheckoutSession: (input: CheckoutInput) => Promise<CheckoutSession>
@@ -46,6 +60,21 @@ export type PaymentProvider = {
 	getSessionReceipts: (sessionId: string) => Promise<SessionReceipts>
 	/** Closes an open Checkout session so it can no longer be paid (no-op when already closed) */
 	expireSession: (sessionId: string) => Promise<void>
+	/**
+	 * Reports metered usage for a customer's subscription; the returned reference identifies
+	 * the report at the provider. Throws `UsageNotBillable` when the customer id is missing.
+	 */
+	reportUsage: (input: UsageReportInput) => Promise<UsageReport>
+}
+
+/** The fake provider keeps every usage report it "sends" so tests and dev can inspect them */
+export type FakePaymentProvider = PaymentProvider & { usageReports: UsageReportInput[] }
+
+/** The installation has no provider customer to bill (Stripe needs a `cus_…` id) */
+export class UsageNotBillable extends Error {
+	constructor(installationId: string) {
+		super(`Installation ${installationId} has no billing customer id`)
+	}
 }
 
 declare module 'fastify' {
@@ -80,8 +109,9 @@ const lineItemLabel: Record<PaymentKind, string> = {
 /** Envs where the fake provider accepts unsigned webhook bodies (never a deployed env) */
 export const unsignedWebhookEnvs = new Set(['local', 'test'])
 
-export const createFakeProvider = (apiUrl: string, env: string): PaymentProvider => ({
+export const createFakeProvider = (apiUrl: string, env: string): FakePaymentProvider => ({
 	kind: 'fake',
+	usageReports: [],
 	createCheckoutSession: async input => {
 		const sessionId = `${fakeSessionPrefix}${input.paymentId}`
 		return { sessionId, url: `${apiUrl}${fakeCheckoutPath(sessionId)}` }
@@ -100,6 +130,11 @@ export const createFakeProvider = (apiUrl: string, env: string): PaymentProvider
 	},
 	getSessionReceipts: async () => ({}),
 	expireSession: async () => {},
+	// No customer needed: the report is recorded locally, nothing is billed
+	async reportUsage(input) {
+		this.usageReports.push(structuredClone(input))
+		return { reference: `fake_usage_${input.identifier}` }
+	},
 })
 
 /**
@@ -115,7 +150,16 @@ export const sessionIdOf = (event: Stripe.Event) => {
 	return undefined
 }
 
-export const createStripeProvider = (stripe: Stripe, webhookSecret?: string): PaymentProvider => ({
+export type StripeProviderOptions = {
+	webhookSecret?: string
+	/** Billing meter `event_name` the usage cents are reported under */
+	meterEvent: string
+}
+
+export const createStripeProvider = (
+	stripe: Stripe,
+	options: StripeProviderOptions
+): PaymentProvider => ({
 	kind: 'stripe',
 	createCheckoutSession: async input => {
 		const session = await stripe.checkout.sessions.create({
@@ -150,6 +194,7 @@ export const createStripeProvider = (stripe: Stripe, webhookSecret?: string): Pa
 		return { sessionId: session.id, url: session.url }
 	},
 	constructWebhookEvent: (rawBody, signature) => {
+		const { webhookSecret } = options
 		if (!webhookSecret) throw new InvalidWebhookSignature('STRIPE_WEBHOOK_SECRET is not set')
 		if (!signature) throw new InvalidWebhookSignature('missing stripe-signature header')
 		try {
@@ -174,6 +219,18 @@ export const createStripeProvider = (stripe: Stripe, webhookSecret?: string): Pa
 	expireSession: async sessionId => {
 		const session = await stripe.checkout.sessions.retrieve(sessionId)
 		if (session.status === 'open') await stripe.checkout.sessions.expire(sessionId)
+	},
+	// Billing Meters: one event per report, `value` in US cents; the metered price attached
+	// to the meter turns the month's events into the invoice line. `identifier` makes a
+	// retried report a no-op at Stripe (unique within 24 h).
+	reportUsage: async input => {
+		if (!input.customerId) throw new UsageNotBillable(input.installationId)
+		const event = await stripe.billing.meterEvents.create({
+			event_name: options.meterEvent,
+			identifier: input.identifier,
+			payload: { stripe_customer_id: input.customerId, value: String(input.usdCents) },
+		})
+		return { reference: event.identifier }
 	},
 })
 
@@ -222,7 +279,10 @@ const plugin: FastifyPluginAsync = async app => {
 		httpClient: Stripe.createFetchHttpClient(),
 	})
 	app.log.info(`Payments: Stripe (${secretKey.startsWith('sk_live') ? 'live' : 'test'} mode)`)
-	app.decorate('paymentProvider', createStripeProvider(stripe, webhookSecret))
+	app.decorate(
+		'paymentProvider',
+		createStripeProvider(stripe, { webhookSecret, meterEvent: secrets.residentBilling.meterEvent })
+	)
 }
 
 export default fp(plugin, { name: '#internal/stripe', dependencies: ['#internal/secrets'] })

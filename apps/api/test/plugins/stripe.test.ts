@@ -82,6 +82,15 @@ describe('Stripe plugin (paymentProvider)', () => {
 			)
 		})
 
+		it('Keeps usage reports locally instead of billing anyone', async () => {
+			const provider = createFakeProvider('https://api.example.com', 'local')
+			const input = { installationId: 'acme-shop', month: '2026-09', usdCents: 5, identifier: 'i1' }
+
+			await expect(provider.reportUsage(input)).resolves.toEqual({ reference: 'fake_usage_i1' })
+
+			expect(provider.usageReports).toEqual([input])
+		})
+
 		it('Has no receipts and builds urls from the given api url', async () => {
 			const provider = createFakeProvider('https://api.example.com', 'local')
 			await expect(provider.getSessionReceipts('fake_1')).resolves.toEqual({})
@@ -283,6 +292,42 @@ describe('Stripe plugin (paymentProvider)', () => {
 				hostedInvoiceUrl: 'https://invoice.stripe.com/i/in_1',
 				receiptUrl: 'https://pay.stripe.com/receipts/ch_1',
 			})
+		})
+
+		it('Reports resident usage as a billing meter event in US cents', async () => {
+			// Arrange
+			const mock = networkMock
+				.post('https://api.stripe.com/v1/billing/meter_events')
+				.reply(200, { object: 'billing.meter_event', identifier: 'acme-shop/2026-09/1350' })
+
+			// Act
+			const report = await app.paymentProvider.reportUsage({
+				installationId: 'acme-shop',
+				month: '2026-09',
+				customerId: 'cus_acme',
+				usdCents: 1_350,
+				identifier: 'acme-shop/2026-09/1350',
+			})
+
+			// Assert
+			expect(report).toEqual({ reference: 'acme-shop/2026-09/1350' })
+			expect(mock.spy.called(1)).toBe(true)
+			const body = new URLSearchParams(await mock.spy.requests[0]!.text())
+			expect(body.get('event_name')).toBe('resident_usage_usd_cents')
+			expect(body.get('identifier')).toBe('acme-shop/2026-09/1350')
+			expect(body.get('payload[stripe_customer_id]')).toBe('cus_acme')
+			expect(body.get('payload[value]')).toBe('1350')
+		})
+
+		it('Refuses to report usage without a customer id', async () => {
+			await expect(
+				app.paymentProvider.reportUsage({
+					installationId: 'acme-shop',
+					month: '2026-09',
+					usdCents: 1,
+					identifier: 'x',
+				})
+			).rejects.toThrow(/no billing customer id/)
 		})
 
 		it('Rejects webhooks when no webhook secret is configured', async () => {

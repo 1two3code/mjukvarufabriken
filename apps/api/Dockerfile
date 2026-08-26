@@ -2,6 +2,9 @@ FROM --platform=linux/amd64 node:24-alpine3.22
 
 WORKDIR /usr/src
 
+# RDS TLS (M9): @mf/db ships the pinned RDS CA bundle (packages/db/certs) and trusts it for
+# the Postgres connection only — no download at build time, nothing added to Node's store.
+
 # Copy workspace dependencies
 COPY package*.json ./
 COPY tsconfig*.json ./
