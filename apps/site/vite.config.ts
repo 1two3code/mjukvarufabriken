@@ -1,6 +1,9 @@
+import { resolve } from 'node:path'
 import { defineConfig } from 'vite'
 import svgr from 'vite-plugin-svgr'
 import react from '@vitejs/plugin-react'
+
+import { markdown } from './src/build/markdown.ts'
 
 import type { PluginOption } from 'vite'
 
@@ -19,9 +22,14 @@ function i18nHotReload(): PluginOption {
 export default defineConfig({
 	plugins: [
 		svgr(),
+		markdown(),
 		i18nHotReload(),
 		react({ babel: { plugins: [['babel-plugin-react-compiler']] } }),
 	],
+	resolve: {
+		// The legal drafts live outside the app root; the markdown plugin renders them at build time
+		alias: { '@legal': resolve(import.meta.dirname, '../../legal') },
+	},
 	server: {
 		open: true,
 		port: 5175,

@@ -8,6 +8,8 @@ import { HomePage } from '#/pages/HomePage.tsx'
 import { HowItWorksPage } from '#/pages/HowItWorksPage.tsx'
 import { NotFoundPage } from '#/pages/NotFoundPage.tsx'
 import { PricingPage } from '#/pages/PricingPage.tsx'
+import { PrivacyPage } from '#/pages/PrivacyPage.tsx'
+import { TermsPage } from '#/pages/TermsPage.tsx'
 
 import type { Page, RouteHandle } from '#/app/routes.ts'
 
@@ -16,6 +18,8 @@ const elements: Record<Page, React.ReactNode> = {
 	howItWorks: <HowItWorksPage />,
 	pricing: <PricingPage />,
 	contact: <ContactPage />,
+	terms: <TermsPage />,
+	privacy: <PrivacyPage />,
 }
 
 /** One route per page and language, each tagged with a `RouteHandle` for the layout */

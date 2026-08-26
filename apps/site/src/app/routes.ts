@@ -3,7 +3,7 @@ export type Language = (typeof languages)[number]
 
 export const defaultLanguage: Language = 'sv'
 
-export const pages = ['home', 'howItWorks', 'pricing', 'contact'] as const
+export const pages = ['home', 'howItWorks', 'pricing', 'contact', 'terms', 'privacy'] as const
 export type Page = (typeof pages)[number]
 
 /** Every page has one path per language; Swedish is the default and lives at the root */
@@ -12,6 +12,9 @@ export const pagePaths: Record<Page, Record<Language, string>> = {
 	howItWorks: { sv: '/sa-funkar-det', en: '/how-it-works' },
 	pricing: { sv: '/priser', en: '/pricing' },
 	contact: { sv: '/kontakt', en: '/contact' },
+	// The legal drafts are Swedish-only documents; the English routes show the same text
+	terms: { sv: '/villkor', en: '/en/terms' },
+	privacy: { sv: '/integritet', en: '/en/privacy' },
 }
 
 /** Data attached to each route via its `handle`, read by the layout to sync language + meta */
