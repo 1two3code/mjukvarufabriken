@@ -13,9 +13,11 @@ export type ExecOptions = {
 /**
  * Environment keys that must never reach the model-driven sandbox (worker shell, repo scripts):
  * database credentials, secret ARNs, the ECS task-role credential endpoint and other AWS config,
- * the App Runner connection/instance-role ARNs (M5) and the GitHub org token.
+ * the App Runner connection/instance-role ARNs (M5), the GitHub org token and the job's report
+ * token (`JOB_TOKEN`, exchanged at start-up but still in the task environment).
  */
-const secretEnvKey = /^(DATABASE_|AWS_|ECS_|APPRUNNER_|GITHUB_TOKEN$|ARTIFACTS_BUCKET$)|_SECRET_ARN$/
+const secretEnvKey =
+	/^(DATABASE_|AWS_|ECS_|APPRUNNER_|GITHUB_TOKEN$|JOB_TOKEN$|ARTIFACTS_BUCKET$)|_SECRET_ARN$/
 
 /**
  * Git hooks are off for everything the job runs. The template ships husky hooks (conventional
