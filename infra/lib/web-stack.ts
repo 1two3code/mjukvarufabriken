@@ -162,6 +162,7 @@ export class WebStack extends Stack {
 					JOB_TASK_DEFINITION_ARN: resources.jobTaskDefinition.taskDefinitionArn,
 					JOB_SUBNET_IDS: jobSubnets.subnetIds.join(','),
 					JOB_SECURITY_GROUP_ID: resources.jobSecurityGroup.securityGroupId,
+					ANTHROPIC_API_KEY_SECRET_ARN: resources.secrets['anthropic-api-key'].secretArn,
 					STRIPE_SECRET_KEY_SECRET_ARN: resources.secrets['stripe-secret-key'].secretArn,
 					STRIPE_WEBHOOK_SECRET_SECRET_ARN: resources.secrets['stripe-webhook-secret'].secretArn,
 				},
@@ -174,6 +175,7 @@ export class WebStack extends Stack {
 		// Least-privilege access to the shared resources
 		const taskRole = api.taskDefinition.taskRole
 		resources.databaseSecret.grantRead(taskRole)
+		resources.secrets['anthropic-api-key'].grantRead(taskRole)
 		resources.secrets['stripe-secret-key'].grantRead(taskRole)
 		resources.secrets['stripe-webhook-secret'].grantRead(taskRole)
 		resources.artifactsBucket.grantReadWrite(taskRole)

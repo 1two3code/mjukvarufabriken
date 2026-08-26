@@ -20,6 +20,7 @@
     "ExportsOutputRefVpcpublicSubnet2SubnetE34B022AC8BB6627": "subnet-05f581559ab6fddb8",
     "ExportsOutputRefSecretstripesecretkeyFB79A3FC0B62145C": "arn:aws:secretsmanager:eu-north-1:814967776290:secret:mf/dev/stripe-secret-key-7aaH0M",
     "JobSecurityGroupId": "sg-0593e3241ef6463af",
+    "ExportsOutputRefSecretanthropicapikeyEBFE9AC94F620331": "arn:aws:secretsmanager:eu-north-1:814967776290:secret:mf/dev/anthropic-api-key-ZeBKMf",
     "ArtifactsBucketName": "resources-dev-artifactsbucket2aac5544-eqwazue2gczd",
     "DatabaseEndpoint": "resources-dev-databaseb269d8bb-xktaz6womcnd.covmch5qhwvi.eu-north-1.rds.amazonaws.com",
     "ExportsOutputRefArtifactsBucket2AAC55442DB5E6C9": "resources-dev-artifactsbucket2aac5544-eqwazue2gczd"
