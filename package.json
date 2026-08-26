@@ -6,6 +6,7 @@
   "scripts": {
     "start:dev": "npm run start:dev -w @mf/site & npm run start:dev -w @mf/portal & npm run start:dev -w @mf/api & wait",
     "build": "npm run build --workspaces --if-present",
+    "smoke": "node scripts/smoke-spa.mjs site portal",
     "version:patch": "npm version patch --workspaces --include-workspace-root --no-git-tag-version",
     "version:minor": "npm version minor --workspaces --include-workspace-root --no-git-tag-version",
     "lint": "npm run lint --workspaces --if-present",

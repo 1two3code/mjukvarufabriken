@@ -39,6 +39,11 @@ jobs:
       - name: Build app
         run: npm run build
 
+      # Renders the built SPA in headless Chrome (preinstalled on ubuntu-latest) and fails if
+      # nothing mounts or the console shows an uncaught error — catches bundle-only breakage.
+      - name: Smoke-test built app
+        run: npm run smoke
+
       - name: CDK synth
         working-directory: infra
         run: npx cdk synth --quiet
