@@ -36,11 +36,16 @@ export class JobAlreadyActive extends EntityInvalid {
 	}
 }
 
-/** Hard token budget per size class (PLAN.md M3): S 2M / M 6M / L 15M */
+/**
+ * Hard token budget per size class: S 6M / M 15M / L 40M budget-tokens. Budget-tokens weight
+ * cache reads at 10 %, and measured cost is ≈ USD 2.5 per million (demo job 2026-08-26:
+ * three-task S spec, 2M spent ≈ USD 5, third task aborted), so these are ≈ USD 15 / 40 / 100
+ * ceilings against 15k / 45k / 120k SEK prices.
+ */
 export const budgetForSize: Record<SizeClass, JobBudget> = {
-	S: { maxTokens: 2_000_000, maxWorkers: 2, maxDurationMinutes: 120 },
-	M: { maxTokens: 6_000_000, maxWorkers: 3, maxDurationMinutes: 240 },
-	L: { maxTokens: 15_000_000, maxWorkers: 4, maxDurationMinutes: 480 },
+	S: { maxTokens: 6_000_000, maxWorkers: 2, maxDurationMinutes: 120 },
+	M: { maxTokens: 15_000_000, maxWorkers: 3, maxDurationMinutes: 240 },
+	L: { maxTokens: 40_000_000, maxWorkers: 4, maxDurationMinutes: 480 },
 }
 
 const isAdmin = (session: BackendSession) => session.role === 'admin'
