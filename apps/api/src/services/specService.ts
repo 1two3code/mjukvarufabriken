@@ -11,8 +11,8 @@ declare module 'fastify' {
 	interface FastifyInstance {
 		specService: {
 			/**
-			 * Returns the draft for the order, creating an empty one owned by the session's org on
-			 * first access. Another org's draft is EntityNotFound (admins see every draft).
+			 * Returns the draft for the order. Unknown ids and another org's draft are
+			 * EntityNotFound (admins see every draft) — orders are only created by `POST /bff/orders`.
 			 */
 			get: (orderId: string, session: BackendSession) => Promise<SpecDraft>
 			/** Runs one spec-engine turn and stores the updated draft. Throws EntityInvalid when frozen. */
@@ -44,14 +44,10 @@ const plugin: FastifyPluginAsync = async app => {
 
 	const get: FastifyInstance['specService']['get'] = async (orderId, session) => {
 		const existing = await db.orders.get(orderId)
-		if (existing) {
-			if (session.role !== 'admin' && existing.orgId !== session.orgId) {
-				throw new EntityNotFound('spec', orderId)
-			}
-			return existing
+		if (!existing || (session.role !== 'admin' && existing.orgId !== session.orgId)) {
+			throw new EntityNotFound('spec', orderId)
 		}
-		const created = createEmptyDraft(orderId, session.orgId)
-		return db.orders.upsert(created, session.userId)
+		return existing
 	}
 
 	app.decorate('specService', {
