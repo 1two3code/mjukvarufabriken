@@ -9,6 +9,7 @@ import {
 	LogDrivers,
 	OperatingSystemFamily,
 } from 'aws-cdk-lib/aws-ecs'
+import { PolicyStatement, Role, ServicePrincipal } from 'aws-cdk-lib/aws-iam'
 import { LogGroup, RetentionDays } from 'aws-cdk-lib/aws-logs'
 import {
 	Credentials,
@@ -61,6 +62,8 @@ export class ResourcesStack extends Stack {
 	readonly jobsCluster: Cluster
 	readonly jobTaskDefinition: FargateTaskDefinition
 	readonly jobSecurityGroup: SecurityGroup
+	/** Instance role of the App Runner services the job creates per delivery (M5) */
+	readonly appRunnerInstanceRole: Role
 	/** `/mf/<env>/jobs` — JSON lines from the job + proxy containers (see docs/RUNBOOK.md) */
 	readonly jobLogGroup: LogGroup
 	/** Postgres security group; consumers add their own ingress rule (see WebStack) */
@@ -224,12 +227,22 @@ export class ResourcesStack extends Stack {
 			},
 		})
 
+		// MARK: App Runner (M5). Services are created at runtime by the job, one per delivery, from
+		// the customer's GitHub repo — nothing App Runner-shaped lives in our stacks except the
+		// instance role the job passes to every service: a role with no policies (the customer api
+		// needs no AWS access in the preview), so `iam:PassRole` on it grants nothing extra.
+		this.appRunnerInstanceRole = new Role(this, 'AppRunnerInstanceRole', {
+			roleName: `mf-apprunner-instance-${environment.name}`,
+			assumedBy: new ServicePrincipal('tasks.apprunner.amazonaws.com'),
+			description: 'Instance role of customer preview services created by build jobs (M5)',
+		})
+
 		// The job container: apps/job/Dockerfile (harness + golden template). `JOB_ID` is set per
 		// run by the api's ecs:RunTask override. Only the ECS credential/metadata endpoints, Secrets
-		// Manager and the artifacts bucket bypass the proxy (NO_PROXY, exact hosts — a wildcard
-		// `.amazonaws.com` would let any AWS-hosted endpoint skip the allowlist); everything else,
-		// including every other AWS service, must pass the allowlist. The database is reached by
-		// IP inside the VPC and is not affected by the proxy variables.
+		// Manager, the artifacts bucket and App Runner bypass the proxy (NO_PROXY, exact hosts — a
+		// wildcard `.amazonaws.com` would let any AWS-hosted endpoint skip the allowlist); everything
+		// else, including every other AWS service, must pass the allowlist. The database is reached
+		// by IP inside the VPC and is not affected by the proxy variables.
 		const job = this.jobTaskDefinition.addContainer('job', {
 			image: ContainerImage.fromAsset(repositoryRoot, { file: 'apps/job/Dockerfile' }),
 			essential: true,
@@ -239,6 +252,12 @@ export class ResourcesStack extends Stack {
 				ARTIFACTS_BUCKET: this.artifactsBucket.bucketName,
 				DATABASE_SECRET_ARN: this.databaseSecret.secretArn,
 				ANTHROPIC_API_KEY_SECRET_ARN: this.secrets['anthropic-api-key'].secretArn,
+				// M5 delivery: GitHub push + App Runner preview + bundle upload
+				GITHUB_TOKEN_SECRET_ARN: this.secrets['github-token'].secretArn,
+				APPRUNNER_INSTANCE_ROLE_ARN: this.appRunnerInstanceRole.roleArn,
+				...(environment.appRunner
+					? { APPRUNNER_CONNECTION_ARN: environment.appRunner.connectionArn }
+					: {}),
 				HTTP_PROXY: `http://127.0.0.1:${proxyPort}`,
 				HTTPS_PROXY: `http://127.0.0.1:${proxyPort}`,
 				NO_PROXY: [
@@ -249,6 +268,7 @@ export class ResourcesStack extends Stack {
 					`secretsmanager.${this.region}.amazonaws.com`,
 					`${this.artifactsBucket.bucketName}.s3.${this.region}.amazonaws.com`,
 					`${this.artifactsBucket.bucketName}.s3.amazonaws.com`,
+					`apprunner.${this.region}.amazonaws.com`,
 				].join(','),
 				NODE_USE_ENV_PROXY: '1',
 			},
@@ -258,13 +278,19 @@ export class ResourcesStack extends Stack {
 			condition: ContainerDependencyCondition.HEALTHY,
 		})
 
-		// MARK: Job task role — reviewed M9. The container runs customer-driven code, so it gets
-		// exactly what apps/job needs today:
+		// MARK: Job task role — reviewed M9, extended M5. The container runs customer-driven code,
+		// so it gets exactly what apps/job needs today:
 		//   secretsmanager:GetSecretValue on the RDS secret   — DATABASE_SECRET_ARN: job row + events
 		//   secretsmanager:GetSecretValue on anthropic-api-key — the build itself (Agent SDK workers)
+		//   secretsmanager:GetSecretValue on github-token      — M5: create + push the customer repo.
+		//     The M9 review removed this grant expecting a short-lived per-job token; that needs a
+		//     GitHub App (TODO-EXTERNAL), so the org token is BACK for v1. apps/job reads it once at
+		//     start-up and strips it from the environment the sandbox (workers, npm scripts) sees;
+		//     it is still reachable by code running in the job process — accepted until the App exists.
 		//   s3:PutObject*/Abort* on the artifacts bucket       — upload deliverables (never read/list/delete)
-		// Never: Stripe keys, the auth signing key, the GitHub token (M5 delivery mints a
-		// short-lived per-job token instead), ecs:* or logs:* (the execution role writes logs).
+		//   apprunner:Create/Describe/List/StartDeployment    — M5: preview service from the pushed repo
+		//   iam:PassRole on the (empty) App Runner instance role — required by CreateService
+		// Never: Stripe keys, the auth signing key, ecs:* or logs:* (the execution role writes logs).
 		// Secrets reach the container as ARNs and are fetched at start-up; no plaintext env.
 		//
 		// KNOWN GAPS (PLAN.md, "M3 hardening" — not closed by M9): the RDS secret is the *master*
@@ -274,7 +300,30 @@ export class ResourcesStack extends Stack {
 		// uploads through an authenticated per-job api endpoint instead of holding credentials.
 		this.databaseSecret.grantRead(this.jobTaskDefinition.taskRole)
 		this.secrets['anthropic-api-key'].grantRead(this.jobTaskDefinition.taskRole)
+		this.secrets['github-token'].grantRead(this.jobTaskDefinition.taskRole)
 		this.artifactsBucket.grantPut(this.jobTaskDefinition.taskRole)
+		// App Runner has no grant* helpers; ListServices/CreateService are account-level actions
+		this.jobTaskDefinition.taskRole.addToPrincipalPolicy(
+			new PolicyStatement({
+				sid: 'AppRunnerPreviewServices',
+				actions: [
+					'apprunner:CreateService',
+					'apprunner:DescribeService',
+					'apprunner:ListServices',
+					'apprunner:StartDeployment',
+					'apprunner:TagResource',
+				],
+				resources: ['*'],
+			})
+		)
+		this.jobTaskDefinition.taskRole.addToPrincipalPolicy(
+			new PolicyStatement({
+				sid: 'PassAppRunnerInstanceRole',
+				actions: ['iam:PassRole'],
+				resources: [this.appRunnerInstanceRole.roleArn],
+				conditions: { StringEquals: { 'iam:PassedToService': 'tasks.apprunner.amazonaws.com' } },
+			})
+		)
 
 		// MARK: Outputs (export names never contain the environment — one account per environment)
 		new CfnOutput(this, 'VpcId', { value: this.vpc.vpcId, exportName: 'vpc-id' })
@@ -297,6 +346,10 @@ export class ResourcesStack extends Stack {
 		new CfnOutput(this, 'JobTaskDefinitionArn', {
 			value: this.jobTaskDefinition.taskDefinitionArn,
 			exportName: 'ecs-job-task-definition-arn',
+		})
+		new CfnOutput(this, 'AppRunnerInstanceRoleArn', {
+			value: this.appRunnerInstanceRole.roleArn,
+			exportName: 'apprunner-instance-role-arn',
 		})
 		new CfnOutput(this, 'JobSecurityGroupId', {
 			value: this.jobSecurityGroup.securityGroupId,

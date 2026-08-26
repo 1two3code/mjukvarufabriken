@@ -71,7 +71,7 @@ describe('security baseline', () => {
 				}
 			})
 
-			it('grants the job task role only the db secret, the Anthropic key and artifact writes', () => {
+			it('grants the job task role only the db/Anthropic/GitHub secrets, artifact writes and App Runner previews', () => {
 				const policies = Object.values(resources.findResources('AWS::IAM::Policy'))
 				const jobPolicy = policies.find(p =>
 					JSON.stringify(p.Properties).includes('JobTaskDefinitionTaskRole')
@@ -81,7 +81,8 @@ describe('security baseline', () => {
 					jobPolicy.Properties as { PolicyDocument: { Statement: { Action: unknown }[] } }
 				).PolicyDocument.Statement
 				const actions = statements.flatMap(s => (Array.isArray(s.Action) ? s.Action : [s.Action]))
-				// grantPut, not grantWrite: a job may upload but never delete or overwrite-by-delete
+				// grantPut, not grantWrite: a job may upload but never delete or overwrite-by-delete.
+				// App Runner: create/inspect/redeploy preview services, never delete or pause them.
 				assert.deepEqual(
 					new Set(actions),
 					new Set([
@@ -93,13 +94,51 @@ describe('security baseline', () => {
 						's3:PutObjectTagging',
 						's3:PutObjectVersionTagging',
 						's3:Abort*',
+						'apprunner:CreateService',
+						'apprunner:DescribeService',
+						'apprunner:ListServices',
+						'apprunner:StartDeployment',
+						'apprunner:TagResource',
+						'iam:PassRole',
 					])
 				)
-				// Two secrets only — never Stripe, the auth key or the GitHub token
+				// Three secrets only — the RDS secret, the Anthropic key and (M5) the GitHub token;
+				// never Stripe or the auth signing key
 				const secretStatements = statements.filter(s =>
 					JSON.stringify(s.Action).includes('secretsmanager')
 				)
-				assert.equal(secretStatements.length, 2)
+				assert.equal(secretStatements.length, 3)
+				assert.ok(
+					!JSON.stringify(secretStatements).match(/stripe|authjwt/i),
+					'job role must not read Stripe or auth secrets'
+				)
+				// PassRole is limited to the empty App Runner instance role, and only to App Runner
+				const passRole = statements.find(
+					s => JSON.stringify(s.Action) === JSON.stringify('iam:PassRole')
+				) as { Resource: unknown; Condition: unknown } | undefined
+				assert.ok(passRole, 'iam:PassRole statement')
+				assert.deepEqual(passRole.Condition, {
+					StringEquals: { 'iam:PassedToService': 'tasks.apprunner.amazonaws.com' },
+				})
+				assert.ok(
+					JSON.stringify(passRole.Resource).includes('AppRunnerInstanceRole'),
+					'PassRole must target the App Runner instance role only'
+				)
+			})
+
+			it('gives the App Runner instance role no policies at all', () => {
+				const roles = Object.values(resources.findResources('AWS::IAM::Role'))
+				const instanceRole = roles.find(r =>
+					JSON.stringify(r.Properties).includes('tasks.apprunner.amazonaws.com')
+				) as { Properties: { Policies?: unknown; ManagedPolicyArns?: unknown } } | undefined
+				assert.ok(instanceRole, 'App Runner instance role')
+				assert.equal(instanceRole.Properties.Policies, undefined)
+				assert.equal(instanceRole.Properties.ManagedPolicyArns, undefined)
+				const policies = Object.values(resources.findResources('AWS::IAM::Policy'))
+				assert.ok(
+					!policies.some(p => JSON.stringify(p.Properties.Roles).includes('AppRunnerInstanceRole')),
+					'no inline policy attached to the App Runner instance role'
+				)
 			})
 
 			it('sets the CloudFront security headers', () => {

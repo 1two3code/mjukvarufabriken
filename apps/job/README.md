@@ -42,11 +42,15 @@ Live Agent SDK sessions (needs `ANTHROPIC_API_KEY`, honours `WORKER_MODEL`); pri
 | `JOB_ID` (or argv) | Job to run — set by the api's `ecs:RunTask` override or `npm run job:dev -- <id>` |
 | `DATABASE_URL` / `DATABASE_SECRET_ARN` | Postgres; the ARN is the RDS-generated secret, resolved at startup |
 | `ANTHROPIC_API_KEY` / `ANTHROPIC_API_KEY_SECRET_ARN` | Model access for planner + workers |
+| `GITHUB_TOKEN` / `GITHUB_TOKEN_SECRET_ARN` | M5: create + push the customer repo (`GITHUB_ORG`, default `mjukvaruhuset`); missing → the `repo` delivery step fails closed |
+| `APPRUNNER_CONNECTION_ARN`, `APPRUNNER_INSTANCE_ROLE_ARN` | M5: App Runner preview of the customer api from the pushed repo; missing → `deployUrl: null` + notify |
+| `ARTIFACTS_BUCKET` | M5: bundle (`deliverables/<jobId>/`) + SPA build destination |
+| `DELIVERY_DRY_RUN=1` | Log the GitHub / App Runner / S3 calls instead of making them |
 | `PLAN_MODEL`, `WORKER_MODEL` | Model overrides (default `claude-sonnet-5`) |
 | `WORK_DIR`, `TEMPLATE_DIR` | `/work` and `/usr/src/templates/web` in the image |
 | `HTTP_PROXY`, `HTTPS_PROXY`, `NO_PROXY`, `NODE_USE_ENV_PROXY=1` | Egress through the allowlist sidecar |
 
-No customer secrets are passed in: the container only sees the job id, the database and the Anthropic key. The database location and secret ARNs are dropped from the environment before any worker session starts (`@mf/harness` `sandboxEnv` also strips `DATABASE_*`, `*_SECRET_ARN`, `AWS_*`, `ECS_*`), so the agent's shell only inherits the Anthropic key and the proxy settings — the database credential itself is still reachable through the task role until the job reports via the api (see docs/M3-REVIEW.md #18). The job never pushes anywhere (M5 adds delivery).
+No customer secrets are passed in: the container only sees the job id, the database and the Anthropic key. The database location and secret ARNs are dropped from the environment before any worker session starts (`@mf/harness` `sandboxEnv` also strips `DATABASE_*`, `*_SECRET_ARN`, `AWS_*`, `ECS_*`), so the agent's shell only inherits the Anthropic key and the proxy settings — the database credential itself is still reachable through the task role until the job reports via the api (see docs/M3-REVIEW.md #18). The GitHub token is read once at start-up and removed from the environment before any session starts (it only reaches the Octokit client and the one `git push` argument list). After green gates the job delivers (M5): handover docs committed, repo `mjukvaruhuset/<app>-<job prefix>` pushed, App Runner preview, bundle in S3 — see packages/harness/README.md "Delivery"; `repositoryUrl` on the job row, the `Deliverable` record in the last `delivery` event.
 
 ## Budget, kill switch, egress
 
