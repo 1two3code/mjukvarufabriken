@@ -4,7 +4,7 @@ One container = one job. The entrypoint (`src/index.ts`) reads `JOB_ID`, loads t
 
 | Reporter | Selected by | Used |
 |---|---|---|
-| `api` | `API_URL` + `JOB_TOKEN` (the api's `ecs:RunTask` container override) | Fargate. Talks only to `GET /internal/jobs/:id` (spec, budget, waivers, kill flag), `POST /internal/jobs/:id/events` (batch) and `PATCH /internal/jobs/:id` (status/tokens/plan/gates/urls). Bearer = a random 32-byte per-job token whose sha256 is on the row (`jobs.report_token_hash`); it can reach nothing but its own job. Retries 5xx/network errors, gives up on 4xx, sends events strictly in order |
+| `api` | `API_URL` + `JOB_TOKEN` (the api's `ecs:RunTask` container override) | Fargate. First call is `POST /internal/jobs/:id/token`: the bootstrap token from the override is exchanged for a fresh one only the job process holds (the override is visible in the task environment — `/proc/*/environ` from any worker shell — in `ecs:DescribeTasks` and in CloudTrail, so it is dead before the first worker starts). Then `GET /internal/jobs/:id` (spec, budget, waivers, kill flag), `POST /internal/jobs/:id/events` (batch, every event numbered `seq` so a retried batch is stored once) and `PATCH /internal/jobs/:id` (status/tokens/plan/gates/urls; status only moves forward, a terminal status or an admin kill revokes the token). Bearer = a random 32-byte per-job token whose sha256 is on the row (`jobs.report_token_hash`); it can reach nothing but its own active job. Retries 5xx/network errors, gives up on 4xx (a 404 on a write is an error, not a dropped event), truncates `reason` to 20 000 chars, sends events strictly in order |
 | `db` | `DATABASE_URL` | `npm run job:dev` and the docker compose `job` profile against the local Postgres |
 
 The container never holds a database credential on Fargate (docs/M3-REVIEW.md #18): no `DATABASE_SECRET_ARN`, no secret grant, no 5432 security-group rule. The api forwards `notify` events to `AUTH_ADMIN_EMAILS` and appends `gate` reports to `jobs.gates` on ingestion.
@@ -47,14 +47,14 @@ Live Agent SDK sessions (needs `ANTHROPIC_API_KEY`, honours `WORKER_MODEL`); pri
 | Variable | Purpose |
 |---|---|
 | `JOB_ID` (or argv) | Job to run — set by the api's `ecs:RunTask` override or `npm run job:dev -- <id>` |
-| `API_URL`, `JOB_TOKEN` | Fargate: the api to report to and the per-job bearer token (RunTask override, never logged; deleted from the environment before any worker starts) |
+| `API_URL`, `JOB_TOKEN` | Fargate: the api to report to and the per-job **bootstrap** token (RunTask override — never logged by the api, but visible to `ecs:DescribeTasks`/CloudTrail and in `/proc/<pid>/environ`; exchanged for a fresh token before any worker starts, so what leaks is dead) |
 | `DATABASE_URL` | Local: report straight to Postgres instead |
 | `ANTHROPIC_API_KEY` / `ANTHROPIC_API_KEY_SECRET_ARN` | Model access for planner + workers |
 | `PLAN_MODEL`, `WORKER_MODEL` | Model overrides (default `claude-sonnet-5`) |
 | `WORK_DIR`, `TEMPLATE_DIR` | `/work` and `/usr/src/templates/web` in the image |
 | `HTTP_PROXY`, `HTTPS_PROXY`, `NO_PROXY`, `NODE_USE_ENV_PROXY=1` | Egress through the allowlist sidecar |
 
-No customer secrets are passed in: the container only sees the job id, the report token (or the local database url) and the Anthropic key. The token, the database location and the secret ARNs are dropped from the environment before any worker session starts (`@mf/harness` `sandboxEnv` also strips `DATABASE_*`, `*_SECRET_ARN`, `AWS_*`, `ECS_*`), so the agent's shell only inherits the Anthropic key and the proxy settings. The task role can read the Anthropic key secret and put objects into the artifacts bucket — nothing else. The job never pushes anywhere (M5 adds delivery).
+No customer secrets are passed in: the container only sees the job id, the report token (or the local database url) and the Anthropic key. The token, the database location and the secret ARNs are dropped from Node's environment before any worker session starts (`@mf/harness` `sandboxEnv` also strips `DATABASE_*`, `*_SECRET_ARN`, `AWS_*`, `ECS_*`), so the agent's shell only inherits the Anthropic key and the proxy settings. That scrub does not reach the kernel's copy (`/proc/<pid>/environ` of the node process, readable by every worker since they share the `node` uid) — which is why the api reporter exchanges the bootstrap token first thing (`claim`) and the api revokes the token on the job's terminal write and on an admin kill. Still open: a worker with `ptrace` on the same uid could read the fresh token from the node process's memory; running worker sessions under a second uid closes that (noted in TODO-EXTERNAL). The task role can read the Anthropic key secret and put objects into the artifacts bucket — nothing else. The job never pushes anywhere (M5 adds delivery).
 
 ## Budget, kill switch, egress
 

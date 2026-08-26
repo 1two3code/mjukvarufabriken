@@ -1,4 +1,6 @@
-import { ApiReportError, createApiReporter } from '#/reporter.ts'
+import { jobReasonMaxLength } from '@mf/models'
+
+import { ApiReportError, createApiReporter, truncateReason } from '#/reporter.ts'
 
 type Call = { url: string; method: string; body: unknown; authorization: string | undefined }
 
@@ -56,7 +58,36 @@ describe('api reporter', () => {
 		await expect(reporter.isKilled()).resolves.toBe(false)
 	})
 
-	it('Posts events one at a time, in order, and patches updates', async () => {
+	it('Treats a 404 on a write as an error, never as a stored event', async () => {
+		const { fetchStub } = createFetchStub([{ status: 404, body: { error: {} } }])
+		const reporter = createApiReporter(options(fetchStub))
+
+		await expect(reporter.emit({ type: 'log', payload: {} })).rejects.toMatchObject({
+			status: 404,
+		})
+		await expect(reporter.update({ tokensUsed: 1 })).rejects.toMatchObject({ status: 404 })
+		expect(fetchStub).toHaveBeenCalledTimes(2)
+	})
+
+	it('Exchanges the bootstrap token once and uses the fresh one from then on', async () => {
+		const { fetchStub, calls } = createFetchStub([
+			{ status: 200, body: { token: 'fresh' } },
+			{ status: 200, body: { id: 'job-1', killed: false } },
+		])
+		const reporter = createApiReporter(options(fetchStub))
+
+		await reporter.claim!()
+		await reporter.load()
+
+		expect(
+			calls.map(call => [call.method, call.url.split('/').at(-1), call.authorization])
+		).toEqual([
+			['POST', 'token', 'Bearer secret'],
+			['GET', 'job-1', 'Bearer fresh'],
+		])
+	})
+
+	it('Posts events one at a time, in order and numbered, and patches updates', async () => {
 		const { fetchStub, calls } = createFetchStub([
 			{ status: 200, body: { lastEventId: 1 } },
 			{ status: 200, body: { lastEventId: 2 } },
@@ -71,11 +102,46 @@ describe('api reporter', () => {
 		const result = await reporter.update({ status: 'building', tokensUsed: 5 })
 
 		expect(calls.map(call => [call.method, call.url.split('/').at(-1), call.body])).toEqual([
-			['POST', 'events', { events: [{ type: 'started', payload: { a: 1 } }] }],
-			['POST', 'events', { events: [{ type: 'planned', payload: { b: 2 } }] }],
+			['POST', 'events', { events: [{ type: 'started', payload: { a: 1 }, seq: 1 }] }],
+			['POST', 'events', { events: [{ type: 'planned', payload: { b: 2 }, seq: 2 }] }],
 			['PATCH', 'job-1', { status: 'building', tokensUsed: 5 }],
 		])
 		expect(result).toEqual({ status: 'building', killed: false })
+	})
+
+	it('Resends an event with the same number after a 5xx (the api stores it once)', async () => {
+		const { fetchStub, calls } = createFetchStub([
+			{ status: 502, body: {} },
+			{ status: 200, body: { lastEventId: 1 } },
+		])
+
+		await createApiReporter(options(fetchStub)).emit({ type: 'log', payload: {} })
+
+		expect(calls.map(call => call.body)).toEqual([
+			{ events: [{ type: 'log', payload: {}, seq: 1 }] },
+			{ events: [{ type: 'log', payload: {}, seq: 1 }] },
+		])
+	})
+
+	it('Truncates an over-long reason so the final PATCH is never rejected', async () => {
+		const { fetchStub, calls } = createFetchStub([
+			{ status: 200, body: { status: 'failed', killed: false } },
+		])
+		const reason = 'x'.repeat(jobReasonMaxLength + 5000)
+
+		await createApiReporter(options(fetchStub)).update({ status: 'failed', reason })
+
+		const sent = (calls[0]!.body as { reason: string }).reason
+		expect(sent).toHaveLength(jobReasonMaxLength)
+		expect(sent.endsWith('… (truncated)')).toBe(true)
+		expect(truncateReason('short')).toBe('short')
+		expect(truncateReason(undefined)).toBeUndefined()
+	})
+
+	it('Reads a revoked token (401) on the poll as killed', async () => {
+		const { fetchStub } = createFetchStub([{ status: 401, body: { error: {} } }])
+
+		await expect(createApiReporter(options(fetchStub)).isKilled()).resolves.toBe(true)
 	})
 
 	it('Retries on 5xx and network errors, then succeeds', async () => {

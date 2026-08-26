@@ -20,6 +20,8 @@ const log = (message: string, extra?: Record<string, unknown>) =>
 const config = await loadConfig(process.argv.slice(2))
 // The worker sessions and the repo's own scripts inherit the environment (minus what
 // @mf/harness' sandboxEnv strips); the report token and the database are only needed here.
+// This only scrubs Node's copy — the kernel keeps /proc/<pid>/environ as started, which is
+// why the api reporter exchanges the bootstrap token before any worker runs (`claim`).
 for (const key of [
 	'JOB_TOKEN',
 	'DATABASE_URL',
@@ -37,6 +39,11 @@ const reporter: JobReporter =
 		? createApiReporter({ apiUrl: config.report.apiUrl, jobId, token: config.report.token })
 		: await createDbReporter(config.report.databaseUrl, jobId)
 log('reporting via ' + config.report.mode, { jobId })
+
+// One-shot exchange before anything else runs: the token in the task environment (still
+// readable through /proc/*/environ by every worker session, and through ecs:DescribeTasks /
+// CloudTrail) is dead from here on; the replacement lives only in this process.
+await reporter.claim?.()
 
 const job = await reporter.load()
 if (!job) {

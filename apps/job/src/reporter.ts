@@ -5,16 +5,23 @@
  * for `npm run job:dev` against the local docker compose database.
  */
 import { appendEvent, createDb, getJob, migrate, updateJob } from '@mf/db'
+import { jobReasonMaxLength } from '@mf/models'
 
 import type {
 	JobReport,
 	JobReportEventsResponse,
+	JobReportTokenResponse,
 	JobReportUpdate,
 	JobReportUpdateResponse,
 	NewJobEvent,
 } from '@mf/models'
 
 export type JobReporter = {
+	/**
+	 * Exchanges the bootstrap credential for one only this process holds — called once, before
+	 * anything else runs in the container. Absent when the reporter has no such credential.
+	 */
+	claim?: () => Promise<void>
 	/** The job to run, or undefined when the id is unknown */
 	load: () => Promise<JobReport | undefined>
 	/** Appends one event; throws when it cannot be stored */
@@ -25,6 +32,21 @@ export type JobReporter = {
 	isKilled: () => Promise<boolean>
 	close: () => Promise<void>
 }
+
+const truncationMarker = '\n… (truncated)'
+
+/** The api caps `reason`; the harness builds it from raw lint/test output, so cut, never fail */
+export const truncateReason = (reason: string | undefined) =>
+	reason === undefined || reason.length <= jobReasonMaxLength
+		? reason
+		: reason.slice(0, jobReasonMaxLength - truncationMarker.length) + truncationMarker
+
+/** Keeps the fields a killed row still accepts (mirrors the api's `reportUpdate` fallback) */
+const keepOnKilledRow = ({ tokensUsed, plan, gates }: JobReportUpdate) => ({
+	...(tokensUsed !== undefined && { tokensUsed }),
+	...(plan !== undefined && { plan }),
+	...(gates !== undefined && { gates }),
+})
 
 // MARK: api
 
@@ -65,7 +87,11 @@ export const createApiReporter = ({
 		accept: 'application/json',
 	}
 
-	/** One request with retries on transport errors and 5xx; 4xx is final */
+	/**
+	 * One request with retries on transport errors and 5xx; 4xx is final. Only a GET maps 404
+	 * to `undefined` (unknown job) — a 404 on a write means events would silently vanish, so
+	 * it throws like any other 4xx.
+	 */
 	const request = async <T>(path: string, method: 'GET' | 'POST' | 'PATCH', body?: unknown) => {
 		let lastError: Error = new Error('no attempt made')
 		for (let attempt = 0; attempt <= retries; attempt += 1) {
@@ -77,7 +103,7 @@ export const createApiReporter = ({
 					body: body === undefined ? undefined : JSON.stringify(body),
 				})
 				if (response.ok) return (await response.json()) as T
-				if (response.status === 404) return undefined
+				if (response.status === 404 && method === 'GET') return undefined
 				const text = await response.text().catch(() => '')
 				lastError = new ApiReportError(
 					response.status,
@@ -101,17 +127,39 @@ export const createApiReporter = ({
 		return next
 	}
 
+	// Every event carries its number so a batch retried after a lost response is stored once
+	let seq = 0
+
 	return {
+		claim: async () => {
+			const result = await request<JobReportTokenResponse>('/token', 'POST')
+			if (!result) throw new ApiReportError(404, 'job not found')
+			headers.authorization = `Bearer ${result.token}`
+		},
 		load: () => request<JobReport>('', 'GET'),
 		emit: async event => {
-			await enqueue(() => request<JobReportEventsResponse>('/events', 'POST', { events: [event] }))
+			seq += 1
+			const numbered = { ...event, seq }
+			await enqueue(() =>
+				request<JobReportEventsResponse>('/events', 'POST', { events: [numbered] })
+			)
 		},
 		update: async update => {
-			const result = await enqueue(() => request<JobReportUpdateResponse>('', 'PATCH', update))
+			const body = { ...update, reason: truncateReason(update.reason) }
+			if (body.reason === undefined) delete body.reason
+			const result = await enqueue(() => request<JobReportUpdateResponse>('', 'PATCH', body))
 			if (!result) throw new ApiReportError(404, 'job not found')
 			return result
 		},
-		isKilled: async () => (await request<JobReport>('', 'GET'))?.killed ?? false,
+		// A revoked token (401) means the api ended the job — same as the kill flag for the poll
+		isKilled: async () =>
+			request<JobReport>('', 'GET').then(
+				report => report?.killed ?? false,
+				error => {
+					if (error instanceof ApiReportError && error.status === 401) return true
+					throw error
+				}
+			),
 		close: async () => {
 			await queue
 		},
@@ -145,22 +193,19 @@ export const createDbReporter = async (
 		emit: async event => {
 			await appendEvent(db, jobId, event)
 		},
-		update: async ({ startedAt, finishedAt, ...rest }) => {
+		update: async update => {
+			const { startedAt, finishedAt, ...rest } = update
 			const row = await updateJob(db, jobId, {
 				...rest,
+				reason: truncateReason(rest.reason),
 				startedAt: toDate(startedAt),
 				finishedAt: toDate(finishedAt),
 			})
 			if (row) return { status: row.status, killed: row.status === 'killed' }
-			// Status refused by the killed-guard: keep usage, plan and gates like the api does
-			const { status: _status, ...fields } = rest
-			if (Object.keys(fields).length) {
-				await updateJob(db, jobId, {
-					...fields,
-					startedAt: toDate(startedAt),
-					finishedAt: toDate(finishedAt),
-				})
-			}
+			// Status refused by the killed-guard: keep usage, plan and gates like the api does —
+			// never the reason or the timestamps, which are the admin's kill
+			const fields = keepOnKilledRow(update)
+			if (Object.keys(fields).length) await updateJob(db, jobId, fields)
 			return { status: 'killed', killed: true }
 		},
 		isKilled: async () => (await getJob(db, jobId))?.status === 'killed',
