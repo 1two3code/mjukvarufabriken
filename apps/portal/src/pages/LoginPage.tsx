@@ -11,6 +11,11 @@ import { Input } from '#/components/Input.tsx'
 
 const isEmail = (value: string) => /^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(value)
 
+/** "Sign in with GitHub" is offered once the OAuth App exists (`VITE_GITHUB_SIGNIN=1`) */
+const githubSignInEnabled = import.meta.env.VITE_GITHUB_SIGNIN === '1'
+/** A full navigation (not a fetch): the api sets the OAuth state cookie and redirects to GitHub */
+const githubSignInUrl = `${import.meta.env.VITE_API_URL}/auth/github`
+
 export function LoginPage() {
 	const { t } = useTranslation()
 	const token = useAppSelector(selectToken)
@@ -56,6 +61,11 @@ export function LoginPage() {
 			<Button type="submit" disabled={!isEmail(trimmed) || isLoading}>
 				{t('page.login.action.sendLink')}
 			</Button>
+			{githubSignInEnabled && (
+				<p>
+					{t('page.login.divider')} <a href={githubSignInUrl}>{t('page.login.action.github')}</a>
+				</p>
+			)}
 		</form>
 	)
 }
