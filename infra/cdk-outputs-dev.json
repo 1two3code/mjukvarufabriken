@@ -23,5 +23,12 @@
     "ArtifactsBucketName": "resources-dev-artifactsbucket2aac5544-eqwazue2gczd",
     "DatabaseEndpoint": "resources-dev-databaseb269d8bb-xktaz6womcnd.covmch5qhwvi.eu-north-1.rds.amazonaws.com",
     "ExportsOutputRefArtifactsBucket2AAC55442DB5E6C9": "resources-dev-artifactsbucket2aac5544-eqwazue2gczd"
+  },
+  "mf-dev": {
+    "ApiLoadBalancerDNSB0038DD0": "mf-dev-ApiLB-kU4OO4hSzwOB-551124632.eu-north-1.elb.amazonaws.com",
+    "ApiUrl": "http://mf-dev-ApiLB-kU4OO4hSzwOB-551124632.eu-north-1.elb.amazonaws.com",
+    "PortalUrl": "https://d1lbp13fkx02sn.cloudfront.net",
+    "ApiServiceURL135D4FCA": "http://mf-dev-ApiLB-kU4OO4hSzwOB-551124632.eu-north-1.elb.amazonaws.com",
+    "SiteUrl": "https://d3dg6babl9jw7l.cloudfront.net"
   }
 }

@@ -63,3 +63,11 @@ npx cdk deploy mf-dev                                           # 3. site + port
 ```
 
 Then point `VITE_API_URL` in `apps/portal/.env.dev` (and `apps/site/.env.dev`) at the `ApiUrl` output and redeploy `mf-dev`. The GitHub Actions `deploy` workflow automates this (see `.github/workflows/deploy.yml`).
+
+## Deployed environments
+
+| env | deployed | site | portal | api |
+|---|---|---|---|---|
+| dev | 2026-08-26 | https://d3dg6babl9jw7l.cloudfront.net | https://d1lbp13fkx02sn.cloudfront.net | http://mf-dev-ApiLB-kU4OO4hSzwOB-551124632.eu-north-1.elb.amazonaws.com |
+
+Deploy with `infra/scripts/deploy.sh <env> [stacks]` (reads AWS creds from the root `.env`).

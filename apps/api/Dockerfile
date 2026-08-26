@@ -9,7 +9,7 @@ COPY packages ./packages/
 COPY apps/api ./apps/api/
 
 # Install dependencies
-RUN npm i --omit=dev
+RUN npm i --omit=dev --ignore-scripts
 
 # Start app
 WORKDIR /usr/src/apps/api
