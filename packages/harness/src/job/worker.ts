@@ -3,7 +3,7 @@ import { dirname, join, relative } from 'node:path'
 
 import { query } from '@anthropic-ai/claude-agent-sdk'
 
-import { exec, git, tail } from './exec.ts'
+import { exec, git, sandboxEnv, tail } from './exec.ts'
 import { renderSpecForPlanning } from './planner.ts'
 import { totalTokens } from './types.ts'
 import { createUsageAccumulator } from './usage.ts'
@@ -184,7 +184,7 @@ export const runSession = async ({
 		persistSession: false,
 		maxTurns,
 		abortController: controller,
-		env: { ...process.env, CLAUDE_AGENT_SDK_CLIENT_APP: 'mf-harness/0.1' },
+		env: { ...sandboxEnv(), CLAUDE_AGENT_SDK_CLIENT_APP: 'mf-harness/0.1' },
 	}
 
 	const usage = createUsageAccumulator(onUsage)

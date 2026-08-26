@@ -19,6 +19,19 @@ const conflictedFiles = async (repoDir: string, signal: AbortSignal) => {
 	return result.stdout.trim().split('\n').filter(Boolean)
 }
 
+/**
+ * Files (among the originally conflicted ones) that still contain conflict markers. `git add`
+ * clears the unmerged index state regardless of content, so `conflictedFiles` alone is not enough.
+ */
+const filesWithConflictMarkers = async (repoDir: string, files: string[], signal: AbortSignal) => {
+	if (!files.length) return []
+	const result = await exec('grep', ['-lE', '^(<{7} |={7}$|>{7} )', '--', ...files], {
+		cwd: repoDir,
+		signal,
+	})
+	return result.stdout.trim().split('\n').filter(Boolean)
+}
+
 const mergeInProgress = async (repoDir: string) =>
 	(await exec('git', ['rev-parse', '-q', '--verify', 'MERGE_HEAD'], { cwd: repoDir })).code === 0
 
@@ -94,7 +107,14 @@ export const mergeTask = async ({
 		maxTurns: 60,
 	})
 
-	const remaining = signal.aborted ? files : await conflictedFiles(repoDir, signal)
+	const remaining = signal.aborted
+		? files
+		: [
+				...new Set([
+					...(await conflictedFiles(repoDir, signal)),
+					...(await filesWithConflictMarkers(repoDir, files, signal)),
+				]),
+			]
 	if (!session.ok || remaining.length) {
 		await exec('git', ['merge', '--abort'], { cwd: repoDir })
 		const reason = remaining.length

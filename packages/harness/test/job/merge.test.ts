@@ -131,4 +131,25 @@ describe('merge', () => {
 		expect(await repo.read()).toBe('main change\n')
 		expect((await repo.run(['status', '--porcelain'])).stdout.trim()).toBe('')
 	})
+
+	it('Fails closed when the repair session stages a file that still has conflict markers', async () => {
+		await repo.edit('task/d', 'd change\n')
+		await repo.edit('main', 'main change\n')
+		runSession.mockImplementation(async ({ cwd }) => {
+			await writeFile(
+				join(cwd, 'file.txt'),
+				'<<<<<<< HEAD\nmain change\n=======\nd change\n>>>>>>> task/d\n'
+			)
+			await git(['add', '-A'], { cwd, env: gitEnv })
+			return { ok: true, tokens: 10, result: 'resolved (not really)' }
+		})
+
+		const outcome = await mergeTask(input('d'))
+
+		expect(outcome.ok).toBe(false)
+		expect(outcome.reason).toMatch(/still conflicted.*file\.txt/)
+		expect(await repo.read()).toBe('main change\n')
+		expect((await repo.run(['status', '--porcelain'])).stdout.trim()).toBe('')
+		expect((await repo.run(['log', '--oneline', '-1'])).stdout).not.toMatch(/merge\(d\)/)
+	})
 })

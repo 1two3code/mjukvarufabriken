@@ -149,16 +149,21 @@ export const createPlanner = ({ client, model, maxTokens = 16_000 }: PlannerOpti
 		signal?: AbortSignal,
 		onUsage?: (usage: TokenUsage) => void
 	) => {
-		// A single non-streaming call; the budget's abort signal is honoured between calls
+		// A single non-streaming call; the budget's abort signal cancels it in flight
 		if (signal?.aborted) throw new Error('aborted')
-		const response = await client.messages.create({
-			model: resolvedModel,
-			max_tokens: maxTokens,
-			system: [{ type: 'text', text: planSystemPrompt, cache_control: { type: 'ephemeral' } }],
-			tools: [planTool],
-			tool_choice: { type: 'tool', name: planToolName, disable_parallel_tool_use: true },
-			messages,
-		})
+		const response = await client.messages.create(
+			{
+				model: resolvedModel,
+				max_tokens: maxTokens,
+				system: [{ type: 'text', text: planSystemPrompt, cache_control: { type: 'ephemeral' } }],
+				tools: [planTool],
+				tool_choice: { type: 'tool', name: planToolName, disable_parallel_tool_use: true },
+				messages,
+			},
+			{ signal }
+		)
+		// A response that arrives after an abort is not parsed or retried
+		if (signal?.aborted) throw new Error('aborted')
 		onUsage?.({
 			inputTokens: response.usage.input_tokens,
 			outputTokens: response.usage.output_tokens,

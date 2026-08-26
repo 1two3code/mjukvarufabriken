@@ -77,14 +77,21 @@ export const runJob = async (
 	const mergeFinished = (task: Task, branch: string) =>
 		(mergeQueue = mergeQueue.then(async () => {
 			if (budget.aborted) return
-			const outcome = await ports.mergeTask({
-				task,
-				branch,
-				spec: job.spec,
-				repoDir: job.repoDir,
-				signal,
-				onUsage,
-			})
+			let outcome
+			try {
+				outcome = await ports.mergeTask({
+					task,
+					branch,
+					spec: job.spec,
+					repoDir: job.repoDir,
+					signal,
+					onUsage,
+				})
+			} catch (error) {
+				// A rejection must never poison the queue or escape runJob (finding 1)
+				if (budget.aborted) return
+				outcome = { ok: false, tokens: 0, reason: (error as Error).message }
+			}
 			await emit({
 				type: 'merge',
 				payload: {
@@ -179,7 +186,13 @@ export const runJob = async (
 	}
 
 	// MARK: Verify
-	const verification = await ports.verify({ repoDir: job.repoDir, signal })
+	let verification
+	try {
+		verification = await ports.verify({ repoDir: job.repoDir, signal })
+	} catch (error) {
+		if (budget.aborted) return abortedOutcome(plan)
+		verification = { ok: false, output: (error as Error).message }
+	}
 	await emit({ type: 'verify', payload: { ok: verification.ok, output: verification.output } })
 	if (budget.aborted) return abortedOutcome(plan)
 	if (!verification.ok) {

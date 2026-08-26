@@ -137,6 +137,24 @@ describe('planner', () => {
 		await expect(createPlanner({ client }).plan({ spec })).rejects.toThrow()
 	})
 
+	it('Passes the abort signal to the request and does not retry after an abort', async () => {
+		const controller = new AbortController()
+		const create = vi.fn<SpecEngineClient['messages']['create']>(
+			(_params, options) =>
+				new Promise((_resolve, reject) => {
+					options?.signal?.addEventListener('abort', () => reject(new Error('aborted')))
+				})
+		)
+		const planner = createPlanner({ client: { messages: { create } } })
+
+		const promise = planner.plan({ spec, signal: controller.signal })
+		controller.abort()
+
+		await expect(promise).rejects.toThrow(/aborted/)
+		expect(create).toHaveBeenCalledTimes(1)
+		expect(create.mock.calls[0]![1]).toEqual({ signal: controller.signal })
+	})
+
 	it('parsePlan rejects unsafe task ids', () => {
 		const bad = { ...validPlan, tasks: [{ ...validPlan.tasks[0]!, id: 'Bad Id!' }] }
 		expect(() => parsePlan(bad)).toThrow()

@@ -10,6 +10,16 @@ export type ExecOptions = {
 	timeoutMs?: number
 }
 
+/**
+ * Environment keys that must never reach the model-driven sandbox (worker shell, repo scripts):
+ * database credentials, secret ARNs, the ECS task-role credential endpoint and other AWS config.
+ */
+const secretEnvKey = /^(DATABASE_|AWS_|ECS_|ARTIFACTS_BUCKET$)|_SECRET_ARN$/
+
+/** `process.env` minus credentials and cloud config — what child processes and agent sessions get */
+export const sandboxEnv = (env: NodeJS.ProcessEnv = process.env): NodeJS.ProcessEnv =>
+	Object.fromEntries(Object.entries(env).filter(([key]) => !secretEnvKey.test(key)))
+
 /** Runs a command without a shell and captures its output; never throws on a non-zero exit */
 export const exec = (
 	command: string,
@@ -19,7 +29,7 @@ export const exec = (
 	new Promise((resolve, reject) => {
 		const child = spawn(command, args, {
 			cwd,
-			env: { ...process.env, ...env },
+			env: { ...sandboxEnv(), ...env },
 			stdio: ['ignore', 'pipe', 'pipe'],
 			signal,
 			timeout: timeoutMs,

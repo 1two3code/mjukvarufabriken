@@ -192,6 +192,49 @@ describe('runJob', () => {
 		expect(fake.started).not.toContain('d')
 	})
 
+	it('Fails (does not throw) when mergeTask rejects, and clears the poll interval', async () => {
+		const fake = createFakePorts()
+		vi.mocked(fake.ports.mergeTask).mockRejectedValue(new Error('git checkout main failed'))
+		const { hooks, types } = createHooks()
+		const clearSpy = vi.spyOn(globalThis, 'clearInterval')
+
+		const outcome = await runJob(job(), { ports: fake.ports, hooks })
+
+		expect(outcome.status).toBe('failed')
+		expect(outcome.reason).toMatch(/a: git checkout main failed/)
+		expect(types().at(-1)).toBe('failed')
+		expect(clearSpy).toHaveBeenCalledTimes(1)
+		clearSpy.mockRestore()
+	})
+
+	it('Fails (does not throw) when verify rejects', async () => {
+		const fake = createFakePorts()
+		vi.mocked(fake.ports.verify).mockRejectedValue(new Error('spawn npm ENOENT'))
+		const { hooks, types } = createHooks()
+
+		const outcome = await runJob(job(), { ports: fake.ports, hooks })
+
+		expect(outcome.status).toBe('failed')
+		expect(outcome.reason).toMatch(/final verification failed:\nspawn npm ENOENT/)
+		expect(types().slice(-2)).toEqual(['verify', 'failed'])
+	})
+
+	it('Reports killed when a merge rejects because of the kill abort', async () => {
+		const fake = createFakePorts()
+		let killed = false
+		vi.mocked(fake.ports.mergeTask).mockImplementation(async ({ signal }) => {
+			killed = true
+			await new Promise<void>(resolve => signal.addEventListener('abort', () => resolve()))
+			throw new Error('AbortError')
+		})
+		const { hooks, types } = createHooks({ isKilled: async () => killed })
+
+		const outcome = await runJob(job(), { ports: fake.ports, hooks })
+
+		expect(outcome.status).toBe('killed')
+		expect(types().at(-1)).toBe('killed')
+	})
+
 	it('Fails when the final verification is red', async () => {
 		const fake = createFakePorts()
 		vi.mocked(fake.ports.verify).mockResolvedValue({ ok: false, output: 'npm test failed' })

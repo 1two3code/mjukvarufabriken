@@ -14,7 +14,10 @@ import type { ChatMessage, PartialSpec, SpecDraft } from '@mf/models'
  */
 export type SpecEngineClient = {
 	messages: {
-		create: (params: Anthropic.MessageCreateParamsNonStreaming) => Promise<Anthropic.Message>
+		create: (
+			params: Anthropic.MessageCreateParamsNonStreaming,
+			options?: { signal?: AbortSignal }
+		) => Promise<Anthropic.Message>
 	}
 }
 
