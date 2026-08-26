@@ -1,5 +1,15 @@
 name: Deploy environment
 
+# Deploys one environment: resources → mf → ops → budget (the same order and stack list as
+# infra/scripts/deploy.sh). The budget stack lives in us-east-1 (AWS Budgets is a us-east-1
+# service), so the account is bootstrapped there too — a one-time step that is skipped as soon
+# as the CDKToolkit stack exists (infra/scripts/ensure-bootstrapped.sh — only "stack does not
+# exist" triggers a bootstrap, any other error fails the job). The deploy role therefore needs
+# `cloudformation:DescribeStacks` on CDKToolkit in both regions on every run, and the rights
+# `cdk bootstrap` uses the first time (CloudFormation + S3 + ECR + IAM for the CDKToolkit stack).
+# Each step deploys its stack `--exclusively`: the order below is the dependency order, so no
+# stack is deployed twice.
+
 on:
   workflow_call:
     inputs:
@@ -39,14 +49,27 @@ jobs:
           role-to-assume: ${{ secrets.AWS_DEPLOY_ROLE_ARN }}
           aws-region: ${{ vars.AWS_REGION }}
 
+      # One-time per account/region. Only a missing CDKToolkit stack triggers `cdk bootstrap`;
+      # any other describe-stacks error (denied, throttled) fails the job with the CLI's message.
+      - name: CDK bootstrap (if needed)
+        working-directory: infra
+        run: |
+          for region in "$CDK_DEFAULT_REGION" us-east-1; do
+            scripts/ensure-bootstrapped.sh "$CDK_DEFAULT_ACCOUNT" "$region"
+          done
+
       - name: Deploy resources stack
         working-directory: infra
-        run: npx cdk deploy resources-${{ inputs.environment }} --require-approval never
+        run: npx cdk deploy resources-${{ inputs.environment }} --exclusively --require-approval never
 
       - name: Deploy web stack
         working-directory: infra
-        run: npx cdk deploy mf-${{ inputs.environment }} --require-approval never
+        run: npx cdk deploy mf-${{ inputs.environment }} --exclusively --require-approval never
 
       - name: Deploy ops stack
         working-directory: infra
-        run: npx cdk deploy ops-${{ inputs.environment }} --require-approval never
+        run: npx cdk deploy ops-${{ inputs.environment }} --exclusively --require-approval never
+
+      - name: Deploy budget stack (us-east-1)
+        working-directory: infra
+        run: npx cdk deploy budget-${{ inputs.environment }} --exclusively --require-approval never

@@ -8,7 +8,8 @@ name: Deploy
 #   var     AWS_REGION            e.g. eu-north-1
 #   var     AWS_ACCOUNT_ID        the account the environment lives in
 #
-# One-time: `npx cdk bootstrap aws://<account>/<region>` in each account.
+# Bootstrap (`cdk bootstrap aws://<account>/<region>` and `.../us-east-1` for the budget stack) is
+# done by deploy-environment.yml the first time and skipped once the CDKToolkit stack exists.
 
 on:
   push:
