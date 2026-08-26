@@ -2,10 +2,20 @@ import { ApiCaching, appApi } from '#/app/api.ts'
 
 import type { Job, JobEvent } from '@mf/models'
 
+/**
+ * A download link from `GET /bff/jobs/:id/deliverables` (M5 delivery stream). Kept local
+ * until the delivery stream lands its model; only these fields are relied upon.
+ */
+export type JobDeliverable = { name: string; url: string; description?: string }
+
 export const jobsApiSlice = appApi
 	.enhanceEndpoints({ addTagTypes: ['job', 'jobEvents'] })
 	.injectEndpoints({
 		endpoints: build => ({
+			getJobDeliverables: build.query<JobDeliverable[], string>({
+				query: jobId => `/jobs/${jobId}/deliverables`,
+				providesTags: (_result, _error, jobId) => [{ type: 'job', id: `deliverables-${jobId}` }],
+			}),
 			getOrderJobs: build.query<Job[], string>({
 				query: orderId => `/orders/${orderId}/jobs`,
 				providesTags: (_result, _error, orderId) => [{ type: 'job', id: `order-${orderId}` }],
@@ -46,6 +56,7 @@ export const jobsApiSlice = appApi
 	})
 
 export const {
+	useGetJobDeliverablesQuery,
 	useGetOrderJobsQuery,
 	useGetJobQuery,
 	useGetJobEventsQuery,

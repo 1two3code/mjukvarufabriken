@@ -5,6 +5,8 @@ import { Link, useParams } from 'react-router-dom'
 import { isActiveJobStatus } from '@mf/models'
 
 import { useGetJobQuery, useGetOrderJobsQuery } from '#/features/jobs/jobsApiSlice.ts'
+import { Deliverables } from '#/features/jobs/Deliverables.tsx'
+import { GateReports } from '#/features/jobs/GateReports.tsx'
 import { JobEventLog } from '#/features/jobs/JobEventLog.tsx'
 import { JobStatusCard } from '#/features/jobs/JobStatusCard.tsx'
 
@@ -30,6 +32,8 @@ export function JobPage() {
 		<>
 			<h1>{t('job.page.title', { orderId })}</h1>
 			<p className={styles.intro}>
+				<Link to={`/orders/${orderId}`}>{t('job.page.backToOrder')}</Link>
+				{' · '}
 				<Link to={`/orders/${orderId}/spec`}>{t('job.page.backToSpec')}</Link>
 			</p>
 			{!job ? (
@@ -39,6 +43,8 @@ export function JobPage() {
 					<JobEventLog job={job} />
 					<aside className={styles.side}>
 						<JobStatusCard job={job} />
+						<GateReports gates={job.gates} />
+						<Deliverables job={job} />
 					</aside>
 				</div>
 			)}

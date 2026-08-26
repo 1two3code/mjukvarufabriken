@@ -1,0 +1,33 @@
+.deliverables {
+	display: flex;
+	flex-direction: column;
+	gap: var(--spacing-xs);
+
+	padding: var(--spacing-s);
+	border: var(--border-width-xs) solid var(--divider-color);
+	border-radius: var(--border-radius-base);
+
+	background: var(--content-background);
+}
+
+.title {
+	margin: 0;
+}
+
+.repository {
+	margin: 0;
+}
+
+.empty {
+	margin: 0;
+	color: var(--secondary-text-color);
+}
+
+.list {
+	margin: 0;
+	padding-left: var(--spacing-base);
+}
+
+.description {
+	color: var(--secondary-text-color);
+}

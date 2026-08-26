@@ -1,0 +1,74 @@
+/* MARK: Layout */
+.gates {
+	display: flex;
+	flex-direction: column;
+	gap: var(--spacing-xs);
+
+	padding: var(--spacing-s);
+	border: var(--border-width-xs) solid var(--divider-color);
+	border-radius: var(--border-radius-base);
+
+	background: var(--content-background);
+}
+
+.title {
+	margin: 0;
+}
+
+.empty {
+	margin: 0;
+	color: var(--secondary-text-color);
+}
+
+.list {
+	display: flex;
+	flex-direction: column;
+	gap: var(--spacing-xxs);
+
+	margin: 0;
+	padding: 0;
+
+	list-style: none;
+}
+
+/* MARK: Gate */
+.gate {
+	display: flex;
+	flex-direction: column;
+	gap: var(--spacing-xxs);
+
+	padding: var(--spacing-xxs) var(--spacing-xs);
+	border-left: 0.3rem solid var(--divider-color);
+}
+
+.ok {
+	border-left-color: var(--success);
+}
+
+.failed {
+	border-left-color: var(--error);
+}
+
+.header {
+	display: flex;
+	gap: var(--spacing-xs);
+	justify-content: space-between;
+}
+
+.name {
+	font-weight: 700;
+}
+
+.verdict {
+	composes: composable-subheader-font from global;
+}
+
+.summary {
+	margin: 0;
+	white-space: pre-wrap;
+}
+
+.meta {
+	composes: composable-caption-font from global;
+	color: var(--secondary-text-color);
+}

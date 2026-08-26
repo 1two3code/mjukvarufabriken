@@ -32,6 +32,12 @@ export function Header() {
 			</NavLink>
 			<nav className={styles.navigation}>
 				<HeaderLink label={t('page.home.title')} to="/" end />
+				<Has permissions={['spec:read']}>
+					<HeaderLink label={t('page.orders.title')} to="/orders" />
+				</Has>
+				<Has permissions={['job:admin']}>
+					<HeaderLink label={t('page.admin.title')} to="/admin" />
+				</Has>
 				<Has permissions={['item:read']}>
 					<HeaderLink label={t('page.items.title')} to="/items" />
 				</Has>
