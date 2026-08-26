@@ -5,6 +5,8 @@
  * Secrets Manager secret via `connectionStringFromSecret`.
  */
 
+import { readFileSync } from 'node:fs'
+
 import postgres from 'postgres'
 
 import { createAuthRepository } from './auth.ts'
@@ -46,8 +48,8 @@ export type SslMode = false | 'require' | 'verify-full'
 /**
  * RDS Postgres 15+ forces SSL (`rds.force_ssl=1`), so everything that is not a local host
  * connects with TLS. RDS hosts get `verify-full`: the server certificate is checked against
- * the RDS global CA bundle baked into the api/job images (`NODE_EXTRA_CA_CERTS`, M9) and the
- * host name must match. Any other remote host gets `require` (encrypted, unverified — its CA
+ * the RDS global CA bundle this package ships (`sslOptions`, M9) and the host name must
+ * match. Any other remote host gets `require` (encrypted, unverified — its CA
  * is not in the bundle). `DATABASE_SSL=disable|require|verify-full` is an explicit override,
  * e.g. `require` when connecting to RDS from a machine without the bundle.
  */
@@ -65,12 +67,35 @@ export const sslMode = (connectionString: string, env = process.env): SslMode =>
 	return isRdsHost(host) ? 'verify-full' : 'require'
 }
 
+/**
+ * The RDS global CA bundle shipped with this package (`certs/rds-global-bundle.pem`, pinned
+ * by commit — refresh it from https://truststore.pki.rds.amazonaws.com/global/global-bundle.pem
+ * when AWS rotates CAs). `DATABASE_SSL_CA=/path.pem` points at another bundle.
+ */
+export const rdsCaBundlePath = (env = process.env) =>
+	env.DATABASE_SSL_CA?.trim() || new URL('../certs/rds-global-bundle.pem', import.meta.url)
+
+/**
+ * The driver's `ssl` option for the mode: `verify-full` trusts the RDS bundle only — for this
+ * connection, not process-wide like `NODE_EXTRA_CA_CERTS` would — and the driver checks the
+ * host name against the certificate (it sets `servername`). `require` is encrypted without
+ * verification.
+ */
+export const sslOptions = (
+	mode: SslMode,
+	env = process.env
+): false | { rejectUnauthorized: boolean; ca?: string } => {
+	if (mode === false) return false
+	if (mode === 'require') return { rejectUnauthorized: false }
+	return { rejectUnauthorized: true, ca: readFileSync(rdsCaBundlePath(env), 'utf8') }
+}
+
 export const createDb = (connectionString: string, options?: { max?: number }): Db => {
 	if (!connectionString) throw new Error('createDb: connectionString is required')
 
 	const sql = postgres(connectionString, {
 		max: options?.max ?? 5,
-		ssl: sslMode(connectionString),
+		ssl: sslOptions(sslMode(connectionString)),
 		// Bigint/numeric columns come back as JS numbers — every integer here fits comfortably
 		transform: { undefined: null },
 		types: { bigint: postgres.BigInt },

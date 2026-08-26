@@ -1,4 +1,6 @@
-import { isRdsHost, sslMode } from '#/index.ts'
+import { readFileSync } from 'node:fs'
+
+import { isRdsHost, rdsCaBundlePath, sslMode, sslOptions } from '#/index.ts'
 
 const rds = 'postgres://mf:pw@mf-dev.c9akciq32.eu-north-1.rds.amazonaws.com:5432/mf'
 const proxy = 'postgres://mf:pw@mf-proxy.proxy-c9akciq32.eu-north-1.rds.amazonaws.com:5432/mf'
@@ -33,5 +35,29 @@ describe('sslMode', () => {
 		expect(sslMode(other, { DATABASE_SSL: ' verify-full ' })).toBe('verify-full')
 		// An unknown value is ignored, not treated as disable
 		expect(sslMode(rds, { DATABASE_SSL: 'yes' })).toBe('verify-full')
+	})
+})
+
+describe('sslOptions', () => {
+	it('Trusts only the shipped RDS bundle for verify-full, on this connection', () => {
+		const options = sslOptions('verify-full', {})
+
+		expect(options).toMatchObject({ rejectUnauthorized: true })
+		const ca = (options as { ca: string }).ca
+		expect(ca.match(/-----BEGIN CERTIFICATE-----/g)?.length).toBeGreaterThan(50)
+		expect(ca).toBe(readFileSync(rdsCaBundlePath({}), 'utf8'))
+		expect(process.env.NODE_EXTRA_CA_CERTS).toBeUndefined()
+	})
+
+	it('Encrypts without verification for require and disables TLS for false', () => {
+		expect(sslOptions('require', {})).toEqual({ rejectUnauthorized: false })
+		expect(sslOptions(false, {})).toBe(false)
+	})
+
+	it('Reads another bundle from DATABASE_SSL_CA', () => {
+		expect(rdsCaBundlePath({ DATABASE_SSL_CA: '/somewhere/other.pem' })).toBe('/somewhere/other.pem')
+		expect(() => sslOptions('verify-full', { DATABASE_SSL_CA: '/somewhere/nope.pem' })).toThrow(
+			/ENOENT/
+		)
 	})
 })
