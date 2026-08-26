@@ -1,21 +1,18 @@
 /**
- * Orchestrator skeleton. In M3 this becomes the Claude Agent SDK driver that turns a frozen
- * spec into a plan → task DAG → parallel workers → merged repo, under a hard token budget.
- * No runtime dependencies yet — the SDK is added when M3 starts.
+ * Model harness. M2: the spec engine (`./spec`) — every Anthropic call the api makes goes
+ * through this package. M3: this file becomes the Claude Agent SDK driver that turns a
+ * frozen spec into a plan → task DAG → parallel workers → merged repo, under a hard token budget.
  */
+
+import type { Spec } from '@mf/models'
+
+export * from './spec/index.ts'
 
 export type JobSpec = {
 	/** Order/job id from @mf/db */
 	jobId: string
-	/** Frozen, signed-off structured spec (shape defined in M2) */
-	spec: {
-		goal: string
-		users: string[]
-		features: string[]
-		nonGoals: string[]
-		acceptanceCriteria: string[]
-		stackConstraints: string[]
-	}
+	/** Frozen, signed-off structured spec (see `SpecSchema` in @mf/models) */
+	spec: Spec
 	/** Git repository the job works in */
 	repositoryUrl: string
 }
@@ -29,7 +26,14 @@ export type JobBudget = {
 	maxWorkers: number
 }
 
-export const JobStatus = ['queued', 'planning', 'building', 'verifying', 'delivered', 'failed'] as const
+export const JobStatus = [
+	'queued',
+	'planning',
+	'building',
+	'verifying',
+	'delivered',
+	'failed',
+] as const
 export type JobStatus = (typeof JobStatus)[number]
 
 export type JobResult = {
@@ -47,5 +51,10 @@ export const runJob = async (spec: JobSpec, budget: JobBudget): Promise<JobResul
 	if (budget.maxTokens <= 0) {
 		return { jobId: spec.jobId, status: 'failed', tokensUsed: 0, reason: 'Empty token budget' }
 	}
-	return { jobId: spec.jobId, status: 'failed', tokensUsed: 0, reason: 'Harness not implemented (M3)' }
+	return {
+		jobId: spec.jobId,
+		status: 'failed',
+		tokensUsed: 0,
+		reason: 'Harness not implemented (M3)',
+	}
 }

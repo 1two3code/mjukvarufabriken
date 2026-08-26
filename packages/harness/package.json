@@ -1,14 +1,25 @@
 {
   "name": "@mf/harness",
   "version": "0.1.0",
-  "description": "Build-job orchestrator skeleton (Claude Agent SDK, M3)",
+  "description": "Model harness: spec engine (M2) and build-job orchestrator skeleton (M3)",
   "private": true,
   "type": "module",
   "main": "src/index.ts",
   "scripts": {
-    "lint": "eslint; tsgo --noemit"
+    "lint": "eslint; tsgo --noemit",
+    "test": "vitest run --reporter=verbose",
+    "spec:demo": "node scripts/spec-demo.ts"
   },
   "exports": {
-    ".": "./src/index.ts"
+    ".": "./src/index.ts",
+    "./spec": "./src/spec/index.ts"
+  },
+  "dependencies": {
+    "@anthropic-ai/sdk": "^0.120.0",
+    "@mf/models": "*",
+    "zod": "^4.4.3"
+  },
+  "imports": {
+    "#spec/*": "./src/spec/*"
   }
 }

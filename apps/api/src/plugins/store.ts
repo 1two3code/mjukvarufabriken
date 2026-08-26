@@ -14,9 +14,16 @@ declare module 'fastify' {
 }
 
 /**
- * In-memory key/value store keyed by collection. It exists so the template runs
- * without external services; replace it with a real database client (DynamoDB,
- * Postgres, …) while keeping the same interface so services stay untouched.
+ * Collections in use. `specs` is keyed by orderId and holds `SpecDraft`s (M2).
+ * TODO(M3/M6): back this with Postgres — see packages/db/migrations (add a `specs` table
+ * or a jsonb column on `orders`) and swap this plugin for the @mf/db client.
+ */
+export const storeCollections = { items: 'items', specs: 'specs' } as const
+
+/**
+ * In-memory key/value store keyed by collection. It exists so the api runs without
+ * external services; replace it with a real database client (Postgres via @mf/db)
+ * while keeping the same interface so services stay untouched.
  */
 const plugin: FastifyPluginAsync = async app => {
 	const collections = new Map<string, Map<string, unknown>>()

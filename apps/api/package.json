@@ -22,9 +22,11 @@
     "msw": "^2.14.6"
   },
   "dependencies": {
+    "@aws-sdk/client-secrets-manager": "^3.1118.0",
     "@fastify/autoload": "^6.3.1",
     "@fastify/cors": "^11.2.0",
     "@mf/access-control": "*",
+    "@mf/harness": "*",
     "@mf/models": "*",
     "@mf/utils": "*",
     "fastify": "^5.11.3",

@@ -6,6 +6,7 @@ import { HomePage } from '#/pages/HomePage.tsx'
 import { ItemsPage } from '#/pages/ItemsPage.tsx'
 import { LoginPage } from '#/pages/LoginPage.tsx'
 import { NotFoundPage } from '#/pages/NotFoundPage.tsx'
+import { SpecPage } from '#/pages/SpecPage.tsx'
 
 export const router = createBrowserRouter([
 	{
@@ -21,6 +22,7 @@ export const router = createBrowserRouter([
 		children: [
 			{ path: '/', element: <HomePage /> },
 			{ path: '/items', element: <ItemsPage /> },
+			{ path: '/orders/:orderId/spec', element: <SpecPage /> },
 		],
 	},
 ])

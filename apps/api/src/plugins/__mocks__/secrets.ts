@@ -8,6 +8,7 @@ const mockPlugin: FastifyPluginAsync = async app => {
 		authJwksUrl: 'https://auth.example.com/.well-known/jwks.json',
 		authIssuer: 'https://auth.example.com',
 		authAudience: 'mjukvaruhuset',
+		anthropicApiKey: 'sk-ant-test',
 		infra: { jobSubnetIds: [] },
 	})
 }

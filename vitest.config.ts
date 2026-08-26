@@ -6,9 +6,13 @@ export default defineConfig({
 		coverage: {
 			provider: 'v8',
 			reporter: ['text', 'lcov'],
-			include: ['apps/api/src/**/*.ts', 'packages/utils/src/**/*.ts'],
+			include: [
+				'apps/api/src/**/*.ts',
+				'packages/utils/src/**/*.ts',
+				'packages/harness/src/**/*.ts',
+			],
 			exclude: ['**/*index.ts', '**/*server.ts', '**/*types.ts', '**/__mocks__/*'],
 		},
-		projects: ['apps/api', 'packages/utils'],
+		projects: ['apps/api', 'packages/utils', 'packages/harness'],
 	},
 })

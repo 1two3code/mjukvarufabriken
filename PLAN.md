@@ -33,10 +33,10 @@ Everything that needs someone else's approval lives in TODO-EXTERNAL.md and is N
 - [x] TOKENS.md ledger started — 2026-08-26
 
 ### M2 — Spec engine
-- [ ] Spec chat → structured spec (JSON schema: goal, users, features, non-goals, acceptance criteria, stack constraints)
-- [ ] Clarification loop: agent asks questions until spec passes a completeness check
-- [ ] Price estimator from spec (size class S/M/L → fixed price)
-- [ ] Spec frozen + signed off in portal before build
+- [x] Spec chat → structured spec (JSON schema: goal, users, features, non-goals, acceptance criteria, stack constraints) — 2026-08-26 (`SpecSchema` in @mf/models; `@mf/harness` spec engine = one forced strict tool call per turn, model `claude-sonnet-5` via `SPEC_MODEL`; api `/bff/orders/:orderId/spec`; portal `/orders/:orderId/spec`)
+- [x] Clarification loop: agent asks questions until spec passes a completeness check — 2026-08-26 (`isSpecComplete` deterministic; unit tests drive question → answer → complete with a fake client. Live-model behaviour UNVERIFIED until `ANTHROPIC_API_KEY` is set — run `npm run spec:demo`)
+- [x] Price estimator from spec (size class S/M/L → fixed price) — 2026-08-26 (`priceEstimator.ts`, keyword rules sv+en, 10 unit tests)
+- [x] Spec frozen + signed off in portal before build — 2026-08-26 (freeze route requires completeness, fixes size + price + `frozenAt`; portal confirm dialog; in-memory store — Postgres in M3/M6)
 
 ### M3 — Orchestrator + sandbox
 - [ ] Job = container on Fargate, receives spec + budget, no customer secrets inside

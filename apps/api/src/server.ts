@@ -3,11 +3,13 @@ import { serializerCompiler, validatorCompiler } from 'fastify-type-provider-zod
 import cors from '@fastify/cors'
 
 import accessControlPlugin from '#/plugins/accessControl.ts'
+import anthropicPlugin from '#/plugins/anthropic.ts'
 import authPlugin from '#/plugins/auth.ts'
 import errorHandlingPlugin from '#/plugins/errorHandling.ts'
 import secretsPlugin from '#/plugins/secrets.ts'
 import storePlugin from '#/plugins/store.ts'
 import itemService from '#/services/itemService.ts'
+import specService from '#/services/specService.ts'
 
 import type { FastifyInstance, LogLevel } from 'fastify'
 
@@ -39,9 +41,11 @@ export async function createServer({ logLevel }: Options = {}): Promise<FastifyI
 		// Plugins
 		.register(secretsPlugin)
 		.register(storePlugin)
+		.register(anthropicPlugin)
 
 		// Services
 		.register(itemService)
+		.register(specService)
 
 		// Request plugins
 		.register(errorHandlingPlugin)

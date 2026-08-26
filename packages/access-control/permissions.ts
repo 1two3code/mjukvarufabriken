@@ -7,6 +7,10 @@ export const permissions = [
 	'item:write',
 	'item:delete',
 
+	// Spec permissions
+	'spec:read',
+	'spec:write',
+
 	// User permissions
 	'user:all',
 ] as const
