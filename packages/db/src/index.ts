@@ -36,13 +36,21 @@ export type Db = {
 /** Hosts that get a plaintext connection by default (local docker compose / CI) */
 const localHosts = new Set(['localhost', '127.0.0.1', '::1', 'postgres'])
 
+/** Amazon RDS endpoints (`<id>.<hash>.<region>.rds.amazonaws.com`, incl. proxies and clusters) */
+export const isRdsHost = (host: string) => /(^|\.)rds\.amazonaws\.com$/i.test(host)
+
+export type SslMode = false | 'require' | 'verify-full'
+
 /**
  * RDS Postgres 15+ forces SSL (`rds.force_ssl=1`), so everything that is not a local host
- * connects with TLS. `require` encrypts without verifying the server certificate — pinning
- * the RDS CA bundle is a follow-up (M9). Override with `DATABASE_SSL=disable|require|verify-full`.
+ * connects with TLS. RDS hosts get `verify-full`: the server certificate is checked against
+ * the RDS global CA bundle baked into the api/job images (`NODE_EXTRA_CA_CERTS`, M9) and the
+ * host name must match. Any other remote host gets `require` (encrypted, unverified — its CA
+ * is not in the bundle). `DATABASE_SSL=disable|require|verify-full` is an explicit override,
+ * e.g. `require` when connecting to RDS from a machine without the bundle.
  */
-export const sslMode = (connectionString: string): false | 'require' | 'verify-full' => {
-	const override = process.env.DATABASE_SSL
+export const sslMode = (connectionString: string, env = process.env): SslMode => {
+	const override = env.DATABASE_SSL?.trim()
 	if (override === 'disable') return false
 	if (override === 'verify-full' || override === 'require') return override
 	let host = ''
@@ -51,7 +59,8 @@ export const sslMode = (connectionString: string): false | 'require' | 'verify-f
 	} catch {
 		return 'require'
 	}
-	return localHosts.has(host) ? false : 'require'
+	if (localHosts.has(host)) return false
+	return isRdsHost(host) ? 'verify-full' : 'require'
 }
 
 export const createDb = (connectionString: string, options?: { max?: number }): Db => {

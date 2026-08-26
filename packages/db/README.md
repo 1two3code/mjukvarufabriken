@@ -31,4 +31,6 @@ npm run db:seed                 # inserts a queued demo job with a tiny frozen s
 npm run job:dev -- <id>         # runs the orchestrator locally against the same database
 ```
 
-Set `DATABASE_URL` in the root `.env` and in `apps/api/.env.dev`. In AWS the api and the job task resolve `DATABASE_SECRET_ARN` instead (RDS in the `resources-<env>` stack). `psql` is not needed — the scripts use the node driver.
+Set `DATABASE_URL` in the root `.env` and in `apps/api/.env.dev`. In AWS the api and the job task resolve `DATABASE_SECRET_ARN` instead (RDS in the `resources-<env>` stack).
+
+TLS (`sslMode`): local hosts (`localhost`, `127.0.0.1`, `postgres`) connect in plaintext; `*.rds.amazonaws.com` hosts use `verify-full` — certificate chain and host name checked against the RDS global CA bundle the api/job images bake in at `/etc/ssl/certs/rds-global-bundle.pem` (`NODE_EXTRA_CA_CERTS`); any other remote host gets `require` (encrypted, unverified). `DATABASE_SSL=disable|require|verify-full` overrides — use `require` when reaching RDS from a machine without the bundle. `psql` is not needed — the scripts use the node driver.

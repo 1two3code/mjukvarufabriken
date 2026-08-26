@@ -5,6 +5,12 @@ RUN apk add --no-cache git bash coreutils ripgrep
 
 WORKDIR /usr/src
 
+# RDS global CA bundle (M9): lets @mf/db connect to *.rds.amazonaws.com with `verify-full`
+# (`job:dev` against RDS; on Fargate the job reports through the api). NODE_EXTRA_CA_CERTS
+# adds it to Node's default store, so public CAs keep working too.
+ADD --chmod=0644 https://truststore.pki.rds.amazonaws.com/global/global-bundle.pem /etc/ssl/certs/rds-global-bundle.pem
+ENV NODE_EXTRA_CA_CERTS=/etc/ssl/certs/rds-global-bundle.pem
+
 # Workspace dependencies (same layout as apps/api/Dockerfile) — nothing customer-specific
 COPY package*.json ./
 COPY tsconfig*.json ./
