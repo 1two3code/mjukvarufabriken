@@ -238,8 +238,13 @@ programvara.
 (starkt copyleft, t.ex. GPL/AGPL) inte införs utan att det framgår av Specifikationen. Kunden kan
 ta fram en förteckning över beroenden och deras licenser ur det levererade kodförrådet
 (`package.json` och låsfil); Leverantören lämnar ingen garanti för att förteckningen är
-fullständig. _[Öppen punkt: en automatisk licenskontroll i Gates och en licensförteckning i
-överlämningsdokumentationen är inte byggda ännu — skärp klausulen när de finns.]_
+fullständig. Leverantörens byggprocess innehåller en automatisk licenskontroll som stoppar
+leveransen om ett beroende med starkt copyleft-licens (GPL-2.0-only, GPL-3.0-only, AGPL, SSPL) eller
+utan angiven licens ingår, såvida inte Leverantören uttryckligen godkänt beroendet, och som lägger
+en förteckning över beroenden (paket, version, licens, källkodsförråd) i filen
+`THIRD-PARTY-LICENCES.md` i det levererade kodförrådet. Förteckningen bygger på vad respektive paket
+självt anger och utgör ingen garanti. _[Öppen punkt: klausulen bör ses över av jurist när
+licenskontrollen körts skarpt.]_
 
 9.3 Kunden ansvarar för att följa tredjepartslicensernas villkor vid sin fortsatta användning
 och distribution, samt för avtal med de tredjepartstjänster (molnleverantör, betaltjänst m.fl.)
