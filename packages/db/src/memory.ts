@@ -24,6 +24,8 @@ export class UniqueViolation extends Error {
 export const createMemoryRepositories = (): Repositories => {
 	const jobs = new Map<string, Job>()
 	const events: JobEvent[] = []
+	/** report token hash → job id (the hash is never part of the `Job` model) */
+	const reportTokens = new Map<string, string>()
 	const orders = new Map<string, { draft: SpecDraft; createdAt: string }>()
 	const users = new Map<string, User>()
 	const orgs = new Map<string, Org>()
@@ -77,9 +79,14 @@ export const createMemoryRepositories = (): Repositories => {
 					createdAt: now(),
 				}
 				jobs.set(created.id, created)
+				if (job.reportTokenHash) reportTokens.set(job.reportTokenHash, created.id)
 				return clone(created)
 			},
 			get: async id => clone(jobs.get(id)),
+			getByReportToken: async tokenHash => {
+				const id = reportTokens.get(tokenHash)
+				return id === undefined ? undefined : clone(jobs.get(id))
+			},
 			list: async (filter = {}) =>
 				byCreatedDesc(
 					[...jobs.values()]
@@ -97,6 +104,8 @@ export const createMemoryRepositories = (): Repositories => {
 					tokensUsed: update.tokensUsed ?? job.tokensUsed,
 					plan: update.plan ?? job.plan,
 					reason: update.reason ?? job.reason,
+					gates: update.gates ?? job.gates,
+					gateWaivers: update.gateWaivers ?? job.gateWaivers,
 					taskArn: update.taskArn ?? job.taskArn,
 					repositoryUrl: update.repositoryUrl ?? job.repositoryUrl,
 					startedAt: update.startedAt?.toISOString() ?? job.startedAt,
@@ -210,7 +219,10 @@ export const createMemoryRepositories = (): Repositories => {
 				}
 				for (const [hash, token] of refreshTokens) {
 					const revokedAt = token.revokedAt ? Date.parse(token.revokedAt) : undefined
-					if (Date.parse(token.expiresAt) < cutoff || (revokedAt !== undefined && revokedAt < weekAgo)) {
+					if (
+						Date.parse(token.expiresAt) < cutoff ||
+						(revokedAt !== undefined && revokedAt < weekAgo)
+					) {
 						refreshTokens.delete(hash)
 					}
 				}

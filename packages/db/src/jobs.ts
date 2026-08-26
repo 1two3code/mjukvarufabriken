@@ -29,6 +29,7 @@ type JobRow = {
 	gate_waivers: string[] | null
 	task_arn: string | null
 	repository_url: string | null
+	report_token_hash: string | null
 	started_at: Date | null
 	finished_at: Date | null
 	created_at: Date
@@ -87,6 +88,8 @@ export type NewJob = {
 	orgId: string
 	spec: Spec
 	budget: JobBudget
+	/** sha256 (hex) of the per-job report token the api hands to the build container */
+	reportTokenHash?: string
 }
 
 export type JobUpdate = Partial<{
@@ -105,10 +108,13 @@ export type JobUpdate = Partial<{
 export const insertJob = async (db: Db, job: NewJob): Promise<Job> => {
 	const { sql } = db
 	const [row] = await sql<JobRow[]>`
-		insert into jobs (order_id, org_id, spec, budget_tokens, max_workers, max_duration_minutes)
+		insert into jobs (
+			order_id, org_id, spec, budget_tokens, max_workers, max_duration_minutes, report_token_hash
+		)
 		values (
 			${job.orderId}, ${job.orgId}, ${sql.json(job.spec as never)},
-			${job.budget.maxTokens}, ${job.budget.maxWorkers}, ${job.budget.maxDurationMinutes}
+			${job.budget.maxTokens}, ${job.budget.maxWorkers}, ${job.budget.maxDurationMinutes},
+			${job.reportTokenHash ?? null}
 		)
 		returning *`
 	return toJob(row!)
@@ -117,6 +123,18 @@ export const insertJob = async (db: Db, job: NewJob): Promise<Job> => {
 export const getJob = async (db: Db, id: string): Promise<Job | undefined> => {
 	if (!isUuid(id)) return undefined
 	const [row] = await db.sql<JobRow[]>`select * from jobs where id = ${id}`
+	return row && toJob(row)
+}
+
+/**
+ * The job a report token belongs to (`/internal/jobs/:id` auth). Looks up by the hash alone so
+ * the route can tell a wrong token (401) from a valid token used on another job's url (404).
+ * The hash is never mapped onto `Job`, so it cannot leak through a response schema.
+ */
+export const getJobByReportToken = async (db: Db, tokenHash: string): Promise<Job | undefined> => {
+	if (!tokenHash) return undefined
+	const [row] = await db.sql<JobRow[]>`
+		select * from jobs where report_token_hash = ${tokenHash} limit 1`
 	return row && toJob(row)
 }
 
@@ -189,6 +207,7 @@ export const listEvents = async (db: Db, jobId: string, afterId = 0): Promise<Jo
 export const createJobsRepository = (db: Db): JobsRepository => ({
 	insert: job => insertJob(db, job),
 	get: id => getJob(db, id),
+	getByReportToken: tokenHash => getJobByReportToken(db, tokenHash),
 	list: filter => listJobs(db, filter),
 	update: (id, update) => updateJob(db, id, update),
 	appendEvent: (jobId, event) => appendEvent(db, jobId, event),

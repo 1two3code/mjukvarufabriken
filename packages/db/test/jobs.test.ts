@@ -1,4 +1,4 @@
-import { getJob, isUuid, listEvents, toJob, updateJob } from '#/jobs.ts'
+import { getJob, getJobByReportToken, isUuid, listEvents, toJob, updateJob } from '#/jobs.ts'
 
 import type { Db } from '#/index.ts'
 
@@ -22,6 +22,10 @@ describe('jobs repository', () => {
 		await expect(getJob(untouchable, 'abc')).resolves.toBeUndefined()
 		await expect(updateJob(untouchable, 'abc', { status: 'failed' })).resolves.toBeUndefined()
 		await expect(listEvents(untouchable, 'abc')).resolves.toEqual([])
+	})
+
+	it('Treats an empty report token hash as not found without querying', async () => {
+		await expect(getJobByReportToken(untouchable, '')).resolves.toBeUndefined()
 	})
 
 	it('Maps gates and gate_waivers from the row (waivers reach the orchestrator)', () => {
@@ -49,6 +53,7 @@ describe('jobs repository', () => {
 			gate_waivers: ['apps/api/src/x.ts:12'],
 			task_arn: null,
 			repository_url: null,
+			report_token_hash: null,
 			started_at: null,
 			finished_at: null,
 			created_at: new Date(0),

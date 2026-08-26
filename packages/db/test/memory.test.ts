@@ -21,6 +21,36 @@ describe('memory repositories', () => {
 	})
 
 	describe('jobs', () => {
+		it('Finds a job by its report token hash and keeps the hash off the model', async () => {
+			const job = await repos.jobs.insert({
+				orderId: 'o1',
+				orgId: 'org',
+				spec,
+				budget,
+				reportTokenHash: 'hash-1',
+			})
+
+			await expect(repos.jobs.getByReportToken('hash-1')).resolves.toEqual(job)
+			await expect(repos.jobs.getByReportToken('hash-2')).resolves.toBeUndefined()
+			expect(job).not.toHaveProperty('reportTokenHash')
+		})
+
+		it('Persists gates and gate waivers on update', async () => {
+			const job = await repos.jobs.insert({ orderId: 'o1', orgId: 'org', spec, budget })
+			const gate = {
+				name: 'verify' as const,
+				ok: true,
+				startedAt: '2026-08-26T10:00:00.000Z',
+				durationMs: 1,
+				tokens: 0,
+				summary: 'ok',
+			}
+
+			const updated = await repos.jobs.update(job.id, { gates: [gate], gateWaivers: ['a.ts:1'] })
+
+			expect(updated).toMatchObject({ gates: [gate], gateWaivers: ['a.ts:1'] })
+		})
+
 		it('Allows one active job per order and mirrors the unique violation code', async () => {
 			const job = await repos.jobs.insert({ orderId: 'o1', orgId: 'org', spec, budget })
 			await expect(
