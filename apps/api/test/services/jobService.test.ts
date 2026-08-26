@@ -1,8 +1,15 @@
 import { EntityNotFound } from '#/lib/entityError.ts'
 import { createMockJob, createMockJobEvent } from '#/plugins/__mocks__/db.ts'
 import { mockTaskArn } from '#/plugins/__mocks__/ecs.ts'
+import { mockPresignedUrl } from '#/plugins/__mocks__/s3.ts'
+import { createMockDeliverable } from '#/services/__mocks__/jobService.ts'
 import { createMockSpec, createMockSpecDraft } from '#/services/__mocks__/specService.ts'
-import { budgetForSize, JobAlreadyActive, SpecNotFrozen } from '#/services/jobService.ts'
+import {
+	budgetForSize,
+	deliverableFromEvents,
+	JobAlreadyActive,
+	SpecNotFrozen,
+} from '#/services/jobService.ts'
 
 import type { FastifyInstance } from 'fastify'
 import type { BackendSession } from '@mf/models'
@@ -214,6 +221,68 @@ describe('Job Service', () => {
 
 			vi.spyOn(app.db.jobs, 'get').mockResolvedValueOnce(undefined)
 			await expect(app.jobService.kill('nope')).rejects.toBeInstanceOf(EntityNotFound)
+		})
+	})
+
+	describe('getDeliverables', () => {
+		const deliverable = createMockDeliverable({ jobId: 'job-1' })
+		const bundleEvent = (overrides: Record<string, unknown> = {}) => ({
+			...createMockJobEvent({ id: 9, type: 'delivery' }),
+			payload: { step: 'bundle', ok: true, deliverable, ...overrides },
+		})
+
+		it('Reads the record from the last successful bundle event and presigns every file', async () => {
+			// Arrange
+			vi.spyOn(app.db.jobs, 'listEvents').mockResolvedValue([
+				createMockJobEvent({ id: 1 }),
+				{ ...createMockJobEvent({ id: 2, type: 'delivery' }), payload: { step: 'repo', ok: true } },
+				bundleEvent(),
+			])
+
+			// Act
+			const result = await app.jobService.getDeliverables('job-1', user)
+
+			// Assert
+			expect(result).toEqual({
+				...deliverable,
+				files: deliverable.files.map(file => ({
+					...file,
+					url: mockPresignedUrl(file.key),
+					expiresAt: expect.any(String),
+				})),
+			})
+			expect(app.s3.presignDownload).toHaveBeenCalledTimes(deliverable.files.length)
+			expect(app.s3.presignDownload).toHaveBeenCalledWith('deliverables/job-1/repo.zip', 900)
+			const expiresAt = new Date(result.files[0]!.expiresAt).getTime() - Date.now()
+			expect(expiresAt).toBeGreaterThan(14 * 60_000)
+			expect(expiresAt).toBeLessThanOrEqual(15 * 60_000)
+		})
+
+		it('Is not found until a bundle step succeeded, and for other orgs', async () => {
+			vi.spyOn(app.db.jobs, 'listEvents').mockResolvedValue([
+				bundleEvent({ ok: false, deliverable: undefined }),
+			])
+			await expect(app.jobService.getDeliverables('job-1', user)).rejects.toBeInstanceOf(
+				EntityNotFound
+			)
+
+			vi.spyOn(app.db.jobs, 'listEvents').mockResolvedValue([bundleEvent()])
+			await expect(
+				app.jobService.getDeliverables('job-1', { ...user, orgId: 'org-2' })
+			).rejects.toBeInstanceOf(EntityNotFound)
+			expect(app.s3.presignDownload).not.toHaveBeenCalled()
+		})
+
+		it('Picks the last successful bundle over an earlier one (re-delivery)', () => {
+			const older = createMockDeliverable({ deliverableKey: 'old/' })
+			const events = [
+				bundleEvent({ deliverable: older }),
+				{ ...bundleEvent({ deliverable: undefined, ok: false }), id: 10 },
+				{ ...bundleEvent(), id: 11 },
+			]
+			expect(deliverableFromEvents(events)).toEqual(deliverable)
+			expect(deliverableFromEvents(events.slice(0, 2))).toEqual(older)
+			expect(deliverableFromEvents([])).toBeUndefined()
 		})
 	})
 })

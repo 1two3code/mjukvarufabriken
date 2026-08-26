@@ -20,7 +20,8 @@
     "gates:demo": "node --env-file-if-exists=.env packages/harness/scripts/gates-demo.ts",
     "db:migrate": "node --env-file-if-exists=.env packages/db/scripts/migrate.ts",
     "db:seed": "node --env-file-if-exists=.env packages/db/scripts/seed-demo.ts",
-    "job:dev": "node --env-file-if-exists=.env apps/job/src/index.ts"
+    "job:dev": "node --env-file-if-exists=.env apps/job/src/index.ts",
+    "delivery:demo": "node --env-file-if-exists=.env packages/harness/scripts/delivery-demo.ts"
   },
   "workspaces": [
     "apps/*",

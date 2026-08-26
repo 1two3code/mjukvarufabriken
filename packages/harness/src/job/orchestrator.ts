@@ -2,7 +2,7 @@ import { BudgetTracker } from './budget.ts'
 import { blockedBy, readyTasks } from './dag.ts'
 import { failureNotification, gatesFailedReason, runGates } from './gates.ts'
 
-import type { GateReport, Plan, Task } from '@mf/models'
+import type { Deliverable, GateReport, Plan, Task } from '@mf/models'
 import type { JobInput, JobOutcome, RunJobOptions, TokenUsage } from './types.ts'
 
 /**
@@ -31,13 +31,21 @@ export const runJob = async (
 	}, hooks.pollIntervalMs ?? 10_000)
 
 	const gates: GateReport[] = []
+	let deliverable: Deliverable | undefined
 
 	const finish = async (outcome: Omit<JobOutcome, 'tokensUsed' | 'gates'>): Promise<JobOutcome> => {
 		clearInterval(poll)
 		await persistTokens()
-		const result = { ...outcome, tokensUsed: budget.used, gates }
+		const result = { ...outcome, tokensUsed: budget.used, gates, deliverable }
 		if (result.status === 'delivered') {
-			await emit({ type: 'done', payload: { tokensUsed: result.tokensUsed } })
+			await emit({
+				type: 'done',
+				payload: {
+					tokensUsed: result.tokensUsed,
+					repositoryUrl: deliverable?.repositoryUrl,
+					deployUrl: deliverable?.deployUrl,
+				},
+			})
 		} else {
 			await emit({
 				type: result.status,
@@ -212,6 +220,32 @@ export const runJob = async (
 	await persistTokens()
 	if (budget.aborted) return abortedOutcome(plan)
 	if (!gateRun.ok) return finish({ status: 'failed', plan, reason: gatesFailedReason(gates) })
+
+	// MARK: Delivery — docs → GitHub repo → App Runner (best effort) → bundle; repo + bundle are the contract
+	if (ports.deliver && job.delivery) {
+		let delivery
+		try {
+			delivery = await ports.deliver({
+				jobId: job.id,
+				spec: job.spec,
+				plan,
+				gates,
+				repoDir: job.repoDir,
+				target: job.delivery,
+				signal,
+				onUsage,
+				emit: hooks.emit,
+			})
+		} catch (error) {
+			delivery = { ok: false, tokens: 0, reason: (error as Error).message, steps: [] }
+		}
+		await persistTokens()
+		if (budget.aborted) return abortedOutcome(plan)
+		if (!delivery.ok) {
+			return finish({ status: 'failed', plan, reason: `delivery failed: ${delivery.reason}` })
+		}
+		deliverable = delivery.deliverable
+	}
 
 	return finish({ status: 'delivered', plan })
 }

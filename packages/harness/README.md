@@ -30,6 +30,16 @@ Runs a scripted 3-turn Swedish conversation and prints the resulting spec, size 
 
 `src/job/gates.ts` — `runGates` runs `verify → acceptance-tests → review → acceptance-check` after the last merge, one `GateReport` (from `@mf/models`) per gate, emitted as a `gate` event; the first red gate stops the chain (fail closed), a throwing port is red, an abort stops without a report. `src/job/gateSessions.ts` holds the live Agent SDK gates (`acceptanceTestsGate`, `reviewGate`, `acceptanceCheckGate`): read-only sessions use `readOnlyTools` + a JSON-schema `outputSchema` (Zod-validated `structured_output`), fix sessions get the full worker tools and exactly one attempt. `runJob` emits `notify` for the admins on `failed`/`killed`. Tests: `test/job/gates.test.ts` (control flow with fake ports), `test/job/gateSessions.test.ts` (each gate with a mocked `runSession` on a real temp git repo). `npm run gates:demo -- --repo <dir> --spec <json>` runs the gates alone on a built repo (see apps/job/README.md).
 
+## Delivery (M5)
+
+`src/job/delivery/` — `deliver()` runs after green gates when `runJob` gets a `delivery` target and `ports.deliver` (`createLivePorts({ delivery: createLiveDeliveryClients(...) })`): **docs** (HANDOVER.md, TEST-REPORT.md, README.md, apprunner.yaml — tables generated deterministically from the gate reports in `docs.ts`, the "what was built" prose from one read-only Agent SDK session in `prose.ts`, spec goal as fallback; committed on main) → **repo** (private `mjukvaruhuset/<slug>` via Octokit, `git push` with the token only in that one process's arguments, customer invited as admin when the target has a GitHub login, else `transferPending`) → **deploy** (App Runner source deployment from the pushed repo + the SPA build uploaded to `deliverables/<jobId>/site/`; best effort — a failure leaves `deployUrl: null` and emits a `notify`) → **bundle** (`repo.zip` = `git archive main`, docs, `gates.json`, `acceptance.json` under `deliverables/<jobId>/`). Every step is a `delivery` event; the final one carries the `Deliverable` record the api serves. Every external system sits behind a small interface (`GitHubClient`, `DeployClient`, `ArtifactStore`, `ProseWriter`) with an in-memory fake and a dry-run variant that only logs. Tests: `test/job/delivery/` (real temp git repo + fakes, dry-run, abort, every failure mode) and the orchestrator delivery cases.
+
+```shell
+npm run delivery:demo -- --repo <built repo> --dry-run [--spec spec.json] [--gates gates.json] [--github-login octocat]
+```
+
+The demo commits the docs on the repo's main — use a scratch clone. Without `--dry-run` it needs `GITHUB_TOKEN`, `APPRUNNER_CONNECTION_ARN` (+ `APPRUNNER_INSTANCE_ROLE_ARN`) and `ARTIFACTS_BUCKET` (see TODO-EXTERNAL.md).
+
 ## Build-job orchestrator (M3, skeleton)
 
 `runJob(spec, budget)` is a typed placeholder; `JobSpec`, `JobBudget`, `JobStatus` and `JobResult` are the contract the api and the job container will share. `JobSpec.spec` is the frozen `Spec` from `@mf/models`.

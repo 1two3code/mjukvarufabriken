@@ -9,7 +9,8 @@
     "lint": "eslint; tsgo --noemit",
     "test": "vitest run --reporter=verbose",
     "spec:demo": "node scripts/spec-demo.ts",
-    "gates:demo": "node scripts/gates-demo.ts"
+    "gates:demo": "node scripts/gates-demo.ts",
+    "delivery:demo": "node scripts/delivery-demo.ts"
   },
   "exports": {
     ".": "./src/index.ts",
@@ -19,7 +20,10 @@
   "dependencies": {
     "@anthropic-ai/claude-agent-sdk": "^0.3.246",
     "@anthropic-ai/sdk": "^0.120.0",
+    "@aws-sdk/client-apprunner": "^3.1118.0",
+    "@aws-sdk/client-s3": "^3.1118.0",
     "@mf/models": "*",
+    "@octokit/rest": "^22.0.1",
     "zod": "^4.4.3"
   },
   "imports": {

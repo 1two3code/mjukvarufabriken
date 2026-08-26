@@ -1,5 +1,6 @@
 export * from './budget.ts'
 export * from './dag.ts'
+export * from './delivery/index.ts'
 export * from './exec.ts'
 export * from './gateSessions.ts'
 export * from './gates.ts'

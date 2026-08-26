@@ -1,4 +1,4 @@
-import { exec, sandboxEnv } from '#job/exec.ts'
+import { exec, execOrThrow, redactUrlCredentials, sandboxEnv } from '#job/exec.ts'
 
 describe('exec', () => {
 	it('sandboxEnv strips credentials and cloud config but keeps what the tools need', () => {
@@ -16,6 +16,10 @@ describe('exec', () => {
 			AWS_REGION: 'eu-north-1',
 			ECS_CONTAINER_METADATA_URI_V4: 'http://169.254.170.2/v4',
 			ARTIFACTS_BUCKET: 'mf-artifacts',
+			APPRUNNER_CONNECTION_ARN: 'arn:apprunner:connection',
+			APPRUNNER_INSTANCE_ROLE_ARN: 'arn:iam:role',
+			GITHUB_TOKEN: 'ghp_x',
+			GITHUB_ORG: 'mjukvaruhuset',
 		})
 
 		expect(env).toEqual({
@@ -25,12 +29,31 @@ describe('exec', () => {
 			HTTPS_PROXY: 'http://127.0.0.1:8888',
 			NO_PROXY: 'localhost',
 			GIT_AUTHOR_NAME: 'build',
+			GITHUB_ORG: 'mjukvaruhuset',
 			// git hooks (husky) are always off inside the job
 			GIT_CONFIG_COUNT: '1',
 			GIT_CONFIG_KEY_0: 'core.hooksPath',
 			GIT_CONFIG_VALUE_0: '/dev/null',
 			HUSKY: '0',
 		})
+	})
+
+	it('Redacts URL credentials from the error of a failed command', async () => {
+		// Arrange
+		const url = 'https://x-access-token:ghp_secret@github.com/org/repo.git'
+
+		// Act
+		const error = await execOrThrow('git', ['ls-remote', url], { cwd: '/tmp' }).then(
+			() => new Error('unexpectedly succeeded'),
+			e => e as Error
+		)
+
+		// Assert
+		expect(error.message).toContain('git ls-remote https://***@github.com/org/repo.git failed')
+		expect(error.message).not.toContain('ghp_secret')
+		expect(redactUrlCredentials('see https://u:p@h/x and ssh://k@h/y, not https://h/z')).toBe(
+			'see https://***@h/x and ssh://***@h/y, not https://h/z'
+		)
 	})
 
 	it('Disables repo git hooks for every git command the job runs', async () => {

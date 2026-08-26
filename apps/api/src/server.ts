@@ -10,6 +10,7 @@ import dbPlugin from '#/plugins/db.ts'
 import ecsPlugin from '#/plugins/ecs.ts'
 import emailPlugin from '#/plugins/email.ts'
 import errorHandlingPlugin from '#/plugins/errorHandling.ts'
+import s3Plugin from '#/plugins/s3.ts'
 import secretsPlugin from '#/plugins/secrets.ts'
 import authService from '#/services/authService.ts'
 import contactService from '#/services/contactService.ts'
@@ -49,6 +50,7 @@ export async function createServer({ logLevel }: Options = {}): Promise<FastifyI
 		.register(secretsPlugin)
 		.register(dbPlugin)
 		.register(ecsPlugin)
+		.register(s3Plugin)
 		.register(anthropicPlugin)
 		.register(authKeysPlugin)
 		.register(emailPlugin)

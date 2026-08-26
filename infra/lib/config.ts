@@ -48,6 +48,12 @@ export type EnvironmentConfig = {
 	}
 	/** Fargate sizing for build-job tasks (M3) */
 	jobs: { cpu: number; memoryMiB: number }
+	/**
+	 * M5 delivery: the App Runner GitHub connection (created once in the console, then
+	 * "complete handshake" with the `mjukvaruhuset` org — TODO-EXTERNAL). Without it the job
+	 * still delivers repo + bundle and reports `deployUrl: null`.
+	 */
+	appRunner?: { connectionArn: string }
 	/** Alerting thresholds (M9); alarms notify `adminEmails` through the `mf-alerts-<env>` topic */
 	alerts: {
 		/** A single job using more tokens than this raises the token-burn alarm */
