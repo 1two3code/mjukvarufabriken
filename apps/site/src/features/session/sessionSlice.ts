@@ -1,7 +1,7 @@
 import { createSlice } from '@reduxjs/toolkit'
 
-import type { PayloadAction } from '@reduxjs/toolkit'
 import type { FrontendSession } from '@mf/models'
+import type { PayloadAction } from '@reduxjs/toolkit'
 
 export type SessionState = {
 	token: string | null

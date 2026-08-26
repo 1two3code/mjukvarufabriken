@@ -1,0 +1,101 @@
+/* MARK: Section */
+.section {
+	display: flex;
+	flex-direction: column;
+	gap: var(--spacing-base);
+}
+
+.plain {
+	padding: 0;
+}
+
+.card {
+	padding: var(--spacing-l);
+	border-radius: var(--border-radius-base);
+	background: var(--content-background);
+	box-shadow: var(--box-shadow);
+
+	@media (width <= 40rem) {
+		padding: var(--spacing-base);
+	}
+}
+
+.header {
+	display: flex;
+	flex-direction: column;
+	gap: var(--spacing-xs);
+	max-width: 72rem;
+}
+
+.eyebrow {
+	composes: composable-subheader-font from global;
+	color: var(--brand-500);
+}
+
+.lead {
+	font-size: var(--font-size-m);
+	line-height: 1.5;
+	color: var(--secondary-text-color);
+}
+
+/* MARK: Grid */
+.grid {
+	display: grid;
+	gap: var(--spacing-base);
+}
+
+.columns2 {
+	grid-template-columns: repeat(2, 1fr);
+
+	@media (width <= 40rem) {
+		grid-template-columns: 1fr;
+	}
+}
+
+.columns3 {
+	grid-template-columns: repeat(3, 1fr);
+
+	@media (width <= 64rem) {
+		grid-template-columns: repeat(2, 1fr);
+	}
+
+	@media (width <= 40rem) {
+		grid-template-columns: 1fr;
+	}
+}
+
+/* MARK: Card item */
+.item {
+	display: flex;
+	flex-direction: column;
+	gap: var(--spacing-xs);
+
+	padding: var(--spacing-base);
+	border: 2px solid transparent;
+	border-radius: var(--border-radius-base);
+
+	line-height: 1.5;
+
+	background: var(--content-background);
+	box-shadow: var(--box-shadow);
+}
+
+.marker {
+	display: inline-flex;
+	align-items: center;
+	justify-content: center;
+
+	width: 3.6rem;
+	height: 3.6rem;
+	margin-bottom: var(--spacing-xs);
+	border-radius: 50%;
+
+	font-weight: 700;
+	color: var(--primary-button-text-color);
+
+	background: var(--brand-500);
+}
+
+.highlight {
+	border-color: var(--brand-500);
+}

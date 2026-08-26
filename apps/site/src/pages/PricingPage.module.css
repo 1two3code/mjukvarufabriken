@@ -1,0 +1,95 @@
+/* MARK: Table */
+.tableWrapper {
+	overflow-x: auto;
+	border-radius: var(--border-radius-base);
+	background: var(--content-background);
+	box-shadow: var(--box-shadow);
+}
+
+.table {
+	border-collapse: collapse;
+	width: 100%;
+	line-height: 1.5;
+}
+
+.cell {
+	padding: var(--spacing-s) var(--spacing-base);
+	text-align: left;
+	vertical-align: top;
+}
+
+.headerCell {
+	composes: composable-subheader-font from global;
+	composes: cell;
+	border-bottom: var(--border-width-xs) solid var(--divider-color);
+	color: var(--table-header-text-color);
+}
+
+.rowHeader {
+	composes: cell;
+	white-space: nowrap;
+}
+
+.row:nth-child(even) {
+	background: var(--table-even-row-color);
+}
+
+.sizeLetter {
+	display: inline-flex;
+	align-items: center;
+	justify-content: center;
+
+	width: 2.8rem;
+	height: 2.8rem;
+	margin-right: var(--spacing-xs);
+	border-radius: 50%;
+
+	font-size: var(--font-size-s);
+	color: var(--primary-button-text-color);
+
+	background: var(--brand-500);
+}
+
+.price {
+	composes: cell;
+	font-weight: 700;
+	color: var(--brand-500);
+	white-space: nowrap;
+}
+
+/* MARK: Text */
+.note {
+	max-width: 72rem;
+	font-size: var(--font-size-s);
+	line-height: 1.5;
+	color: var(--secondary-text-color);
+}
+
+.body {
+	max-width: 72rem;
+	line-height: 1.5;
+}
+
+.list {
+	display: flex;
+	flex-direction: column;
+	gap: var(--spacing-s);
+	list-style: none;
+}
+
+.listItem {
+	display: flex;
+	flex-direction: column;
+	gap: var(--spacing-xxs);
+
+	padding-left: var(--spacing-s);
+	border-left: 3px solid var(--brand-500);
+
+	line-height: 1.5;
+}
+
+.actions {
+	display: flex;
+	flex-wrap: wrap;
+	gap: var(--spacing-s);
+}
