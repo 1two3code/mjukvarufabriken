@@ -8,7 +8,6 @@ import {
 	magicLinkRateLimit,
 	magicLinkTtlMinutes,
 } from '#/services/authService.ts'
-import { magicLinkRateLimit, magicLinkTtlMinutes } from '#/services/authService.ts'
 import { hashToken } from '#/services/authService.utils.ts'
 
 import type { FastifyInstance } from 'fastify'

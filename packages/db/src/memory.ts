@@ -191,6 +191,9 @@ export const createMemoryRepositories = (): MemoryRepositories => {
 				pullRequestsOpened: sum(record => record.tasks.pullRequestsOpened),
 			},
 			monthlyCap: clone(latest.monthlyCap),
+		}
+	}
+
 	// MARK: Auth helpers
 	/** Drops expired links and expired or long-revoked tokens — the same rule as `pruneAuth` */
 	const sweepAuth = () => {

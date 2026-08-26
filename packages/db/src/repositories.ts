@@ -252,6 +252,8 @@ export type ResidentRepository = {
 	 * for the in-flight timeout
 	 */
 	releaseUsageReport: (installationId: string, month: string, identifier: string) => Promise<void>
+}
+
 /**
  * Sliding-window counters shared by every api task: one hit per row, scoped by feature
  * (`contact`) and keyed by the client (ip). Counting without a key gives the global total for
