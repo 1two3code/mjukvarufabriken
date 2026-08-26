@@ -33,6 +33,13 @@ export type EnvironmentConfig = {
 	auth: { issuer?: string; audience: string }
 	/** Emails that sign in with the `admin` role (`AUTH_ADMIN_EMAILS`) */
 	adminEmails: string[]
+	/**
+	 * "Sign in with GitHub" (M6): the OAuth App's client id (`GITHUB_OAUTH_CLIENT_ID`); the client
+	 * secret lives in the `github-oauth-client-secret` secret. Unset until the OAuth App exists
+	 * (TODO-EXTERNAL) — the api then answers 404 on `/bff/auth/github` and the portal keeps the
+	 * button hidden (`VITE_GITHUB_SIGNIN`).
+	 */
+	githubOAuth?: { clientId: string }
 	/** Outgoing email: `ses` sends through SES, `log` only logs the message (magic link in the api log) */
 	email: { transport: 'ses' | 'log'; from: string }
 	/**

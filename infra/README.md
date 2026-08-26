@@ -13,9 +13,9 @@ npm test --prefix infra          # template assertions (alarms, security baselin
 
 | Stack | Contents |
 |---|---|
-| `resources-<env>` | VPC (2 AZs, public + private-with-NAT + isolated subnets, **1 NAT gateway**), RDS **Postgres 17** (`mf` database, credentials generated into Secrets Manager, isolated subnets), `artifacts` bucket (versioned, private, lifecycle: abort multipart after 7 d, expire old versions 14 d dev / 90 d live), five Secrets Manager placeholders (below), SES `EmailIdentity` for the hosted-zone domain with DKIM + MAIL FROM records in Route 53 (only with `domain` config), ECS cluster `mf-jobs-<env>` + Fargate task definition `mf-job-<env>` for build jobs (M3; placeholder `node:24-alpine` image, 2 vCPU / 4 GB, logs 14 d). Exports `vpc-id`, `rds-endpoint`, `rds-secret-arn`, `s3-artifacts`, `ecs-jobs-cluster-arn`, `ecs-job-task-definition-arn`, `ecs-job-security-group-id`. |
+| `resources-<env>` | VPC (2 AZs, public + private-with-NAT + isolated subnets, **1 NAT gateway**), RDS **Postgres 17** (`mf` database, credentials generated into Secrets Manager, isolated subnets), `artifacts` bucket (versioned, private, lifecycle: abort multipart after 7 d, expire old versions 14 d dev / 90 d live), six Secrets Manager placeholders (below), SES `EmailIdentity` for the hosted-zone domain with DKIM + MAIL FROM records in Route 53 (only with `domain` config), ECS cluster `mf-jobs-<env>` + Fargate task definition `mf-job-<env>` for build jobs (M3; placeholder `node:24-alpine` image, 2 vCPU / 4 GB, logs 14 d). Exports `vpc-id`, `rds-endpoint`, `rds-secret-arn`, `s3-artifacts`, `ecs-jobs-cluster-arn`, `ecs-job-task-definition-arn`, `ecs-job-security-group-id`. |
 | `ops-<env>` | Alerting (M9), deployed last: SNS topic `mf-alerts-<env>` (e-mail to `adminEmails`, confirm the subscription), CloudWatch alarms — failed jobs + per-job token burn (metric filters on `/mf/<env>/jobs`), api 5xx + unhealthy targets (ALB), RDS CPU/storage/memory, NAT egress (hourly threshold + anomaly band) — and an AWS Budgets monthly cost budget (`alerts.monthlyBudgetUsd`, 80 % actual / 100 % forecast) filtered on the `Environment` tag. Thresholds in `config.alerts`. What each alarm means: `docs/RUNBOOK.md`. |
-| `mf-<env>` | **Site + Portal**: one private S3 bucket + CloudFront each (OAC, SPA fallback, security headers). **API**: ECS Fargate behind an ALB from `apps/api/Dockerfile` in the private (NAT) subnets, health check `/health`, security-group ingress to Postgres :5432, env vars `AUTH_ISSUER` (= api URL), `AUTH_AUDIENCE`, `AUTH_JWT_PRIVATE_KEY_SECRET_ARN`, `AUTH_ADMIN_EMAILS`, `AUTH_EMAIL_FROM`, `EMAIL_TRANSPORT`, `DATABASE_SECRET_ARN`, `ARTIFACTS_BUCKET`, `JOBS_CLUSTER_ARN`, `JOB_TASK_DEFINITION_ARN`, `JOB_SUBNET_IDS`, `JOB_SECURITY_GROUP_ID`, `STRIPE_*_SECRET_ARN`. Task role: read db + auth-key + Anthropic + Stripe secrets, read/write artifacts, `ses:SendEmail` on the domain identity, `ecs:RunTask/DescribeTasks/StopTask` scoped to the jobs cluster + `iam:PassRole` for the job roles. Optional custom domains + Route 53 records. |
+| `mf-<env>` | **Site + Portal**: one private S3 bucket + CloudFront each (OAC, SPA fallback, security headers). **API**: ECS Fargate behind an ALB from `apps/api/Dockerfile` in the private (NAT) subnets, health check `/health`, security-group ingress to Postgres :5432, env vars `AUTH_ISSUER` (= api URL), `AUTH_AUDIENCE`, `AUTH_JWT_PRIVATE_KEY_SECRET_ARN`, `AUTH_ADMIN_EMAILS`, `AUTH_EMAIL_FROM`, `EMAIL_TRANSPORT`, `DATABASE_SECRET_ARN`, `ARTIFACTS_BUCKET`, `JOBS_CLUSTER_ARN`, `JOB_TASK_DEFINITION_ARN`, `JOB_SUBNET_IDS`, `JOB_SECURITY_GROUP_ID`, `STRIPE_*_SECRET_ARN`, `GITHUB_OAUTH_CLIENT_SECRET_SECRET_ARN` (+ `GITHUB_OAUTH_CLIENT_ID` when `githubOAuth` is configured). Task role: read db + auth-key + Anthropic + Stripe + GitHub OAuth secrets, read/write artifacts, `ses:SendEmail` on the domain identity, `ecs:RunTask/DescribeTasks/StopTask` scoped to the jobs cluster + `iam:PassRole` for the job roles. Optional custom domains + Route 53 records. |
 
 Sizing per environment lives in `lib/config.ts` (`database`, `jobs`, `alerts`): dev = `db.t4g.micro` 20 GB, 7-day automated backups, DESTROY; live = `db.t4g.small`, 30-day backups, deletion protection + final snapshot on removal. Multi-AZ is off in both for now. Logs: `/mf/<env>/api` (14 d dev / 30 d live) and `/mf/<env>/jobs` (14 d).
 
@@ -36,6 +36,7 @@ export ENV=dev   # or live
 aws secretsmanager put-secret-value --secret-id mf/$ENV/anthropic-api-key     --secret-string 'sk-ant-...'
 aws secretsmanager put-secret-value --secret-id mf/$ENV/auth-jwt-private-key  --secret-string "$(node scripts/gen-auth-key.mjs)"   # from the repo root
 aws secretsmanager put-secret-value --secret-id mf/$ENV/github-token          --secret-string 'ghp_...'
+aws secretsmanager put-secret-value --secret-id mf/$ENV/github-oauth-client-secret --secret-string '...'   # "Sign in with GitHub" OAuth App; client id → config.ts githubOAuth
 aws secretsmanager put-secret-value --secret-id mf/$ENV/stripe-secret-key     --secret-string 'sk_test_...'
 aws secretsmanager put-secret-value --secret-id mf/$ENV/stripe-webhook-secret --secret-string 'whsec_...'
 ```
@@ -58,7 +59,7 @@ The api is its own token issuer (magic-link sign-in, EdDSA access tokens, opaque
 - NAT gateway: ≈ 35 USD/month (1 per environment; both private subnets share it)
 - RDS `db.t4g.micro` + 20 GB gp3: ≈ 15 USD/month
 - ALB: ≈ 20 USD/month; Fargate api task (0.5 vCPU / 1 GB): ≈ 15 USD/month
-- S3, Secrets Manager (5 × 0.40 USD), CloudFront: a few USD
+- S3, Secrets Manager (6 × 0.40 USD), CloudFront: a few USD
 
 Tear a dev environment down with `npx cdk destroy mf-dev resources-dev` (everything in dev is DESTROY / auto-delete).
 
