@@ -151,7 +151,12 @@ export const runJob = async (
 			if (outcome.ok) {
 				await emit({
 					type: 'task_finished',
-					payload: { taskId: task.id, tokens: outcome.tokens, durationMs },
+					payload: {
+						taskId: task.id,
+						tokens: outcome.tokens,
+						durationMs,
+						...(outcome.notes?.length ? { notes: outcome.notes } : {}),
+					},
 				})
 				await mergeFinished(task, outcome.branch)
 			} else {

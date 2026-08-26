@@ -13,8 +13,9 @@ export type ExecOptions = {
 /**
  * Environment keys that must never reach the model-driven sandbox (worker shell, repo scripts):
  * database credentials, secret ARNs, the ECS task-role credential endpoint and other AWS config,
- * the App Runner connection/instance-role ARNs (M5), the GitHub org token and the job's report
- * token (`JOB_TOKEN`, exchanged at start-up but still in the task environment).
+ * the App Runner connection/instance-role ARNs (M5), the GitHub org token and the per-job api
+ * reporting token (`JOB_TOKEN`, exchanged at start-up but still in the task environment — a
+ * worker could otherwise forge job events).
  */
 const secretEnvKey =
 	/^(DATABASE_|AWS_|ECS_|APPRUNNER_|GITHUB_TOKEN$|JOB_TOKEN$|ARTIFACTS_BUCKET$)|_SECRET_ARN$/

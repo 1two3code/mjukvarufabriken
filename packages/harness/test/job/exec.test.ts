@@ -22,6 +22,8 @@ describe('exec', () => {
 			JOB_TOKEN: 'job-report-token',
 			JOB_ID: 'job-1',
 			GITHUB_ORG: 'mjukvaruhuset',
+			JOB_TOKEN: 'job-report-token',
+			API_URL: 'https://api.example',
 		})
 
 		expect(env).toEqual({
@@ -33,6 +35,7 @@ describe('exec', () => {
 			GIT_AUTHOR_NAME: 'build',
 			JOB_ID: 'job-1',
 			GITHUB_ORG: 'mjukvaruhuset',
+			API_URL: 'https://api.example',
 			// git hooks (husky) are always off inside the job
 			GIT_CONFIG_COUNT: '1',
 			GIT_CONFIG_KEY_0: 'core.hooksPath',
