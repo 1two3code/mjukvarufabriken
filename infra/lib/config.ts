@@ -1,9 +1,9 @@
 export type EnvironmentName = 'dev' | 'live'
 
 export type DomainConfig = {
-	/** Custom domain for the public site, e.g. `mjukvarufabriken.se` */
+	/** Custom domain for the public site, e.g. `mjukvaruhuset.se` */
 	siteDomainName: string
-	/** Custom domain for the customer portal, e.g. `portal.mjukvarufabriken.se` */
+	/** Custom domain for the customer portal, e.g. `portal.mjukvaruhuset.se` */
 	portalDomainName: string
 	/** Custom domain for the API, e.g. `api.example.com` */
 	apiDomainName: string
@@ -46,9 +46,9 @@ const region = account ? (process.env.CDK_DEFAULT_REGION ?? 'eu-north-1') : unde
 
 // Placeholder until the magic-link auth issuer exists (M6)
 const auth = {
-	jwksUrl: 'https://auth.mjukvarufabriken.se/.well-known/jwks.json',
-	issuer: 'https://auth.mjukvarufabriken.se',
-	audience: 'mjukvarufabriken',
+	jwksUrl: 'https://auth.mjukvaruhuset.se/.well-known/jwks.json',
+	issuer: 'https://auth.mjukvaruhuset.se',
+	audience: 'mjukvaruhuset',
 }
 
 export const config: Config = {

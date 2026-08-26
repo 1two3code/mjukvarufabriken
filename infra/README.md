@@ -1,6 +1,6 @@
 # infra
 
-AWS CDK app for mjukvarufabriken.se. It is **not** an npm workspace (CDK's Docker asset bundling and `npx` inline scripts behave better without hoisted `node_modules`), so install and run it separately:
+AWS CDK app for mjukvaruhuset.se. It is **not** an npm workspace (CDK's Docker asset bundling and `npx` inline scripts behave better without hoisted `node_modules`), so install and run it separately:
 
 ```shell
 npm i --prefix infra

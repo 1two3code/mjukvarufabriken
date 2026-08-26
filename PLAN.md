@@ -1,4 +1,6 @@
-# mjukvarufabriken.se — one-shot software road
+# mjukvaruhuset.se — one-shot software road
+
+Brand: **Mjukvaruhuset** (mjukvaruhuset.se, decided 2026-08-26; repo folder name is historical).
 
 Goal: a customer submits a spec, the factory builds it, delivers repo + running URL, customer pays.
 Everything that needs someone else's approval lives in TODO-EXTERNAL.md and is NOT on this road.
@@ -9,17 +11,17 @@ Everything that needs someone else's approval lives in TODO-EXTERNAL.md and is N
 - Payment: Stripe Checkout (Klarna/cards come through Stripe). Test mode until live verification clears.
 - Stack: `templates/web` — npm-workspaces TS monorepo extracted clean-room from uptool-pwa: React 19 + Vite + RTK Query SPA, Fastify 5 BFF (Zod 4), CDK. Used for the factory portal/site AND as the golden template every customer build starts from. Postgres (RDS), S3 for artifacts
 - Auth: email magic link (BankID = later)
-- Delivery target: GitHub repo (transferred to customer) + deploy to AWS App Runner with URL
-- Languages: sv + en on the public site; portal en first
-- Pricing v1: fixed price per accepted spec, 50% deposit before build, 50% on delivery; resident-agent mode = tokens × 1.5 + monthly fee
+- Delivery target: GitHub repo — we create a GitHub org/account for the customer during onboarding if they lack one, then transfer (decided 2026-08-26) + deploy to AWS App Runner with URL
+- Languages: sv + en on both the public site and the portal from v1 (decided 2026-08-26)
+- Pricing v1: S/M/L = 15k / 45k / 120k SEK ex moms (decided 2026-08-26); fixed price per accepted spec, 50% deposit before build, 50% on delivery; resident-agent mode = tokens × 1.5 + monthly fee. Resident agent v1 runs on the customer's own Anthropic key once deployed in their account (decided 2026-08-26)
 
 ## You must provide before build starts (hours, not weeks)
-- [ ] AWS account, admin IAM user/role for me, billing alert set
-- [ ] Anthropic API key with billing (Console) — separate key for the factory
-- [ ] GitHub org `mjukvarufabriken` + token with repo/admin scope
+- [x] AWS account, IAM user `hasse` in root `.env` (verified via STS 2026-08-26) — billing alert: confirm
+- [x] Anthropic API key in root `.env` as `ANTHROPIC_API_KEY` (2026-08-26)
+- [ ] GitHub org `mjukvaruhuset` + token with repo/admin scope
 - [ ] Stripe account (test-mode keys are enough to build)
-- [ ] Domain: check availability of mjukvarufabriken.se and buy it (Loopia/Internet.se). DNS delegated to Route53.
-- [ ] Answers to open questions at the bottom of this file
+- [ ] Domain: mjukvaruhuset.se purchase in progress (2026-08-26). Then delegate DNS to Route53.
+- [x] Answers to open questions at the bottom of this file (2026-08-26, folded into Decisions)
 
 ## Milestones (checkbox = done and verified)
 
@@ -78,8 +80,14 @@ Everything that needs someone else's approval lives in TODO-EXTERNAL.md and is N
 - [ ] Pilot-ready: contract drafts in `legal/` (unreviewed until TODO-EXTERNAL clears)
 
 ## Open questions (answer inline)
-1. Company/brand name on site while AB is pending — "Mjukvarufabriken" as trade name OK?
+1. Company/brand name on site while AB is pending — "Mjukvaruhuset" as trade name OK?
+  - Turns out "mjukvaruhuset.se" was free so I just poached that instead.
 2. Price points for S/M/L? (proposal: 15k / 45k / 120k SEK ex moms)
+  - Sure
 3. Which repo host for customers who don't have GitHub — zip only, or also GitLab?
+  - I think we should setup github for them as part of the on boarding right?
 4. Resident agent v1: customer's own Anthropic key (simplest, no metering risk) or ours (margin)? Proposal: theirs in v1.
+  - Customers own once it's all deployed. So yeah basically your proposal if I understood you
 5. Portal in Swedish too in v1, or en only?
+  - Swedish too definitely.
+- 

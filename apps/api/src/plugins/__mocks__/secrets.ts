@@ -7,7 +7,7 @@ const mockPlugin: FastifyPluginAsync = async app => {
 		appUrl: 'http://localhost:5173',
 		authJwksUrl: 'https://auth.example.com/.well-known/jwks.json',
 		authIssuer: 'https://auth.example.com',
-		authAudience: 'mjukvarufabriken',
+		authAudience: 'mjukvaruhuset',
 	})
 }
 

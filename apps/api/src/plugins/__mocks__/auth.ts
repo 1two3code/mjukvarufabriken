@@ -12,7 +12,7 @@ const decodedToken: Omit<RequestToken, 'encoded'> = {
 	name: 'Hubert J. Farnsworth',
 	role: 'user',
 	iss: 'https://auth.example.com',
-	aud: 'mjukvarufabriken',
+	aud: 'mjukvaruhuset',
 	exp,
 	iat,
 }

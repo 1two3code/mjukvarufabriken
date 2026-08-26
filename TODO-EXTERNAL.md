@@ -14,6 +14,6 @@ Start these NOW; none of them block building the software.
 | Anthropic: raise rate/spend limits on API org | Anthropic | days | volume |
 | AWS: service quota increases (Fargate vCPU, App Runner) | AWS | 1–3 days | parallel jobs |
 | AWS SES production access (leave sandbox) | AWS | ~1 day | customer email |
-| Domain mjukvarufabriken.se — check availability, buy | registrar | hours | site live |
+| Domain mjukvaruhuset.se — check availability, buy | registrar | hours | site live |
 | BankID integration (via a broker e.g. Criipto/Signicat) | broker | weeks | later, not v1 |
-| Trademark check on "Mjukvarufabriken" (PRV) | you | days | brand risk |
+| Trademark check on "Mjukvaruhuset" (PRV) | you | days | brand risk |
