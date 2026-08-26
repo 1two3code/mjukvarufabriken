@@ -58,6 +58,32 @@ psql "$DATABASE_URL" -c "update jobs set status='killed', finished_at=now() wher
 
 Stopping the task also stops token spend immediately — the Agent SDK workers run inside it.
 
+## Deploying
+
+Every push to `main` runs `.github/workflows/deploy.yml` (dev, then live behind the `live`
+environment's required reviewer); `workflow_dispatch` deploys one environment on demand. From a
+shell the same thing is `infra/scripts/deploy.sh <env> [stack...]` with AWS credentials in the
+root `.env`. Both deploy the stacks in this order and stop at the first failure:
+
+| # | Stack | Region | Contents |
+| - | ----------------- | ----------- | -------------------------------------------------------- |
+| 1 | `resources-<env>` | eu-north-1 | VPC, RDS, artifacts bucket, secrets, jobs cluster + task |
+| 2 | `mf-<env>` | eu-north-1 | site + portal (S3/CloudFront), api (Fargate + ALB) |
+| 3 | `ops-<env>` | eu-north-1 | SNS `mf-alerts-<env>`, CloudWatch alarms |
+| 4 | `budget-<env>` | us-east-1 | AWS Budgets monthly cost budget → the alerts topic |
+
+`cdk bootstrap` is a one-time step per account **and region**; both deploy paths check for the
+`CDKToolkit` CloudFormation stack in the stack region and in us-east-1 (needed by `budget-<env>`)
+and only bootstrap when it is missing. The GitHub deploy role therefore needs the rights the
+bootstrap uses the first time (CloudFormation, S3, ECR, IAM for `CDKToolkit`); after that
+plain deploy rights are enough. `budget-<env>` reads nothing across regions — it builds the topic
+ARN from the account id, so it can be deployed alone (`deploy.sh dev budget-dev`) after `ops-<env>`
+exists.
+
+Before the first deploy of an environment: `npm run build` (the SPA bundles are CDK assets),
+then fill the Secrets Manager placeholders after `resources-<env>` (`infra/README.md` → Secrets).
+After the first `ops-<env>`: the alert delivery checklist at the bottom of this file.
+
 ## Rolling back a deploy
 
 Deploys are `cdk deploy` of a commit; rolling back is deploying the previous one.
