@@ -92,14 +92,30 @@ export type OrdersRepository = {
 	forgetPaymentEvent: (eventId: string) => Promise<void>
 }
 
-export type NewUser = { email: string; name?: string; role: User['role']; orgId: string }
+export type NewUser = {
+	email: string
+	name?: string
+	role: User['role']
+	orgId: string
+	githubId?: string
+	githubLogin?: string
+}
+/** The GitHub identity written when a user signs in with GitHub (M6) */
+export type GithubIdentity = { githubId: string; githubLogin: string; name?: string }
 export type NewOrg = { name: string }
 
 export type UsersRepository = {
 	get: (id: string) => Promise<User | undefined>
 	/** Exact match on the stored (lower-cased) email */
 	findByEmail: (email: string) => Promise<User | undefined>
+	findByGithubId: (githubId: string) => Promise<User | undefined>
 	insert: (user: NewUser) => Promise<User>
+	/**
+	 * Stores the GitHub identity on the user (account linking / login rename). `name` is only
+	 * written when the user has none. `undefined` for an unknown id; rejects with
+	 * `code: '23505'` when the GitHub id is already linked to another user.
+	 */
+	linkGithub: (id: string, identity: GithubIdentity) => Promise<User | undefined>
 	/**
 	 * Creates the org and its first user atomically (first sign-in). Rejects with
 	 * `code: '23505'` when the email already exists — without leaving an orphan org.
@@ -110,9 +126,13 @@ export type UsersRepository = {
 	listOrgs: () => Promise<Org[]>
 }
 
+/** `email`: an emailed magic link; `login`: the one-shot link a provider sign-in ends in (M6) */
+export type MagicLinkPurpose = 'email' | 'login'
+
 export type MagicLink = {
 	tokenHash: string
 	email: string
+	purpose: MagicLinkPurpose
 	createdAt: string
 	expiresAt: string
 	usedAt?: string
@@ -127,15 +147,17 @@ export type RefreshToken = {
 }
 
 export type AuthRepository = {
+	/** `purpose` defaults to `email` */
 	insertMagicLink: (link: {
 		tokenHash: string
 		email: string
 		expiresAt: Date
+		purpose?: MagicLinkPurpose
 	}) => Promise<MagicLink>
 	getMagicLink: (tokenHash: string) => Promise<MagicLink | undefined>
 	/** Marks the link used; `undefined` when unknown or already used (single use, atomic) */
 	consumeMagicLink: (tokenHash: string) => Promise<MagicLink | undefined>
-	/** Links created for the email since the given instant (rate limiting) */
+	/** Emailed links (`purpose = 'email'`) created for the email since the given instant (rate limiting) */
 	countMagicLinksSince: (email: string, since: Date) => Promise<number>
 	insertRefreshToken: (token: {
 		tokenHash: string

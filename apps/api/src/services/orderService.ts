@@ -6,7 +6,6 @@ import {
 	isSpecComplete,
 	orderTransitions,
 } from '@mf/models'
-
 import { EntityInvalid, EntityNotFound } from '#/lib/entityError.ts'
 
 import type { FastifyInstance, FastifyPluginAsync } from 'fastify'

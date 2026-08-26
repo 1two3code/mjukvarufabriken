@@ -73,6 +73,11 @@ export const OrderSchema = z.object({
 	/** Fixed price in SEK ex moms, fixed when the spec is frozen */
 	priceSek: z.number().int().nonnegative().optional(),
 	frozenAt: z.iso.datetime().optional(),
+	/**
+	 * Id of the user who created the order. M5 delivery resolves the customer's GitHub login
+	 * (M6 sign-in) from this user at delivery time rather than from a snapshot on the order
+	 */
+	createdBy: z.string().optional(),
 	createdAt: z.iso.datetime(),
 	updatedAt: z.iso.datetime(),
 })

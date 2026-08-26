@@ -4,6 +4,7 @@ import { ProtectedLayout } from '#/layouts/templates/ProtectedLayout.tsx'
 import { PublicLayout } from '#/layouts/templates/PublicLayout.tsx'
 import { AdminPage } from '#/pages/AdminPage.tsx'
 import { AuthCallbackPage } from '#/pages/AuthCallbackPage.tsx'
+import { GithubCallbackPage } from '#/pages/GithubCallbackPage.tsx'
 import { HomePage } from '#/pages/HomePage.tsx'
 import { ItemsPage } from '#/pages/ItemsPage.tsx'
 import { JobPage } from '#/pages/JobPage.tsx'
@@ -19,6 +20,7 @@ export const router = createBrowserRouter([
 		children: [
 			{ path: '/login', element: <LoginPage /> },
 			{ path: '/auth/callback', element: <AuthCallbackPage /> },
+			{ path: '/auth/github/callback', element: <GithubCallbackPage /> },
 			{ path: '*', element: <NotFoundPage /> },
 		],
 	},

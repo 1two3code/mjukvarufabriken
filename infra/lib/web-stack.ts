@@ -190,6 +190,12 @@ export class WebStack extends Stack {
 					ANTHROPIC_API_KEY_SECRET_ARN: resources.secrets['anthropic-api-key'].secretArn,
 					STRIPE_SECRET_KEY_SECRET_ARN: resources.secrets['stripe-secret-key'].secretArn,
 					STRIPE_WEBHOOK_SECRET_SECRET_ARN: resources.secrets['stripe-webhook-secret'].secretArn,
+					GITHUB_OAUTH_CLIENT_SECRET_SECRET_ARN:
+						resources.secrets['github-oauth-client-secret'].secretArn,
+					// The client id is public; only with it does the api enable the GitHub sign-in routes
+					...(environment.githubOAuth && {
+						GITHUB_OAUTH_CLIENT_ID: environment.githubOAuth.clientId,
+					}),
 				},
 			},
 			// Private subnets with NAT: can reach RDS (isolated subnets in the same VPC) and the internet
@@ -228,6 +234,7 @@ export class WebStack extends Stack {
 		//   ... on anthropic-api-key                            — spec chat (M2 spec engine runs in the api)
 		//   ... on auth-jwt-private-key                         — signs access tokens (EdDSA issuer)
 		//   ... on stripe-secret-key / stripe-webhook-secret    — checkout + webhook verification (M6)
+		//   ... on github-oauth-client-secret                  — "Sign in with GitHub" code exchange (M6)
 		//   s3 read/write on the artifacts bucket               — presigned deliverable downloads, uploads
 		//   ses:SendEmail on the domain identity                — magic-link mail (only with a domain)
 		//   ecs:RunTask (job family, jobs cluster only)         — start a build job
@@ -241,6 +248,7 @@ export class WebStack extends Stack {
 		resources.secrets['auth-jwt-private-key'].grantRead(taskRole)
 		resources.secrets['stripe-secret-key'].grantRead(taskRole)
 		resources.secrets['stripe-webhook-secret'].grantRead(taskRole)
+		resources.secrets['github-oauth-client-secret'].grantRead(taskRole)
 		resources.artifactsBucket.grantReadWrite(taskRole)
 
 		// Magic-link emails. With a verified domain identity the grant is scoped to it; without one

@@ -15,6 +15,7 @@ const mockPlugin: FastifyPluginAsync = async app => {
 		emailFrom: 'noreply@example.com',
 		anthropicApiKey: 'sk-ant-test',
 		residentInstallations: { 'acme-shop': 'installation-token' },
+		githubOauth: { clientId: 'gh-client-id', clientSecret: 'gh-client-secret' },
 		infra: { jobSubnetIds: [], jobApiUrl: 'https://api.example.com' },
 	})
 }

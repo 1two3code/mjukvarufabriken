@@ -194,8 +194,18 @@ describe('memory repositories', () => {
 		})
 
 		it('Creates an order record whose draft is empty and derives the spec status from it', async () => {
-			const order = await repos.orders.insert({ id: 'o1', orgId: 'a', name: 'Gym booking' })
-			expect(order).toMatchObject({ id: 'o1', status: 'drafting', name: 'Gym booking' })
+			const order = await repos.orders.insert({
+				id: 'o1',
+				orgId: 'a',
+				name: 'Gym booking',
+				createdBy: 'u1',
+			})
+			expect(order).toMatchObject({
+				id: 'o1',
+				status: 'drafting',
+				name: 'Gym booking',
+				createdBy: 'u1',
+			})
 			await expect(repos.orders.get('o1')).resolves.toMatchObject({
 				orderId: 'o1',
 				orgId: 'a',
@@ -293,14 +303,58 @@ describe('memory repositories', () => {
 			// No orphan org from the rejected attempt
 			await expect(repos.users.listOrgs()).resolves.toHaveLength(1)
 		})
+
+		it('Links a GitHub identity, finds users by GitHub id and keeps one user per account', async () => {
+			const anna = await repos.users.insertWithOrg(
+				{ email: 'anna@acme.se', role: 'user' },
+				{ name: 'acme.se' }
+			)
+			const bob = await repos.users.insert({
+				email: 'bob@acme.se',
+				role: 'user',
+				orgId: anna.orgId,
+				githubId: '7',
+				githubLogin: 'bob',
+			})
+
+			const linked = await repos.users.linkGithub(anna.id, {
+				githubId: '42',
+				githubLogin: 'anna',
+				name: 'Anna',
+			})
+
+			expect(linked).toMatchObject({
+				id: anna.id,
+				githubId: '42',
+				githubLogin: 'anna',
+				name: 'Anna',
+			})
+			await expect(repos.users.findByGithubId('42')).resolves.toEqual(linked)
+			await expect(repos.users.findByGithubId('7')).resolves.toEqual(bob)
+			await expect(repos.users.findByGithubId('1')).resolves.toBeUndefined()
+			await expect(
+				repos.users.linkGithub('missing', { githubId: '1', githubLogin: 'x' })
+			).resolves.toBeUndefined()
+			// Rename on GitHub: same id, new login; an existing name is kept
+			await expect(
+				repos.users.linkGithub(anna.id, { githubId: '42', githubLogin: 'anna2', name: 'Other' })
+			).resolves.toMatchObject({ githubLogin: 'anna2', name: 'Anna' })
+			await expect(
+				repos.users.linkGithub(bob.id, { githubId: '42', githubLogin: 'anna' })
+			).rejects.toMatchObject({ code: '23505' })
+		})
 	})
 
 	describe('auth', () => {
-		it('Magic links are single use and counted per email since an instant', async () => {
+		it('Magic links are single use and emailed ones are counted per email since an instant', async () => {
 			const expiresAt = new Date(Date.now() + 60_000)
 			await repos.auth.insertMagicLink({ tokenHash: 'h1', email: 'a@x.se', expiresAt })
 			await repos.auth.insertMagicLink({ tokenHash: 'h2', email: 'a@x.se', expiresAt })
 			await repos.auth.insertMagicLink({ tokenHash: 'h3', email: 'b@x.se', expiresAt })
+			// One-shot provider login links never count against the emailed-link limit
+			await expect(
+				repos.auth.insertMagicLink({ tokenHash: 'h4', email: 'a@x.se', expiresAt, purpose: 'login' })
+			).resolves.toMatchObject({ purpose: 'login' })
 
 			await expect(
 				repos.auth.countMagicLinksSince('a@x.se', new Date(Date.now() - 1000))
@@ -311,6 +365,7 @@ describe('memory repositories', () => {
 
 			await expect(repos.auth.consumeMagicLink('h1')).resolves.toMatchObject({
 				email: 'a@x.se',
+				purpose: 'email',
 				usedAt: expect.any(String),
 			})
 			await expect(repos.auth.consumeMagicLink('h1')).resolves.toBeUndefined()

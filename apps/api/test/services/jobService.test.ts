@@ -242,8 +242,8 @@ describe('Job Service', () => {
 			})
 		})
 
-		it('Exposes only spec, budget, waivers and the kill flag', () => {
-			const view = app.jobService.reportView(
+		it('Exposes only spec, budget, waivers and the kill flag', async () => {
+			const view = await app.jobService.reportView(
 				createMockJob({ status: 'killed', gateWaivers: ['a.ts:1'], taskArn: 'arn' })
 			)
 
@@ -255,6 +255,32 @@ describe('Job Service', () => {
 				gateWaivers: ['a.ts:1'],
 				killed: true,
 			})
+		})
+
+		it("Resolves the customer's GitHub login from the order creator at read time, never a snapshot", async () => {
+			// Arrange — the order exists before the creator signs in with GitHub
+			const anna = await app.db.users.insertWithOrg(
+				{ email: 'anna@acme.se', role: 'user' },
+				{ name: 'acme.se' }
+			)
+			await app.db.orders.insert({
+				id: 'order-1',
+				orgId: anna.orgId,
+				name: 'Gym',
+				createdBy: anna.id,
+			})
+
+			// Act
+			const before = await app.jobService.reportView(job())
+			await app.db.users.linkGithub(anna.id, { githubId: '42', githubLogin: 'anna' })
+			const after = await app.jobService.reportView(job())
+			await app.db.users.linkGithub(anna.id, { githubId: '42', githubLogin: 'anna-renamed' })
+			const renamed = await app.jobService.reportView(job())
+
+			// Assert
+			expect(before.customerGithubLogin).toBeUndefined()
+			expect(after.customerGithubLogin).toBe('anna')
+			expect(renamed.customerGithubLogin).toBe('anna-renamed')
 		})
 
 		it('Stores events in order, mails notify events to every admin and appends gate reports', async () => {

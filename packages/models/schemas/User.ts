@@ -8,6 +8,10 @@ export const UserSchema = z.object({
 	name: z.string().optional(),
 	role: RoleSchema,
 	orgId: z.string(),
+	/** GitHub account id (stable) once the user signed in with GitHub or linked the account */
+	githubId: z.string().optional(),
+	/** GitHub login at the time of the last GitHub sign-in (may be renamed on GitHub) */
+	githubLogin: z.string().optional(),
 	createdAt: z.iso.datetime(),
 })
 

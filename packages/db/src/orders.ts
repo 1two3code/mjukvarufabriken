@@ -60,6 +60,7 @@ export const toOrder = (row: OrderRow): Order => ({
 	sizeClass: row.size_class ?? undefined,
 	priceSek: row.price_sek ?? undefined,
 	frozenAt: row.frozen_at?.toISOString(),
+	createdBy: row.created_by ?? undefined,
 	createdAt: row.created_at.toISOString(),
 	updatedAt: row.updated_at.toISOString(),
 })

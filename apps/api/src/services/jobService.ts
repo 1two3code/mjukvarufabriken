@@ -65,7 +65,7 @@ declare module 'fastify' {
 			 */
 			rotateReportToken: (job: Job) => Promise<string>
 			/** What the container needs to run: spec, budget, waivers and the kill flag */
-			reportView: (job: Job) => JobReport
+			reportView: (job: Job) => Promise<JobReport>
 			/**
 			 * Stores a batch of events in order; numbered events (`seq`) are stored once. `notify`
 			 * events are mailed to the admins here (capped per job), validated `gate` reports are
@@ -203,6 +203,17 @@ const keepOnKilledRow = ({ tokensUsed, plan, gates }: JobReportUpdate): JobUpdat
 
 const plugin: FastifyPluginAsync = async app => {
 	const { db, ecs, s3, specService } = app
+
+	/**
+	 * The order creator's GitHub login as of their latest GitHub sign-in (M6) — resolved from the
+	 * user on every read (never a snapshot: logins are renamed and freed, and a customer may sign
+	 * in with GitHub only after ordering). M5 delivery adds this login as admin on the repo.
+	 */
+	const customerGithubLoginOf = async (job: Job) => {
+		const order = await db.orders.getOrder(job.orderId)
+		const user = order?.createdBy ? await db.users.get(order.createdBy) : undefined
+		return user?.githubLogin
+	}
 
 	const scoped = (job: Job | undefined, session: BackendSession, id: string) => {
 		if (!job || (!isAdmin(session) && job.orgId !== session.orgId)) {
@@ -370,13 +381,14 @@ const plugin: FastifyPluginAsync = async app => {
 			await db.jobs.update(job.id, { reportTokenHash: hashReportToken(token) })
 			return token
 		},
-		reportView: job => ({
+		reportView: async job => ({
 			id: job.id,
 			status: job.status,
 			spec: job.spec,
 			budget: job.budget,
 			gateWaivers: job.gateWaivers,
 			killed: job.status === 'killed',
+			customerGithubLogin: await customerGithubLoginOf(job),
 		}),
 		reportEvents: async (job, events) => {
 			const gateReports = parseGateReports(job, events)

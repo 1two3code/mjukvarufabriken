@@ -52,14 +52,16 @@ const mockPlugin: FastifyPluginAsync = async app => {
 		getDeliverables: vi.fn((jobId: string) => Promise.resolve(createMockDeliverables({ jobId }))),
 		authenticateReport: vi.fn((id: string) => Promise.resolve(createMockJob({ id }))),
 		rotateReportToken: vi.fn().mockResolvedValue('fresh-token'),
-		reportView: vi.fn((job: Job) => ({
-			id: job.id,
-			status: job.status,
-			spec: job.spec,
-			budget: job.budget,
-			gateWaivers: job.gateWaivers,
-			killed: job.status === 'killed',
-		})),
+		reportView: vi.fn((job: Job) =>
+			Promise.resolve({
+				id: job.id,
+				status: job.status,
+				spec: job.spec,
+				budget: job.budget,
+				gateWaivers: job.gateWaivers,
+				killed: job.status === 'killed',
+			})
+		),
 		reportEvents: vi.fn().mockResolvedValue({ lastEventId: 1 }),
 		reportUpdate: vi.fn().mockResolvedValue({ status: 'building', killed: false }),
 	}

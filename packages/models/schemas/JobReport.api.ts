@@ -24,6 +24,11 @@ export const JobReportSchema = z.object({
 	gateWaivers: z.array(z.string()).optional(),
 	/** True once the admin kill switch flipped the row — the job aborts on its next poll */
 	killed: z.boolean(),
+	/**
+	 * GitHub login of the order's creator as of their latest GitHub sign-in (M6) — the account
+	 * M5 delivery adds as admin on the repo. Absent until the customer has signed in with GitHub
+	 */
+	customerGithubLogin: z.string().optional(),
 })
 export type JobReport = z.infer<typeof JobReportSchema>
 

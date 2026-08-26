@@ -39,6 +39,7 @@ export type ExternalSecretName =
 	| 'anthropic-api-key'
 	| 'auth-jwt-private-key'
 	| 'github-token'
+	| 'github-oauth-client-secret'
 	| 'stripe-secret-key'
 	| 'stripe-webhook-secret'
 
@@ -154,6 +155,8 @@ export class ResourcesStack extends Stack {
 			// Ed25519 private JWK the api signs tokens with: `node scripts/gen-auth-key.mjs`
 			'auth-jwt-private-key': createSecret('auth-jwt-private-key'),
 			'github-token': createSecret('github-token'),
+			// Client secret of the "Sign in with GitHub" OAuth App (M6; TODO-EXTERNAL)
+			'github-oauth-client-secret': createSecret('github-oauth-client-secret'),
 			'stripe-secret-key': createSecret('stripe-secret-key'),
 			'stripe-webhook-secret': createSecret('stripe-webhook-secret'),
 		}

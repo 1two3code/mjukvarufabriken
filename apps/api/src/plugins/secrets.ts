@@ -46,6 +46,12 @@ declare module 'fastify' {
 			 * (or resolved from `RESIDENT_INSTALLATIONS_SECRET_ARN`); empty → no resident can report.
 			 */
 			residentInstallations: Record<string, string>
+			/**
+			 * "Sign in with GitHub" OAuth App (M6): `GITHUB_OAUTH_CLIENT_ID` + `GITHUB_OAUTH_CLIENT_SECRET`
+			 * (or resolved from `GITHUB_OAUTH_CLIENT_SECRET_SECRET_ARN`). Undefined when either is
+			 * missing — the GitHub sign-in routes answer 404 and the magic link is the only way in.
+			 */
+			githubOauth?: { clientId: string; clientSecret: string }
 			/** Infra handles (set by the CDK web stack) */
 			infra: {
 				databaseSecretArn?: string
@@ -157,6 +163,11 @@ const plugin: FastifyPluginAsync = async app => {
 	const port = process.env.PORT || '5174'
 	const authIssuer = process.env.AUTH_ISSUER || `http://localhost:${port}`
 
+	const githubClientId = process.env.GITHUB_OAUTH_CLIENT_ID?.trim()
+	const githubClientSecret = githubClientId
+		? await resolveSecret('GITHUB_OAUTH_CLIENT_SECRET', 'GITHUB_OAUTH_CLIENT_SECRET_SECRET_ARN')
+		: undefined
+
 	app.decorate('secrets', {
 		env,
 		appUrl,
@@ -175,6 +186,10 @@ const plugin: FastifyPluginAsync = async app => {
 		residentInstallations: parseInstallations(
 			await resolveSecret('RESIDENT_INSTALLATIONS', 'RESIDENT_INSTALLATIONS_SECRET_ARN')
 		),
+		githubOauth:
+			githubClientId && githubClientSecret
+				? { clientId: githubClientId, clientSecret: githubClientSecret }
+				: undefined,
 		infra: {
 			databaseSecretArn: process.env.DATABASE_SECRET_ARN,
 			jobApiUrl: process.env.JOB_API_URL || authIssuer,

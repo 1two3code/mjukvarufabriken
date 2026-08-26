@@ -62,15 +62,38 @@ describe('row mapping', () => {
 
 	it('Maps user, org and auth rows to models with ISO timestamps', () => {
 		expect(
-			toUser({ id: 'u', org_id: 'o', email: 'a@x.se', name: null, role: 'admin', created_at: at })
+			toUser({
+				id: 'u',
+				org_id: 'o',
+				email: 'a@x.se',
+				name: null,
+				role: 'admin',
+				github_id: null,
+				github_login: null,
+				created_at: at,
+			})
 		).toEqual({
 			id: 'u',
 			orgId: 'o',
 			email: 'a@x.se',
 			name: undefined,
 			role: 'admin',
+			githubId: undefined,
+			githubLogin: undefined,
 			createdAt: at.toISOString(),
 		})
+		expect(
+			toUser({
+				id: 'u',
+				org_id: 'o',
+				email: 'a@x.se',
+				name: 'Anna',
+				role: 'user',
+				github_id: '42',
+				github_login: 'anna',
+				created_at: at,
+			})
+		).toMatchObject({ githubId: '42', githubLogin: 'anna' })
 		expect(toOrg({ id: 'o', name: 'x.se', org_number: null, created_at: at })).toEqual({
 			id: 'o',
 			name: 'x.se',
@@ -80,6 +103,7 @@ describe('row mapping', () => {
 			toMagicLink({
 				token_hash: 'h',
 				email: 'a@x.se',
+				purpose: 'email',
 				expires_at: at,
 				used_at: null,
 				created_at: at,
@@ -87,6 +111,7 @@ describe('row mapping', () => {
 		).toEqual({
 			tokenHash: 'h',
 			email: 'a@x.se',
+			purpose: 'email',
 			createdAt: at.toISOString(),
 			expiresAt: at.toISOString(),
 			usedAt: undefined,
