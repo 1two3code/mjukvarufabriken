@@ -71,6 +71,8 @@ console.log(
 	`repo: ${repoDir}\nseed: ${values.seed ?? '(root commit)'}\nwaivers: ${waivers.join(', ') || '-'}\n`
 )
 const startedAt = Date.now()
+// The orchestrator polls the wall clock from its own interval; stand-alone we do it here
+const poll = setInterval(() => budget.checkDuration(), 10_000)
 const outcome = await runGates({
 	spec,
 	repoDir,
@@ -94,6 +96,7 @@ const outcome = await runGates({
 	isAborted: () => budget.aborted,
 })
 
+clearInterval(poll)
 console.log('\n=== reports')
 console.log(JSON.stringify(outcome.reports, null, 2))
 console.log(

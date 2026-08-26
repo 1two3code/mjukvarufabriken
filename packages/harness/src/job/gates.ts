@@ -1,5 +1,6 @@
 import { gateName } from '@mf/models'
 
+import { tail } from './exec.ts'
 import { totalTokens } from './types.ts'
 
 import type { GateName, GateReport, NewJobEvent, NotifyPayload } from '@mf/models'
@@ -37,7 +38,7 @@ const gatePort = (
 				return {
 					ok: verification.ok,
 					tokens: 0,
-					summary: verification.ok ? 'lint + test green' : verification.output,
+					summary: verification.ok ? 'lint + test green' : tail(verification.output, 40),
 				}
 			}
 		case 'acceptance-tests':

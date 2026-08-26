@@ -1,5 +1,5 @@
-import { readdir } from 'node:fs/promises'
-import { join, relative } from 'node:path'
+import { readdir, rm } from 'node:fs/promises'
+import { basename, join, relative } from 'node:path'
 
 import { z } from 'zod'
 import { AcceptanceReportSchema, ReviewFindingSchema } from '@mf/models'
@@ -7,7 +7,13 @@ import { AcceptanceReportSchema, ReviewFindingSchema } from '@mf/models'
 import { exec, tail } from './exec.ts'
 import { renderSpecForPlanning } from './planner.ts'
 import { totalTokens } from './types.ts'
-import { readOnlyTools, repoConventions, runSession, verifyRepo } from './worker.ts'
+import {
+	readOnlyTools,
+	repoConventions,
+	runAcceptanceTests,
+	runSession,
+	verifyRepo,
+} from './worker.ts'
 
 import type { AcceptanceReport, ReviewFinding, Spec } from '@mf/models'
 import type { GateInput, GateOutcome, TokenUsage } from './types.ts'
@@ -74,10 +80,91 @@ const commitAll = async (repoDir: string, message: string, signal: AbortSignal) 
 	await exec('git', ['commit', '-q', '-m', message], { cwd: repoDir, signal })
 }
 
-/** Throws away anything a read-only session left behind (it must never change the repo) */
-export const discardChanges = async (repoDir: string) => {
+export type RepoSnapshot = { head: string; branch?: string }
+
+/** HEAD + branch before a read-only session, so anything it does to git can be undone */
+export const snapshotRepo = async (repoDir: string): Promise<RepoSnapshot> => {
+	const head = (await exec('git', ['rev-parse', 'HEAD'], { cwd: repoDir })).stdout.trim()
+	const ref = (
+		await exec('git', ['symbolic-ref', '-q', '--short', 'HEAD'], { cwd: repoDir })
+	).stdout.trim()
+	return { head, branch: ref || undefined }
+}
+
+/**
+ * Throws away anything a read-only session left behind — it must never change the repo, but its
+ * Bash is only restricted by prompt: the branch is checked out again, HEAD is reset hard to the
+ * snapshot (undoes commits, resets, stashes, detached heads) and untracked files are removed.
+ * Returns true when git state (not just the working tree) had been changed.
+ */
+export const discardChanges = async (repoDir: string, snapshot?: RepoSnapshot) => {
+	let moved = false
+	if (snapshot) {
+		const current = await snapshotRepo(repoDir)
+		moved = current.head !== snapshot.head || current.branch !== snapshot.branch
+		if (snapshot.branch) {
+			await exec('git', ['checkout', '-q', '-f', snapshot.branch], { cwd: repoDir })
+		}
+		await exec('git', ['reset', '-q', '--hard', snapshot.head], { cwd: repoDir })
+	}
 	await exec('git', ['checkout', '-q', '--', '.'], { cwd: repoDir })
 	await exec('git', ['clean', '-qfd'], { cwd: repoDir })
+	if (moved) {
+		console.warn(JSON.stringify({ message: 'read-only session changed git state', repoDir }))
+	}
+	return moved
+}
+
+/**
+ * Files an acceptance fix session must not touch: the tests themselves, and everything that
+ * decides whether they run — Vitest configs/workspaces, package.json scripts, test setup files.
+ */
+export const isProtectedTestPath = (path: string) => {
+	const name = basename(path)
+	return (
+		/(^|\/)acceptance\//.test(path) ||
+		/^(vitest|vite)\.(config|workspace)\./.test(name) ||
+		name === 'package.json' ||
+		/^setup(-?tests?)?\./i.test(name) ||
+		/(^|\/)test\/setup/.test(path)
+	)
+}
+
+/**
+ * Restores every protected path to how it was in `commit` (recreates, reverts or deletes) and
+ * returns the paths that had been changed.
+ */
+export const restoreProtectedPaths = async (
+	repoDir: string,
+	commit: string,
+	signal: AbortSignal
+) => {
+	const opts = { cwd: repoDir, signal }
+	const tracked = (await exec('git', ['diff', '--name-only', commit], opts)).stdout
+	const untracked = (await exec('git', ['ls-files', '--others', '--exclude-standard'], opts)).stdout
+	const changed = [
+		...new Set(
+			`${tracked}\n${untracked}`
+				.split('\n')
+				.map(line => line.trim())
+				.filter(Boolean)
+		),
+	]
+	const restored: string[] = []
+	for (const path of changed.filter(isProtectedTestPath)) {
+		const existed = (await exec('git', ['cat-file', '-e', `${commit}:${path}`], opts)).code === 0
+		if (existed) await exec('git', ['checkout', '-q', commit, '--', path], opts)
+		else await rm(join(repoDir, path), { force: true })
+		restored.push(path)
+	}
+	return restored
+}
+
+/** Lint + test of the whole repo, then the acceptance files explicitly — both must be green */
+const verifyAcceptance = async (repoDir: string, files: string[], signal: AbortSignal) => {
+	const verification = await verifyRepo(repoDir, signal)
+	if (!verification.ok) return verification
+	return runAcceptanceTests(repoDir, files, signal)
 }
 
 const rootCommit = async (repoDir: string, signal: AbortSignal) => {
@@ -110,7 +197,7 @@ export const acceptanceTestsSystemPrompt = (spec: Spec, criteria: Criterion[]) =
 - UI criteria: apps/app/src/acceptance/<criterion id>.test.tsx using Vitest + @testing-library/react (jsdom).
 - Server-side criteria (api routes/services): apps/api/test/acceptance/<criterion id>.test.ts using the api's existing test setup (createTestApp / app.inject).
 - The file name IS the criterion id (e.g. f0.c1.test.tsx) and the test title starts with the id in brackets, e.g. it('[f0.c1] a member can book a class').
-- If the app has no test setup, set it up: add vitest, jsdom, @testing-library/react, @testing-library/jest-dom (and @testing-library/user-event) to apps/app, a vitest config with environment jsdom + globals, and a "test" script; \`npm install\` from the repository root is allowed. Make sure the root \`npm test\` picks the new project up.
+- If the app has no test setup, set it up: add vitest, jsdom, @testing-library/react, @testing-library/jest-dom (and @testing-library/user-event) to apps/app, a vitest config with environment jsdom + globals, and a "test" script; \`npm install\` from the repository root is allowed. Make sure the root \`npm test\` picks the new project up (add it to the root vitest config's \`projects\`): the gate runs the acceptance files explicitly through the root Vitest and fails when any of them is not executed.
 - Tests must be real: render the component/page (with providers/router as needed) or call the route, then assert the observable behaviour the criterion describes. Mock the network with MSW or a fetch stub if needed. Do not write placeholder tests that always pass.
 
 # Definition of done
@@ -188,7 +275,8 @@ export const acceptanceTestsGate = async (
 		}
 	}
 
-	let verification = await verifyRepo(repoDir, signal)
+	const testFiles = [...files.values()].flat()
+	let verification = await verifyAcceptance(repoDir, testFiles, signal)
 	if (!verification.ok) {
 		const testsCommit = (
 			await exec('git', ['rev-parse', 'HEAD'], { cwd: repoDir, signal })
@@ -207,11 +295,11 @@ export const acceptanceTestsGate = async (
 		if (!fix.ok) {
 			return { ok: false, tokens: tokens(), summary: `fix session failed: ${fix.result}`, details }
 		}
-		// The tests are the contract: whatever the fix did to them is undone
-		const testFiles = [...files.values()].flat()
-		await exec('git', ['checkout', '-q', testsCommit, '--', ...testFiles], { cwd: repoDir, signal })
+		// The tests are the contract: whatever the fix did to them, or to what makes them run
+		// (vitest config, package.json scripts, setup files), is undone
+		details.restored = await restoreProtectedPaths(repoDir, testsCommit, signal)
 		await commitAll(repoDir, 'fix(acceptance): make acceptance tests pass (auto-commit)', signal)
-		verification = await verifyRepo(repoDir, signal)
+		verification = await verifyAcceptance(repoDir, testFiles, signal)
 		if (signal.aborted) return { ok: false, tokens: tokens(), summary: 'aborted', details }
 		if (!verification.ok) {
 			return {
@@ -278,6 +366,7 @@ const reviewSession = async (
 	count: (usage: TokenUsage) => void,
 	model?: string
 ) => {
+	const snapshot = await snapshotRepo(input.repoDir)
 	const session = await runSession({
 		cwd: input.repoDir,
 		systemPrompt: reviewSystemPrompt(input.spec, range),
@@ -289,7 +378,7 @@ const reviewSession = async (
 		tools: readOnlyTools,
 		outputSchema: reviewOutputJsonSchema,
 	})
-	await discardChanges(input.repoDir)
+	await discardChanges(input.repoDir, snapshot)
 	if (!session.ok) throw new Error(`review session failed: ${session.result}`)
 	const parsed = ReviewOutputSchema.safeParse(session.structuredOutput)
 	if (!parsed.success) throw new Error(`review output invalid: ${parsed.error.message}`)
@@ -298,6 +387,77 @@ const reviewSession = async (
 
 const isActionable = (finding: ReviewFinding, waivers: string[]) =>
 	finding.severity !== 'low' && !waivers.includes(finding.id)
+
+// MARK: Waiver line mapping
+
+export type Hunk = { oldStart: number; oldCount: number; newStart: number; newCount: number }
+
+/** Hunk headers of a `git diff -U0` for one file */
+export const parseHunks = (diff: string): Hunk[] =>
+	[...diff.matchAll(/^@@ -(\d+)(?:,(\d+))? \+(\d+)(?:,(\d+))? @@/gm)].map(match => ({
+		oldStart: Number(match[1]),
+		oldCount: match[2] === undefined ? 1 : Number(match[2]),
+		newStart: Number(match[3]),
+		newCount: match[4] === undefined ? 1 : Number(match[4]),
+	}))
+
+/**
+ * Where line `line` of the old file is in the new file: shifted by the hunks above it, moved
+ * along inside a modified hunk, `undefined` when the hunk deleted it.
+ */
+export const remapLine = (hunks: Hunk[], line: number): number | undefined => {
+	let offset = 0
+	for (const hunk of hunks) {
+		// A pure insertion (`-N,0`) sits after old line N; N itself is untouched
+		if (line < hunk.oldStart || (hunk.oldCount === 0 && line <= hunk.oldStart)) break
+		const end = hunk.oldStart + hunk.oldCount - 1
+		if (line <= end) {
+			if (hunk.newCount === 0) return undefined
+			return hunk.newStart + Math.min(line - hunk.oldStart, hunk.newCount - 1)
+		}
+		offset += hunk.newCount - hunk.oldCount
+	}
+	return line + offset
+}
+
+const parseWaiver = (waiver: string) => {
+	const match = /^(.+):(\d+)$/.exec(waiver)
+	return match ? { file: match[1]!, line: Number(match[2]) } : undefined
+}
+
+/**
+ * Waivers are `<file>:<line>` in the tree the admin looked at; after the fix session moved lines
+ * around they are translated through `git diff -U0 <before>..HEAD` so they keep pointing at the
+ * same code (and stop matching whatever now sits at the old line number).
+ */
+export const remapWaivers = async (
+	repoDir: string,
+	waivers: string[],
+	before: string,
+	signal: AbortSignal
+) => {
+	const hunksByFile = new Map<string, Hunk[]>()
+	const mapped: string[] = []
+	for (const waiver of waivers) {
+		const parsed = parseWaiver(waiver)
+		if (!parsed) {
+			mapped.push(waiver)
+			continue
+		}
+		let hunks = hunksByFile.get(parsed.file)
+		if (!hunks) {
+			const diff = await exec('git', ['diff', '-U0', before, 'HEAD', '--', parsed.file], {
+				cwd: repoDir,
+				signal,
+			})
+			hunks = parseHunks(diff.stdout)
+			hunksByFile.set(parsed.file, hunks)
+		}
+		const line = remapLine(hunks, parsed.line)
+		if (line !== undefined) mapped.push(`${parsed.file}:${line}`)
+	}
+	return mapped
+}
 
 /**
  * Read-only review session → strict findings. High/medium (unwaived) → ONE fix session, lint +
@@ -338,6 +498,9 @@ export const reviewGate = async (
 		}
 	}
 
+	const beforeFix = (
+		await exec('git', ['rev-parse', 'HEAD'], { cwd: repoDir, signal })
+	).stdout.trim()
 	const fix = await runSession({
 		cwd: repoDir,
 		systemPrompt: reviewFixSystemPrompt(input.spec, actionable),
@@ -364,6 +527,8 @@ export const reviewGate = async (
 		}
 	}
 
+	const waiversAfterFix = await remapWaivers(repoDir, waivers, beforeFix, signal)
+	details.waiversAfterFix = waiversAfterFix
 	let afterFix: ReviewFinding[]
 	try {
 		afterFix = await reviewSession(input, range, count, model)
@@ -373,7 +538,7 @@ export const reviewGate = async (
 	}
 	if (signal.aborted) return { ok: false, tokens: tokens(), summary: 'aborted', details }
 	details.findingsAfterFix = afterFix
-	const openHigh = afterFix.filter(f => f.severity === 'high' && !waivers.includes(f.id))
+	const openHigh = afterFix.filter(f => f.severity === 'high' && !waiversAfterFix.includes(f.id))
 	if (openHigh.length) {
 		return {
 			ok: false,
@@ -422,6 +587,7 @@ export const acceptanceCheckGate = async (
 ): Promise<GateOutcome> => {
 	const criteria = criteriaOf(spec)
 	const { count, tokens } = usageCounter(onUsage)
+	const snapshot = await snapshotRepo(repoDir)
 	const session = await runSession({
 		cwd: repoDir,
 		systemPrompt: acceptanceCheckSystemPrompt(spec, criteria),
@@ -433,7 +599,7 @@ export const acceptanceCheckGate = async (
 		tools: readOnlyTools,
 		outputSchema: acceptanceReportJsonSchema,
 	})
-	await discardChanges(repoDir)
+	await discardChanges(repoDir, snapshot)
 	if (signal.aborted) return { ok: false, tokens: tokens(), summary: 'aborted' }
 	if (!session.ok) {
 		return {
