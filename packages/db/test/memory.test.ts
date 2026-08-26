@@ -78,6 +78,38 @@ describe('memory repositories', () => {
 			expect(events.map(event => [event.id, event.type])).toEqual([[2, 'failed']])
 		})
 
+		it('Stores a numbered event once and counts events by type', async () => {
+			const job = await repos.jobs.insert({ orderId: 'o1', orgId: 'org', spec, budget })
+			const notify = { type: 'notify' as const, payload: { to: 'admins' } }
+
+			const first = await repos.jobs.appendEventOnce(job.id, 1, notify)
+			const replay = await repos.jobs.appendEventOnce(job.id, 1, notify)
+			await repos.jobs.appendEventOnce(job.id, 2, { type: 'log', payload: {} })
+
+			expect(first).toMatchObject({ duplicate: false, event: { id: 1, type: 'notify' } })
+			expect(replay).toEqual({ ...first, duplicate: true })
+			expect(await repos.jobs.listEvents(job.id)).toHaveLength(2)
+			expect(await repos.jobs.countEvents(job.id, 'notify')).toBe(1)
+			expect(await repos.jobs.countEvents(job.id, 'gate')).toBe(0)
+		})
+
+		it('Rotates and revokes the report token hash through update', async () => {
+			const job = await repos.jobs.insert({
+				orderId: 'o1',
+				orgId: 'org',
+				spec,
+				budget,
+				reportTokenHash: 'boot',
+			})
+
+			await repos.jobs.update(job.id, { reportTokenHash: 'fresh' })
+			expect(await repos.jobs.getByReportToken('boot')).toBeUndefined()
+			expect((await repos.jobs.getByReportToken('fresh'))?.id).toBe(job.id)
+
+			await repos.jobs.update(job.id, { status: 'delivered', reportTokenHash: null })
+			expect(await repos.jobs.getByReportToken('fresh')).toBeUndefined()
+		})
+
 		it('Filters lists by order and org and returns copies', async () => {
 			await repos.jobs.insert({ orderId: 'o1', orgId: 'a', spec, budget })
 			await repos.jobs.insert({ orderId: 'o2', orgId: 'b', spec, budget })

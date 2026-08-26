@@ -27,11 +27,33 @@ export const JobReportSchema = z.object({
 })
 export type JobReport = z.infer<typeof JobReportSchema>
 
+// MARK: POST /internal/jobs/:jobId/token
+/**
+ * One-shot exchange of the bootstrap token from the RunTask override (visible in the task's
+ * environment, `ecs:DescribeTasks` and CloudTrail) for a fresh one only the job process holds.
+ * The old token stops working the moment the exchange succeeds.
+ */
+export const JobReportTokenResponseSchema = z.object({ token: z.string().min(1) })
+export type JobReportTokenResponse = z.infer<typeof JobReportTokenResponseSchema>
+
 // MARK: POST /internal/jobs/:jobId/events
+/**
+ * `seq` numbers the container's events 1, 2, 3… per job so a batch replayed after a lost
+ * response is stored once (unique `(job_id, seq)`); a duplicate is acknowledged but has no side
+ * effects (no admin mail, no second gate report).
+ */
+export const JobReportEventSchema = NewJobEventSchema.extend({
+	seq: z.number().int().positive().optional(),
+})
+export type JobReportEvent = z.infer<typeof JobReportEventSchema>
+
 export const JobReportEventsBodySchema = z
-	.object({ events: z.array(NewJobEventSchema).min(1).max(100) })
+	.object({ events: z.array(JobReportEventSchema).min(1).max(100) })
 	.strict()
 export type JobReportEventsBody = z.infer<typeof JobReportEventsBodySchema>
+
+/** `notify` events per job the api will still mail — the orchestrator sends at most one */
+export const jobNotifyEventsMax = 10
 
 export const JobReportEventsResponseSchema = z.object({
 	/** Id of the last stored event */
@@ -43,12 +65,18 @@ export type JobReportEventsResponse = z.infer<typeof JobReportEventsResponseSche
 /** A running job can move forward or end — it never re-queues itself */
 export const jobReportStatus = jobStatus.filter(status => status !== 'queued')
 
+/**
+ * The harness builds a failure reason from raw worker output (lint/test logs of every failed
+ * task); the reporter truncates to this before the PATCH so the final write is never rejected
+ */
+export const jobReasonMaxLength = 20_000
+
 export const JobReportUpdateSchema = z
 	.object({
 		status: z.enum(jobReportStatus).optional(),
 		tokensUsed: z.number().int().nonnegative().optional(),
 		plan: PlanSchema.optional(),
-		reason: z.string().max(4000).optional(),
+		reason: z.string().max(jobReasonMaxLength).optional(),
 		gates: z.array(GateReportSchema).optional(),
 		repositoryUrl: z.string().max(2000).optional(),
 		startedAt: z.iso.datetime().optional(),

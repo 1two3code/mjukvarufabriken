@@ -120,10 +120,12 @@ export const GateReportSchema = z.object({
 export type GateReport = z.infer<typeof GateReportSchema>
 
 /** Payload of the `notify` job event — the api forwards it as an email to the admins */
+export const notifySubjectMaxLength = 200
+export const notifyTextMaxLength = 20_000
 export const NotifyPayloadSchema = z.object({
 	to: z.literal('admins'),
-	subject: z.string().min(1),
-	text: z.string(),
+	subject: z.string().min(1).max(notifySubjectMaxLength),
+	text: z.string().max(notifyTextMaxLength),
 })
 export type NotifyPayload = z.infer<typeof NotifyPayloadSchema>
 

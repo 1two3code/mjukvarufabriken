@@ -26,6 +26,8 @@ export const createMemoryRepositories = (): Repositories => {
 	const events: JobEvent[] = []
 	/** report token hash → job id (the hash is never part of the `Job` model) */
 	const reportTokens = new Map<string, string>()
+	/** `${jobId}:${seq}` → the event stored for that number (idempotent container events) */
+	const numberedEvents = new Map<string, JobEvent>()
 	const orders = new Map<string, { draft: SpecDraft; createdAt: string }>()
 	const users = new Map<string, User>()
 	const orgs = new Map<string, Org>()
@@ -98,6 +100,10 @@ export const createMemoryRepositories = (): Repositories => {
 				const job = jobs.get(id)
 				if (!job) return undefined
 				if (update.status !== undefined && job.status === 'killed') return undefined
+				if (update.reportTokenHash !== undefined) {
+					for (const [hash, jobId] of reportTokens) if (jobId === id) reportTokens.delete(hash)
+					if (update.reportTokenHash !== null) reportTokens.set(update.reportTokenHash, id)
+				}
 				const next: Job = {
 					...job,
 					status: update.status ?? job.status,
@@ -125,6 +131,23 @@ export const createMemoryRepositories = (): Repositories => {
 				events.push(created)
 				return clone(created)
 			},
+			appendEventOnce: async (jobId, seq, event) => {
+				const key = `${jobId}:${seq}`
+				const existing = numberedEvents.get(key)
+				if (existing) return { event: clone(existing), duplicate: true }
+				const created: JobEvent = {
+					id: events.length + 1,
+					jobId,
+					type: event.type,
+					payload: clone(event.payload),
+					createdAt: now(),
+				}
+				events.push(created)
+				numberedEvents.set(key, created)
+				return { event: clone(created), duplicate: false }
+			},
+			countEvents: async (jobId, type) =>
+				events.filter(event => event.jobId === jobId && event.type === type).length,
 			listEvents: async (jobId, afterId = 0) =>
 				events
 					.filter(event => event.jobId === jobId && event.id > afterId)

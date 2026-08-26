@@ -103,6 +103,8 @@ export type JobUpdate = Partial<{
 	repositoryUrl: string
 	startedAt: Date
 	finishedAt: Date
+	/** Rotated on the job's first report (one-shot bootstrap token); `null` revokes it */
+	reportTokenHash: string | null
 }>
 
 export const insertJob = async (db: Db, job: NewJob): Promise<Job> => {
@@ -171,6 +173,7 @@ export const updateJob = async (
 		repository_url: update.repositoryUrl,
 		started_at: update.startedAt,
 		finished_at: update.finishedAt,
+		report_token_hash: update.reportTokenHash,
 	}
 	const set = Object.fromEntries(
 		Object.entries(columns).filter(([, value]) => value !== undefined)
@@ -196,6 +199,41 @@ export const appendEvent = async (db: Db, jobId: string, event: NewJobEvent): Pr
 	return toJobEvent(row!)
 }
 
+/**
+ * Idempotent append for the build container's numbered events: the `(job_id, seq)` unique
+ * index makes a replayed batch a no-op, and the caller gets the row that was stored the first
+ * time with `duplicate: true` so it can skip the side effects.
+ */
+export const appendEventOnce = async (
+	db: Db,
+	jobId: string,
+	seq: number,
+	event: NewJobEvent
+): Promise<{ event: JobEvent; duplicate: boolean }> => {
+	const { sql } = db
+	const [inserted] = await sql<JobEventRow[]>`
+		insert into job_events (job_id, seq, type, payload)
+		values (${jobId}, ${seq}, ${event.type}, ${sql.json(event.payload as never)})
+		on conflict (job_id, seq) where seq is not null do nothing
+		returning *`
+	if (inserted) return { event: toJobEvent(inserted), duplicate: false }
+	const [existing] = await sql<JobEventRow[]>`
+		select * from job_events where job_id = ${jobId} and seq = ${seq}`
+	if (!existing) throw new Error(`job_events (${jobId}, ${seq}) neither inserted nor found`)
+	return { event: toJobEvent(existing), duplicate: true }
+}
+
+export const countEvents = async (
+	db: Db,
+	jobId: string,
+	type: JobEvent['type']
+): Promise<number> => {
+	if (!isUuid(jobId)) return 0
+	const [row] = await db.sql<{ count: string }[]>`
+		select count(*)::text as count from job_events where job_id = ${jobId} and type = ${type}`
+	return Number(row?.count ?? 0)
+}
+
 export const listEvents = async (db: Db, jobId: string, afterId = 0): Promise<JobEvent[]> => {
 	if (!isUuid(jobId)) return []
 	const rows = await db.sql<JobEventRow[]>`
@@ -211,5 +249,7 @@ export const createJobsRepository = (db: Db): JobsRepository => ({
 	list: filter => listJobs(db, filter),
 	update: (id, update) => updateJob(db, id, update),
 	appendEvent: (jobId, event) => appendEvent(db, jobId, event),
+	appendEventOnce: (jobId, seq, event) => appendEventOnce(db, jobId, seq, event),
+	countEvents: (jobId, type) => countEvents(db, jobId, type),
 	listEvents: (jobId, afterId) => listEvents(db, jobId, afterId),
 })
