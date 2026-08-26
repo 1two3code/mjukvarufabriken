@@ -16,9 +16,25 @@ export type ExecOptions = {
  */
 const secretEnvKey = /^(DATABASE_|AWS_|ECS_|ARTIFACTS_BUCKET$)|_SECRET_ARN$/
 
+/**
+ * Git hooks are off for everything the job runs. The template ships husky hooks (conventional
+ * commit-msg, pre-push lint+test) meant for humans; a worker's `npm install` re-enables them via
+ * the `prepare` script and they then reject the orchestrator's merge commits (Fargate run
+ * 2026-08-26). The gates run lint + tests anyway. `GIT_CONFIG_*` applies to every git process
+ * regardless of repo config; `HUSKY=0` covers hooks invoked some other way.
+ */
+export const noHooksEnv: NodeJS.ProcessEnv = {
+	GIT_CONFIG_COUNT: '1',
+	GIT_CONFIG_KEY_0: 'core.hooksPath',
+	GIT_CONFIG_VALUE_0: '/dev/null',
+	HUSKY: '0',
+}
+
 /** `process.env` minus credentials and cloud config — what child processes and agent sessions get */
-export const sandboxEnv = (env: NodeJS.ProcessEnv = process.env): NodeJS.ProcessEnv =>
-	Object.fromEntries(Object.entries(env).filter(([key]) => !secretEnvKey.test(key)))
+export const sandboxEnv = (env: NodeJS.ProcessEnv = process.env): NodeJS.ProcessEnv => ({
+	...Object.fromEntries(Object.entries(env).filter(([key]) => !secretEnvKey.test(key))),
+	...noHooksEnv,
+})
 
 /** Runs a command without a shell and captures its output; never throws on a non-zero exit */
 export const exec = (

@@ -25,7 +25,20 @@ describe('exec', () => {
 			HTTPS_PROXY: 'http://127.0.0.1:8888',
 			NO_PROXY: 'localhost',
 			GIT_AUTHOR_NAME: 'build',
+			// git hooks (husky) are always off inside the job
+			GIT_CONFIG_COUNT: '1',
+			GIT_CONFIG_KEY_0: 'core.hooksPath',
+			GIT_CONFIG_VALUE_0: '/dev/null',
+			HUSKY: '0',
 		})
+	})
+
+	it('Disables repo git hooks for every git command the job runs', async () => {
+		const dir = await (await import('node:fs/promises')).mkdtemp('/tmp/mf-hooks-')
+		await exec('git', ['init', '-q'], { cwd: dir })
+		await exec('git', ['config', 'core.hooksPath', '.hooks'], { cwd: dir })
+		const shown = await exec('git', ['config', 'core.hooksPath'], { cwd: dir })
+		expect(shown.stdout.trim()).toBe('/dev/null')
 	})
 
 	it('Spawns children with the sandbox env (secrets removed, overrides applied)', async () => {
