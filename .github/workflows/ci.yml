@@ -46,6 +46,9 @@ jobs:
           npm audit --audit-level=high --prefix infra
           npm audit --audit-level=high --prefix infra/resident
 
+      # Coverage thresholds (lines ≥ 60 %) are enforced by vitest.config.ts; the run fails below
+      # the bar. Docker image builds (apps/job, apps/api) are deliberately NOT part of CI — the
+      # deploy workflow builds them once through CDK assets.
       - name: Test (with coverage)
         run: npm run coverage
 

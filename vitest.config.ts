@@ -15,6 +15,9 @@ export default defineConfig({
 				'packages/resident/src/**/*.ts',
 			],
 			exclude: ['**/*index.ts', '**/*server.ts', '**/*types.ts', '**/__mocks__/*'],
+			// Enforced by `npm run coverage` (CI). Measured 2026-08-27: lines 88 % / functions 81 % /
+			// branches 76 % — the bar is deliberately modest so a refactor never fails on coverage alone.
+			thresholds: { lines: 60 },
 		},
 		projects: [
 			'apps/api',
