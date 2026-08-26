@@ -22,11 +22,15 @@ export const orderStatus = [
 ] as const
 export type OrderStatus = (typeof orderStatus)[number]
 
-/** Allowed transitions: from → to[] */
+/**
+ * Allowed transitions: from → to[]. `frozen → building` is the admin override (a build started
+ * without the deposit); `deposit_paid`/`building → cancelled` is admin-only too (the running
+ * build is killed and the deposit needs a refund) — see `customerCancellableOrderStatus`.
+ */
 export const orderTransitions: Record<OrderStatus, readonly OrderStatus[]> = {
 	drafting: ['ready', 'cancelled'],
 	ready: ['drafting', 'frozen', 'cancelled'],
-	frozen: ['deposit_paid', 'cancelled'],
+	frozen: ['deposit_paid', 'building', 'cancelled'],
 	deposit_paid: ['building', 'cancelled'],
 	building: ['delivered', 'cancelled'],
 	delivered: ['paid'],
@@ -36,6 +40,13 @@ export const orderTransitions: Record<OrderStatus, readonly OrderStatus[]> = {
 
 export const canTransitionOrder = (from: OrderStatus, to: OrderStatus) =>
 	orderTransitions[from].includes(to)
+
+/** Statuses a customer may cancel from: until the deposit is paid. Admins may also cancel later. */
+export const customerCancellableOrderStatus: readonly OrderStatus[] = [
+	'drafting',
+	'ready',
+	'frozen',
+]
 
 /** Statuses in which the spec can still be edited */
 export const specEditableOrderStatus = ['drafting', 'ready'] as const

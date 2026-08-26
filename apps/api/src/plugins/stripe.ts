@@ -27,7 +27,11 @@ export type CheckoutSession = { sessionId: string; url: string }
 export type PaymentEvent = {
 	id: string
 	type: string
-	/** Set for `checkout.session.completed` */
+	/**
+	 * Set only when the event means the session's money is in: `checkout.session.completed`
+	 * with `payment_status: 'paid'`, or `checkout.session.async_payment_succeeded` (delayed
+	 * methods complete the session first and confirm the funds later).
+	 */
 	sessionId?: string
 }
 
@@ -40,6 +44,8 @@ export type PaymentProvider = {
 	constructWebhookEvent: (rawBody: string, signature: string | undefined) => PaymentEvent
 	/** Stripe-hosted invoice / receipt urls once the session has completed */
 	getSessionReceipts: (sessionId: string) => Promise<SessionReceipts>
+	/** Closes an open Checkout session so it can no longer be paid (no-op when already closed) */
+	expireSession: (sessionId: string) => Promise<void>
 }
 
 declare module 'fastify' {
@@ -71,14 +77,21 @@ const lineItemLabel: Record<PaymentKind, string> = {
 
 // MARK: Providers
 
-export const createFakeProvider = (apiUrl: string): PaymentProvider => ({
+/** Envs where the fake provider accepts unsigned webhook bodies (never a deployed env) */
+export const unsignedWebhookEnvs = new Set(['local', 'test'])
+
+export const createFakeProvider = (apiUrl: string, env: string): PaymentProvider => ({
 	kind: 'fake',
 	createCheckoutSession: async input => {
 		const sessionId = `${fakeSessionPrefix}${input.paymentId}`
 		return { sessionId, url: `${apiUrl}${fakeCheckoutPath(sessionId)}` }
 	},
-	// No signature to verify: the body is the event itself (local testing only)
+	// No signature to verify: the body is the event itself. Only on a developer's machine —
+	// in a deployed env the public webhook route would otherwise take anyone's events.
 	constructWebhookEvent: rawBody => {
+		if (!unsignedWebhookEnvs.has(env)) {
+			throw new InvalidWebhookSignature(`fake provider takes no webhooks in env ${env}`)
+		}
 		const event = JSON.parse(rawBody) as Partial<PaymentEvent>
 		if (typeof event.id !== 'string' || typeof event.type !== 'string') {
 			throw new InvalidWebhookSignature('fake event needs id and type')
@@ -86,10 +99,21 @@ export const createFakeProvider = (apiUrl: string): PaymentProvider => ({
 		return { id: event.id, type: event.type, sessionId: event.sessionId }
 	},
 	getSessionReceipts: async () => ({}),
+	expireSession: async () => {},
 })
 
-const sessionIdOf = (event: Stripe.Event) =>
-	event.type === 'checkout.session.completed' ? event.data.object.id : undefined
+/**
+ * The session id when the event means the money is in. `checkout.session.completed` also
+ * fires with `payment_status: 'unpaid'` for delayed-notification methods (bank transfer etc.);
+ * those sessions are paid only on `checkout.session.async_payment_succeeded`.
+ */
+export const sessionIdOf = (event: Stripe.Event) => {
+	if (event.type === 'checkout.session.async_payment_succeeded') return event.data.object.id
+	if (event.type === 'checkout.session.completed' && event.data.object.payment_status === 'paid') {
+		return event.data.object.id
+	}
+	return undefined
+}
 
 export const createStripeProvider = (stripe: Stripe, webhookSecret?: string): PaymentProvider => ({
 	kind: 'stripe',
@@ -147,6 +171,10 @@ export const createStripeProvider = (stripe: Stripe, webhookSecret?: string): Pa
 			receiptUrl: charge?.receipt_url ?? undefined,
 		}
 	},
+	expireSession: async sessionId => {
+		const session = await stripe.checkout.sessions.retrieve(sessionId)
+		if (session.status === 'open') await stripe.checkout.sessions.expire(sessionId)
+	},
 })
 
 // MARK: Plugin
@@ -178,7 +206,7 @@ const plugin: FastifyPluginAsync = async app => {
 		app.log.warn(
 			'STRIPE_SECRET_KEY not set — using the FAKE payment provider: checkout marks payments paid immediately, no money moves'
 		)
-		app.decorate('paymentProvider', createFakeProvider(secrets.authIssuer))
+		app.decorate('paymentProvider', createFakeProvider(secrets.authIssuer, secrets.env))
 		return
 	}
 

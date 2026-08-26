@@ -19,12 +19,17 @@ const checkoutInput: CheckoutInput = {
 	cancelUrl: 'https://portal.example.com/orders/order-1?payment=cancelled',
 }
 
-const completedSessionEvent = (id: string, sessionId: string) =>
+const completedSessionEvent = (
+	id: string,
+	sessionId: string,
+	type = 'checkout.session.completed',
+	paymentStatus = 'paid'
+) =>
 	JSON.stringify({
 		id,
 		object: 'event',
-		type: 'checkout.session.completed',
-		data: { object: { id: sessionId, object: 'checkout.session' } },
+		type,
+		data: { object: { id: sessionId, object: 'checkout.session', payment_status: paymentStatus } },
 	})
 
 const createApp = async (env: Record<string, string>) => {
@@ -78,11 +83,26 @@ describe('Stripe plugin (paymentProvider)', () => {
 		})
 
 		it('Has no receipts and builds urls from the given api url', async () => {
-			const provider = createFakeProvider('https://api.example.com')
+			const provider = createFakeProvider('https://api.example.com', 'local')
 			await expect(provider.getSessionReceipts('fake_1')).resolves.toEqual({})
+			await expect(provider.expireSession('fake_1')).resolves.toBeUndefined()
 			await expect(provider.createCheckoutSession(checkoutInput)).resolves.toMatchObject({
 				url: 'https://api.example.com/bff/stripe/fake/checkout/fake_payment-1',
 			})
+		})
+
+		it('Takes unsigned webhooks only on a developer machine, never in a deployed env', () => {
+			const body = JSON.stringify({ id: 'evt_1', type: 'checkout.session.completed' })
+			for (const env of ['local', 'test']) {
+				expect(
+					createFakeProvider('http://x', env).constructWebhookEvent(body, undefined)
+				).toMatchObject({ id: 'evt_1' })
+			}
+			for (const env of ['dev', 'live']) {
+				expect(() =>
+					createFakeProvider('http://x', env).constructWebhookEvent(body, undefined)
+				).toThrow(/Invalid webhook signature/)
+			}
 		})
 	})
 
@@ -140,6 +160,68 @@ describe('Stripe plugin (paymentProvider)', () => {
 			expect(() => app.paymentProvider.constructWebhookEvent(payload, undefined)).toThrow(
 				/Invalid webhook signature/
 			)
+		})
+
+		it('Only treats a completed session as paid when payment_status is paid', () => {
+			// Delayed methods (bank transfer etc.) complete the session before the money is in
+			const unpaid = completedSessionEvent(
+				'evt_u',
+				'cs_delayed',
+				'checkout.session.completed',
+				'unpaid'
+			)
+			const unpaidSignature = Stripe.webhooks.generateTestHeaderString({
+				payload: unpaid,
+				secret: webhookSecret,
+			})
+			expect(app.paymentProvider.constructWebhookEvent(unpaid, unpaidSignature)).toEqual({
+				id: 'evt_u',
+				type: 'checkout.session.completed',
+				sessionId: undefined,
+			})
+
+			// ...and are paid on async_payment_succeeded
+			const succeeded = completedSessionEvent(
+				'evt_s',
+				'cs_delayed',
+				'checkout.session.async_payment_succeeded',
+				'paid'
+			)
+			const succeededSignature = Stripe.webhooks.generateTestHeaderString({
+				payload: succeeded,
+				secret: webhookSecret,
+			})
+			expect(app.paymentProvider.constructWebhookEvent(succeeded, succeededSignature)).toEqual({
+				id: 'evt_s',
+				type: 'checkout.session.async_payment_succeeded',
+				sessionId: 'cs_delayed',
+			})
+		})
+
+		it('Expires an open Checkout session and leaves a closed one alone', async () => {
+			// Arrange
+			const openSession = networkMock
+				.get('https://api.stripe.com/v1/checkout/sessions/cs_open')
+				.reply(200, { id: 'cs_open', object: 'checkout.session', status: 'open' })
+			const expire = networkMock
+				.post('https://api.stripe.com/v1/checkout/sessions/cs_open/expire')
+				.reply(200, { id: 'cs_open', object: 'checkout.session', status: 'expired' })
+			const doneSession = networkMock
+				.get('https://api.stripe.com/v1/checkout/sessions/cs_done')
+				.reply(200, { id: 'cs_done', object: 'checkout.session', status: 'complete' })
+			const expireDone = networkMock
+				.post('https://api.stripe.com/v1/checkout/sessions/cs_done/expire')
+				.reply(200, {})
+
+			// Act
+			await app.paymentProvider.expireSession('cs_open')
+			await app.paymentProvider.expireSession('cs_done')
+
+			// Assert
+			expect(openSession.spy.called(1)).toBe(true)
+			expect(expire.spy.called(1)).toBe(true)
+			expect(doneSession.spy.called(1)).toBe(true)
+			expect(expireDone.spy.called(0)).toBe(true)
 		})
 
 		it('Leaves sessionId undefined for other event types', () => {

@@ -11,7 +11,7 @@ const schema = {
 		200: z.object({
 			received: z.literal(true),
 			eventId: z.string(),
-			outcome: z.enum(['applied', 'duplicate', 'ignored']),
+			outcome: z.enum(['applied', 'duplicate', 'ignored', 'refund_due']),
 		}),
 	},
 }

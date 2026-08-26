@@ -27,6 +27,7 @@ const mockPlugin: FastifyPluginAsync = async app => {
 			hostedInvoiceUrl: 'https://invoice.stripe.com/i/inv_1',
 			receiptUrl: 'https://pay.stripe.com/receipts/r_1',
 		}),
+		expireSession: vi.fn().mockResolvedValue(undefined),
 	}
 
 	app.decorate('paymentProvider', mock)

@@ -26,7 +26,7 @@ create table payments (
 );
 create index payments_order_idx on payments(order_id, created_at desc);
 
--- One paid payment per order and kind (a second webhook for a re-created session is ignored)
+-- One paid payment per order and kind (a second paid session of the same kind is flagged as a refund)
 create unique index payments_one_paid_per_kind on payments(order_id, kind) where status = 'paid';
 
 create table payment_events (

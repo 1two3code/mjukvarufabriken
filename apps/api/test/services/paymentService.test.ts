@@ -80,6 +80,34 @@ describe('Payment Service', () => {
 			).resolves.toMatchObject({ payment: { kind: 'balance' } })
 		})
 
+		it('Expires the earlier open session of the same kind so only one can be paid', async () => {
+			const order = await createOrder('frozen')
+			const first = await app.paymentService.checkout(order.id, 'deposit', user)
+			vi.mocked(app.paymentProvider.expireSession).mockRejectedValueOnce(new Error('down'))
+
+			// A second tab / retry: the first session is closed, a Stripe hiccup is not fatal
+			const second = await app.paymentService.checkout(order.id, 'deposit', user)
+
+			expect(app.paymentProvider.expireSession).toHaveBeenCalledTimes(1)
+			expect(app.paymentProvider.expireSession).toHaveBeenCalledWith(first.payment.sessionId)
+			expect(second.payment.sessionId).not.toBe(first.payment.sessionId)
+			await expect(app.db.orders.listPayments(order.id)).resolves.toHaveLength(2)
+		})
+
+		it('Sees a delivered build before gating the balance, without a prior order page read', async () => {
+			const order = await createOrder('building')
+			vi.spyOn(app.db.jobs, 'list').mockResolvedValue([
+				createMockJob({ orderId: order.id, status: 'delivered' }),
+			])
+
+			await expect(app.paymentService.checkout(order.id, 'balance', user)).resolves.toMatchObject({
+				payment: { kind: 'balance' },
+			})
+			await expect(app.orderService.get(order.id, user)).resolves.toMatchObject({
+				status: 'delivered',
+			})
+		})
+
 		it("Rejects a frozen order without a price and another org's order", async () => {
 			const order = await app.orderService.create('x', user)
 			await app.orderService.transition(order.id, 'ready')
@@ -192,6 +220,114 @@ describe('Payment Service', () => {
 			})
 		})
 
+		it('Forgets the event id when applying fails, so the retried delivery is processed', async () => {
+			const order = await createOrder('frozen')
+			await app.paymentService.checkout(order.id, 'deposit', user)
+			vi.spyOn(app.db.orders, 'markPaymentPaid').mockRejectedValueOnce(new Error('pg down'))
+
+			await expect(app.paymentService.handleWebhook('{}', 'sig')).rejects.toThrow('pg down')
+
+			// Stripe redelivers the same evt_1: applied, not deduped
+			await expect(app.paymentService.handleWebhook('{}', 'sig')).resolves.toMatchObject({
+				outcome: 'applied',
+				payment: { status: 'paid' },
+			})
+			await expect(app.orderService.get(order.id, user)).resolves.toMatchObject({
+				status: 'building',
+			})
+		})
+
+		it('Flags a refund when a second session of an already paid kind completes', async () => {
+			const order = await createOrder('frozen')
+			const first = await app.paymentService.checkout(order.id, 'deposit', user)
+			const second = await app.paymentService.checkout(order.id, 'deposit', user)
+			// Both sessions stayed payable (expire failed silently) and the customer paid both
+			vi.mocked(app.paymentProvider.constructWebhookEvent)
+				.mockReturnValueOnce(
+					createMockPaymentEvent({ id: 'evt_a', sessionId: second.payment.sessionId })
+				)
+				.mockReturnValueOnce(
+					createMockPaymentEvent({ id: 'evt_b', sessionId: first.payment.sessionId })
+				)
+
+			await expect(app.paymentService.handleWebhook('{}', 'sig')).resolves.toMatchObject({
+				outcome: 'applied',
+			})
+			await expect(app.paymentService.handleWebhook('{}', 'sig')).resolves.toMatchObject({
+				outcome: 'refund_due',
+				payment: { id: first.payment.id, status: 'pending' },
+			})
+
+			expect(app.email.send).toHaveBeenCalledWith(
+				expect.objectContaining({
+					to: 'admin@example.com',
+					subject: `Refund due: order ${order.id}`,
+					text: expect.stringContaining(first.payment.sessionId),
+				})
+			)
+			expect(app.jobService.start).toHaveBeenCalledTimes(1)
+			// The event is done with: a redelivery is a duplicate, not another email
+			vi.mocked(app.paymentProvider.constructWebhookEvent).mockReturnValueOnce(
+				createMockPaymentEvent({ id: 'evt_b', sessionId: first.payment.sessionId })
+			)
+			await expect(app.paymentService.handleWebhook('{}', 'sig')).resolves.toMatchObject({
+				outcome: 'duplicate',
+			})
+		})
+
+		it('Flags a refund when the money arrives for an order cancelled meanwhile', async () => {
+			const order = await createOrder('frozen')
+			const { payment } = await app.paymentService.checkout(order.id, 'deposit', user)
+			await app.orderService.cancel(order.id, user)
+
+			const result = await app.paymentService.handleWebhook('{}', 'sig')
+
+			expect(result).toMatchObject({
+				outcome: 'refund_due',
+				payment: { id: payment.id, status: 'paid' },
+			})
+			expect(app.email.send).toHaveBeenCalledWith(
+				expect.objectContaining({ subject: `Refund due: order ${order.id}` })
+			)
+			expect(app.jobService.start).not.toHaveBeenCalled()
+			await expect(app.orderService.get(order.id, user)).resolves.toMatchObject({
+				status: 'cancelled',
+			})
+		})
+
+		it('Applies async_payment_succeeded (delayed methods) like a paid completed session', async () => {
+			const order = await createOrder('frozen')
+			const { payment } = await app.paymentService.checkout(order.id, 'deposit', user)
+			vi.mocked(app.paymentProvider.constructWebhookEvent).mockReturnValueOnce(
+				createMockPaymentEvent({
+					id: 'evt_async',
+					type: 'checkout.session.async_payment_succeeded',
+					sessionId: payment.sessionId,
+				})
+			)
+
+			await expect(app.paymentService.handleWebhook('{}', 'sig')).resolves.toMatchObject({
+				outcome: 'applied',
+				payment: { status: 'paid' },
+			})
+			expect(app.jobService.start).toHaveBeenCalledTimes(1)
+		})
+
+		it('Keeps a paid deposit on an order an admin already started without one', async () => {
+			const order = await createOrder('frozen')
+			const { payment } = await app.paymentService.checkout(order.id, 'deposit', user)
+			await app.orderService.transition(order.id, 'building')
+
+			await expect(app.paymentService.handleWebhook('{}', 'sig')).resolves.toMatchObject({
+				outcome: 'applied',
+				payment: { id: payment.id, status: 'paid' },
+			})
+			expect(app.jobService.start).not.toHaveBeenCalled()
+			await expect(app.orderService.get(order.id, user)).resolves.toMatchObject({
+				status: 'building',
+			})
+		})
+
 		it('Marks the balance paid and closes the order', async () => {
 			const order = await createOrder('delivered')
 			vi.spyOn(app.db.jobs, 'list').mockResolvedValue([
@@ -219,7 +355,7 @@ describe('Payment Service', () => {
 
 	describe('completeFakeSession', () => {
 		it('Rejects when Stripe is the active provider', async () => {
-			await expect(app.paymentService.completeFakeSession('fake_x')).rejects.toBeInstanceOf(
+			await expect(app.paymentService.completeFakeSession('fake_x', user)).rejects.toBeInstanceOf(
 				FakeProviderInactive
 			)
 		})
@@ -245,7 +381,7 @@ describe('Payment Service', () => {
 			expect(url).toBe(`https://api.example.com/bff/stripe/fake/checkout/${payment.sessionId}`)
 			expect(payment.provider).toBe('fake')
 
-			const paid = await app.paymentService.completeFakeSession(payment.sessionId)
+			const paid = await app.paymentService.completeFakeSession(payment.sessionId, user)
 
 			expect(paid).toMatchObject({ id: payment.id, status: 'paid' })
 			expect(app.jobService.start).toHaveBeenCalledWith(order.id, expect.anything())
@@ -254,9 +390,17 @@ describe('Payment Service', () => {
 			})
 			// Second visit of the same page: nothing happens, the paid payment is returned
 			await expect(
-				app.paymentService.completeFakeSession(payment.sessionId)
+				app.paymentService.completeFakeSession(payment.sessionId, user)
 			).resolves.toMatchObject({ status: 'paid' })
-			await expect(app.paymentService.completeFakeSession('fake_nope')).rejects.toThrow(/not found/)
+			await expect(app.paymentService.completeFakeSession('fake_nope', user)).rejects.toThrow(
+				/not found/
+			)
+			// Another org's session is as unknown as a missing one
+			const theirs = await createOrder('frozen')
+			const other = await app.paymentService.checkout(theirs.id, 'deposit', user)
+			await expect(
+				app.paymentService.completeFakeSession(other.payment.sessionId, { ...user, orgId: 'org-2' })
+			).rejects.toThrow(/not found/)
 			vi.unstubAllEnvs()
 		})
 	})

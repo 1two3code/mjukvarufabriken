@@ -264,6 +264,9 @@ export const createMemoryRepositories = (): Repositories => {
 				paymentEvents.add(eventId)
 				return true
 			},
+			forgetPaymentEvent: async eventId => {
+				paymentEvents.delete(eventId)
+			},
 		},
 
 		users: {

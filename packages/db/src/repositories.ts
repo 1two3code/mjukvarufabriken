@@ -76,6 +76,8 @@ export type OrdersRepository = {
 	markPaymentPaid: (id: string, paid: PaymentPaid) => Promise<Payment | undefined>
 	/** Records a processed webhook event id; false when it was seen before (idempotency) */
 	recordPaymentEvent: (eventId: string, type: string) => Promise<boolean>
+	/** Drops a recorded event id so a redelivery is processed again (the apply step failed) */
+	forgetPaymentEvent: (eventId: string) => Promise<void>
 }
 
 export type NewUser = { email: string; name?: string; role: User['role']; orgId: string }

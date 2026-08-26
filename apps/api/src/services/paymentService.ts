@@ -1,5 +1,5 @@
 import fp from 'fastify-plugin'
-import { paymentAmounts } from '@mf/models'
+import { canTransitionOrder, paymentAmounts } from '@mf/models'
 
 import { EntityInvalid, EntityNotFound } from '#/lib/entityError.ts'
 import { InvalidWebhookSignature } from '#/plugins/stripe.ts'
@@ -21,6 +21,8 @@ declare module 'fastify' {
 			/**
 			 * Creates a pending payment for the order and a Checkout session for it. The deposit
 			 * needs a frozen order, the balance a delivered one; a kind already paid is rejected.
+			 * Any earlier open session of the same kind is expired first, so the customer can only
+			 * ever pay one of them.
 			 */
 			checkout: (
 				orderId: string,
@@ -30,13 +32,14 @@ declare module 'fastify' {
 			/**
 			 * Verifies and applies one webhook delivery: idempotent on the event id, marks the
 			 * session's payment paid, moves the order on and, for the deposit, starts the build.
+			 * A failure while applying forgets the event id again so Stripe's retry is processed.
 			 */
 			handleWebhook: (rawBody: string, signature: string | undefined) => Promise<WebhookResult>
 			/**
 			 * The fake provider's "payment": marks the session paid the same way a webhook would.
-			 * Rejects unless the fake provider is active.
+			 * Org-scoped like the order; rejects unless the fake provider is active.
 			 */
-			completeFakeSession: (sessionId: string) => Promise<Payment>
+			completeFakeSession: (sessionId: string, session: BackendSession) => Promise<Payment>
 			/** The provider in use, so the portal can label the fake one */
 			provider: PaymentProvider
 		}
@@ -45,8 +48,12 @@ declare module 'fastify' {
 
 export type WebhookResult = {
 	eventId: string
-	/** `applied` = payment marked paid now; `duplicate` = seen before; `ignored` = other event */
-	outcome: 'applied' | 'duplicate' | 'ignored'
+	/**
+	 * `applied` = payment marked paid now; `duplicate` = seen before; `ignored` = other event;
+	 * `refund_due` = money taken for a session the order can no longer take (paid twice, or
+	 * cancelled meanwhile) — the admins are emailed
+	 */
+	outcome: 'applied' | 'duplicate' | 'ignored' | 'refund_due'
 	payment?: Payment
 }
 
@@ -72,6 +79,12 @@ export const paymentFlow: Record<PaymentKind, { from: OrderStatus; to: OrderStat
 	balance: { from: 'delivered', to: 'paid' },
 }
 
+/** Webhook event types that carry a paid session (see `PaymentEvent.sessionId`) */
+export const paidSessionEvents = new Set([
+	'checkout.session.completed',
+	'checkout.session.async_payment_succeeded',
+])
+
 /** System session the webhook uses to start the build on the customer's behalf */
 const webhookSession = (orgId: string): BackendSession => ({
 	userId: 'stripe-webhook',
@@ -79,8 +92,12 @@ const webhookSession = (orgId: string): BackendSession => ({
 	orgId,
 })
 
+const isUniqueViolation = (error: unknown) => (error as { code?: string })?.code === '23505'
+
+type Applied = { payment: Payment; refundDue: boolean }
+
 const plugin: FastifyPluginAsync = async app => {
-	const { db, paymentProvider, orderService, jobService, userService, secrets } = app
+	const { db, paymentProvider, orderService, jobService, userService, secrets, email } = app
 
 	const orderPageUrl = (orderId: string) => `${secrets.portalUrl}/orders/${orderId}`
 
@@ -92,11 +109,30 @@ const plugin: FastifyPluginAsync = async app => {
 		}
 	}
 
+	/** Money has arrived that the order cannot take: an admin refunds it in Stripe */
+	const flagRefund = async (payment: Payment, reason: string) => {
+		app.log.error({ orderId: payment.orderId, paymentId: payment.id, reason }, 'REFUND DUE')
+		const text = [
+			`Order ${payment.orderId}: ${payment.kind} of ${payment.totalSek} SEK (session ${payment.sessionId}) needs a refund.`,
+			reason,
+			`Order page: ${orderPageUrl(payment.orderId)}`,
+		].join('\n\n')
+		await Promise.allSettled(
+			secrets.authAdminEmails.map(to =>
+				email.send({ to, subject: `Refund due: order ${payment.orderId}`, text })
+			)
+		)
+	}
+
 	/**
-	 * Marks the session's payment paid and moves the order on. Returns the payment, or undefined
-	 * when the session is unknown / already paid (a redelivery of an applied event).
+	 * Marks the session's payment paid and moves the order on. `undefined` when the session is
+	 * unknown / already paid (a redelivery of an applied event); `refundDue` when the money came
+	 * in for a session the order can no longer take.
 	 */
-	const applyCompletedSession = async (sessionId: string, eventId: string) => {
+	const applyPaidSession = async (
+		sessionId: string,
+		eventId: string
+	): Promise<Applied | undefined> => {
 		const pending = await db.orders.findPaymentBySession(sessionId)
 		if (!pending || pending.status === 'paid') return undefined
 
@@ -104,27 +140,44 @@ const plugin: FastifyPluginAsync = async app => {
 			app.log.warn({ err: error, sessionId }, 'Could not fetch the invoice/receipt urls')
 			return {}
 		})
-		const payment = await db.orders.markPaymentPaid(pending.id, { eventId, ...receipts })
+		let payment: Payment | undefined
+		try {
+			payment = await db.orders.markPaymentPaid(pending.id, { eventId, ...receipts })
+		} catch (error) {
+			// payments_one_paid_per_kind: this kind was already paid through another session
+			if (!isUniqueViolation(error)) throw error
+			await flagRefund(pending, `The ${pending.kind} was already paid through another session.`)
+			return { payment: pending, refundDue: true }
+		}
 		if (!payment) return undefined
 
 		const { to } = paymentFlow[payment.kind]
+		const order = await db.orders.getOrder(payment.orderId)
+		if (!order || order.status === 'cancelled') {
+			await flagRefund(payment, 'The order was cancelled before the payment completed.')
+			return { payment, refundDue: true }
+		}
+		if (!canTransitionOrder(order.status, to)) {
+			// e.g. an admin already started the build without the deposit: the money is in and the
+			// order is further along than the payment expects — nothing to move
+			app.log.warn({ orderId: order.id, status: order.status }, `Paid; order not moved to ${to}`)
+			return { payment, refundDue: false }
+		}
 		try {
-			await orderService.transition(payment.orderId, to)
+			await orderService.transition(order.id, to)
 		} catch (error) {
 			// The money is in either way; a stale order status is an admin follow-up, not a retry
-			app.log.error({ err: error, orderId: payment.orderId }, `Paid but could not move to ${to}`)
-			return payment
+			app.log.error({ err: error, orderId: order.id }, `Paid but could not move to ${to}`)
+			return { payment, refundDue: false }
 		}
-		if (payment.kind === 'deposit') await startBuild(payment.orderId)
-		return payment
+		if (payment.kind === 'deposit') await startBuild(order.id, order.orgId)
+		return { payment, refundDue: false }
 	}
 
 	/** Deposit paid → the build starts on its own */
-	const startBuild = async (orderId: string) => {
-		const order = await db.orders.getOrder(orderId)
-		if (!order) return
+	const startBuild = async (orderId: string, orgId: string) => {
 		try {
-			await jobService.start(orderId, webhookSession(order.orgId))
+			await jobService.start(orderId, webhookSession(orgId))
 			await orderService.transition(orderId, 'building')
 		} catch (error) {
 			app.log.error({ err: error, orderId }, 'Deposit paid but the build could not be started')
@@ -134,23 +187,47 @@ const plugin: FastifyPluginAsync = async app => {
 	const handleEvent = async (event: PaymentEvent): Promise<WebhookResult> => {
 		const fresh = await db.orders.recordPaymentEvent(event.id, event.type)
 		if (!fresh) return { eventId: event.id, outcome: 'duplicate' }
-		if (event.type !== 'checkout.session.completed' || !event.sessionId) {
+		if (!paidSessionEvents.has(event.type) || !event.sessionId) {
+			if (event.type === 'checkout.session.async_payment_failed') {
+				app.log.warn({ eventId: event.id }, 'Delayed payment failed; the session stays pending')
+			}
 			return { eventId: event.id, outcome: 'ignored' }
 		}
-		const payment = await applyCompletedSession(event.sessionId, event.id)
-		return { eventId: event.id, outcome: payment ? 'applied' : 'duplicate', payment }
+		let applied: Applied | undefined
+		try {
+			applied = await applyPaidSession(event.sessionId, event.id)
+		} catch (error) {
+			// Not applied: forget the id so the provider's redelivery is processed, not deduped
+			await db.orders.forgetPaymentEvent(event.id).catch(forgetError => {
+				app.log.error({ err: forgetError, eventId: event.id }, 'Could not forget the event id')
+			})
+			throw error
+		}
+		if (!applied) return { eventId: event.id, outcome: 'duplicate' }
+		return {
+			eventId: event.id,
+			outcome: applied.refundDue ? 'refund_due' : 'applied',
+			payment: applied.payment,
+		}
 	}
 
 	app.decorate('paymentService', {
 		provider: paymentProvider.kind,
 		checkout: async (orderId, kind, session) => {
-			const order = await orderService.get(orderId, session)
+			// getDetail syncs the order with its latest job (building → delivered) before the gate
+			const { order, payments } = await orderService.getDetail(orderId, session)
 			if (order.status !== paymentFlow[kind].from || order.priceSek === undefined) {
 				throw new PaymentNotDue(orderId, kind)
 			}
-			const existing = await db.orders.listPayments(orderId)
-			if (existing.some(payment => payment.kind === kind && payment.status === 'paid')) {
+			const sameKind = payments.filter(payment => payment.kind === kind)
+			if (sameKind.some(payment => payment.status === 'paid')) {
 				throw new PaymentNotDue(orderId, kind)
+			}
+			// One payable session per kind: close the earlier ones (a second tab, a retry)
+			for (const stale of sameKind.filter(payment => payment.status === 'pending')) {
+				await paymentProvider.expireSession(stale.sessionId).catch(error => {
+					app.log.warn({ err: error, sessionId: stale.sessionId }, 'Could not expire session')
+				})
 			}
 
 			const amounts = paymentAmounts(order.priceSek, kind)
@@ -177,10 +254,14 @@ const plugin: FastifyPluginAsync = async app => {
 		},
 		handleWebhook: async (rawBody, signature) =>
 			handleEvent(paymentProvider.constructWebhookEvent(rawBody, signature)),
-		completeFakeSession: async sessionId => {
+		completeFakeSession: async (sessionId, session) => {
 			if (paymentProvider.kind !== 'fake') throw new FakeProviderInactive()
 			const pending = await db.orders.findPaymentBySession(sessionId)
 			if (!pending) throw new EntityNotFound('payment', sessionId)
+			// Org-scoped: another org's session is as unknown as a missing one
+			await orderService.get(pending.orderId, session).catch(() => {
+				throw new EntityNotFound('payment', sessionId)
+			})
 			const result = await handleEvent({
 				id: `evt_fake_${sessionId}`,
 				type: 'checkout.session.completed',
@@ -197,6 +278,7 @@ export default fp(plugin, {
 		'#internal/db',
 		'#internal/stripe',
 		'#internal/secrets',
+		'#internal/email',
 		'#internal/orderService',
 		'#internal/jobService',
 		'#internal/userService',

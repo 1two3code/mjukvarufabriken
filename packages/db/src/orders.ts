@@ -261,6 +261,10 @@ export const recordPaymentEvent = async (db: Db, eventId: string, type: string) 
 	return rows.length > 0
 }
 
+export const forgetPaymentEvent = async (db: Db, eventId: string) => {
+	await db.sql`delete from payment_events where id = ${eventId}`
+}
+
 export const createOrdersRepository = (db: Db): OrdersRepository => ({
 	get: orderId => getOrder(db, orderId),
 	list: filter => listOrders(db, filter),
@@ -276,4 +280,5 @@ export const createOrdersRepository = (db: Db): OrdersRepository => ({
 	listPayments: orderId => listPayments(db, orderId),
 	markPaymentPaid: (id, paid) => markPaymentPaid(db, id, paid),
 	recordPaymentEvent: (eventId, type) => recordPaymentEvent(db, eventId, type),
+	forgetPaymentEvent: eventId => forgetPaymentEvent(db, eventId),
 })
