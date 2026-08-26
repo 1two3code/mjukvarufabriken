@@ -19,6 +19,7 @@ export default defineConfig({
 		projects: [
 			'apps/api',
 			'apps/site',
+			'apps/portal',
 			'apps/job',
 			'packages/utils',
 			'packages/harness',

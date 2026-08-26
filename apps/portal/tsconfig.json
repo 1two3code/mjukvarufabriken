@@ -1,7 +1,7 @@
 {
   "extends": "../../tsconfig.json",
   "references": [{ "path": "./tsconfig.vite.json" }],
-  "include": ["src"],
+  "include": ["src", "test"],
   "compilerOptions": {
     "rootDir": ".",
     "module": "esnext",
@@ -9,6 +9,6 @@
     "lib": ["dom", "esnext"],
     "jsx": "react-jsx",
     "resolveJsonModule": true,
-    "types": ["vitest/globals"]
+    "types": ["vitest/globals", "node"]
   }
 }
