@@ -104,7 +104,7 @@ resolve them from Secrets Manager at start-up — see `infra/README.md` for the 
 | `AWS_ACCESS_KEY_ID` / `AWS_SECRET_ACCESS_KEY` / `AWS_REGION` | deploy.sh, api (SES/S3/ECS locally) | AWS credentials; region defaults to `eu-north-1` |
 | `ANTHROPIC_API_KEY` (`_SECRET_ARN`) | api (spec engine), job, harness scripts, resident | Anthropic key; without it demos exit "skipped" |
 | `SPEC_MODEL`, `PLAN_MODEL`, `WORKER_MODEL`, `WORKER_EFFORT` | api, job, harness | model per role (default `claude-sonnet-5`), worker effort knob (docs/EFFICIENCY.md) |
-| `DATABASE_URL` (`DATABASE_SECRET_ARN`), `DATABASE_SSL`, `DATABASE_SSL_CA` | api, job, db scripts | Postgres; TLS is `verify-full` for RDS hosts, plaintext for localhost, override with `disable\|require\|verify-full` |
+| `DATABASE_URL` (`DATABASE_SECRET_ARN`), `DATABASE_SSL`, `DATABASE_SSL_CA` | api (`_SECRET_ARN` on Fargate), db scripts, job only for local `job:dev` — on Fargate the job reports through the api with `API_URL` + `JOB_TOKEN` and holds no database credentials | Postgres; TLS is `verify-full` for RDS hosts, plaintext for localhost, override with `disable\|require\|verify-full` |
 | `ADDRESS`, `PORT`, `LOG_LEVEL`, `ENV`, `APP_URL`, `PORTAL_URL`, `TRUSTED_PROXY_HOPS` | api | listener, log level, portal URL for magic links, proxy hops for client ip |
 | `AUTH_ISSUER`, `AUTH_AUDIENCE`, `AUTH_JWT_PRIVATE_KEY` (`_SECRET_ARN`), `AUTH_ADMIN_EMAILS` | api | EdDSA token issuer (`node scripts/gen-auth-key.mjs` makes a key; empty = ephemeral), admin allowlist |
 | `EMAIL_TRANSPORT` (`log\|ses`), `AUTH_EMAIL_FROM` | api | magic-link mail: log it or send through SES |

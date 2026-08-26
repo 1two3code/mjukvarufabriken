@@ -72,13 +72,25 @@ root `.env`. Both deploy the stacks in this order and stop at the first failure:
 | 3 | `ops-<env>` | eu-north-1 | SNS `mf-alerts-<env>`, CloudWatch alarms |
 | 4 | `budget-<env>` | us-east-1 | AWS Budgets monthly cost budget → the alerts topic |
 
-`cdk bootstrap` is a one-time step per account **and region**; both deploy paths check for the
-`CDKToolkit` CloudFormation stack in the stack region and in us-east-1 (needed by `budget-<env>`)
-and only bootstrap when it is missing. The GitHub deploy role therefore needs the rights the
-bootstrap uses the first time (CloudFormation, S3, ECR, IAM for `CDKToolkit`); after that
-plain deploy rights are enough. `budget-<env>` reads nothing across regions — it builds the topic
-ARN from the account id, so it can be deployed alone (`deploy.sh dev budget-dev`) after `ops-<env>`
-exists.
+`cdk bootstrap` is a one-time step per account **and region**; both deploy paths run
+`infra/scripts/ensure-bootstrapped.sh`, which checks for the `CDKToolkit` CloudFormation stack and
+bootstraps only when `describe-stacks` says the stack *does not exist* — any other error (denied,
+throttled, expired credentials) fails the deploy with the CLI's message instead of re-running a
+bootstrap that would rewrite `CDKToolkit` with the CLI defaults. The workflow checks the stack
+region and us-east-1; `deploy.sh` checks the regions of the stacks it is about to deploy
+(us-east-1 only when a `budget-<env>` stack is in the list). The GitHub deploy role therefore
+needs `cloudformation:DescribeStacks` on `CDKToolkit` in both regions on every run, plus the rights
+the bootstrap uses the first time (CloudFormation, S3, ECR, IAM for `CDKToolkit`) — see
+TODO-EXTERNAL for the grant. If you would rather keep the OIDC role narrow, bootstrap by hand
+once (`npx cdk bootstrap aws://<account>/us-east-1` with admin credentials) and the step becomes
+a describe-stacks call.
+
+Every stack is deployed `--exclusively`: the workflow steps deploy exactly one stack each in
+dependency order, and `deploy.sh dev budget-dev` deploys only `budget-dev`. Without
+`--exclusively` CDK would deploy the dependency chain too (`budget` → `ops` → `mf` + `resources`,
+see `infra/bin/app.ts`), so explicit stacks need their dependencies to exist already.
+`budget-<env>` reads nothing across regions — it builds the topic ARN from the account id — so
+it can be deployed alone after `ops-<env>` exists.
 
 Before the first deploy of an environment: `npm run build` (the SPA bundles are CDK assets),
 then fill the Secrets Manager placeholders after `resources-<env>` (`infra/README.md` → Secrets).
