@@ -7,10 +7,21 @@
 
 import postgres from 'postgres'
 
-import type { Sql } from 'postgres'
+import { createAuthRepository } from './auth.ts'
+import { createJobsRepository } from './jobs.ts'
+import { createOrdersRepository } from './orders.ts'
+import { createUsersRepository } from './users.ts'
 
+import type { Sql } from 'postgres'
+import type { Repositories } from './repositories.ts'
+
+export * from './auth.ts'
 export * from './jobs.ts'
+export * from './memory.ts'
 export * from './migrate.ts'
+export * from './orders.ts'
+export * from './repositories.ts'
+export * from './users.ts'
 
 export type Db = {
 	sql: Sql
@@ -76,3 +87,11 @@ export const connectionStringFromSecret = (secret: DatabaseSecret) => {
 	const auth = `${encodeURIComponent(username)}:${encodeURIComponent(password)}`
 	return `postgres://${auth}@${host}:${port}/${dbname}`
 }
+
+/** Every repository over one Postgres connection pool */
+export const createPostgresRepositories = (db: Db): Repositories => ({
+	jobs: createJobsRepository(db),
+	orders: createOrdersRepository(db),
+	users: createUsersRepository(db),
+	auth: createAuthRepository(db),
+})

@@ -1,5 +1,6 @@
 import type { Job, JobBudget, JobEvent, JobStatus, NewJobEvent, Plan, Spec } from '@mf/models'
 import type { Db } from './index.ts'
+import type { JobsRepository } from './repositories.ts'
 
 // MARK: Row mapping
 
@@ -166,3 +167,12 @@ export const listEvents = async (db: Db, jobId: string, afterId = 0): Promise<Jo
 		order by id asc limit 500`
 	return rows.map(toJobEvent)
 }
+
+export const createJobsRepository = (db: Db): JobsRepository => ({
+	insert: job => insertJob(db, job),
+	get: id => getJob(db, id),
+	list: filter => listJobs(db, filter),
+	update: (id, update) => updateJob(db, id, update),
+	appendEvent: (jobId, event) => appendEvent(db, jobId, event),
+	listEvents: (jobId, afterId) => listEvents(db, jobId, afterId),
+})
