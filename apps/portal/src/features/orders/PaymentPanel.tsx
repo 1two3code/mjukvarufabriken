@@ -3,7 +3,10 @@ import styles from './PaymentPanel.module.css'
 import { useTranslation } from 'react-i18next'
 import { paymentAmounts } from '@mf/models'
 
-import { useCreateCheckoutMutation } from '#/features/orders/ordersApiSlice.ts'
+import {
+	useCompleteFakeCheckoutMutation,
+	useCreateCheckoutMutation,
+} from '#/features/orders/ordersApiSlice.ts'
 
 import { Button } from '#/components/Button.tsx'
 
@@ -30,13 +33,20 @@ type PaymentRowProps = {
 function PaymentRow({ kind, priceSek, paid, due, orderId }: PaymentRowProps) {
 	const { t, i18n } = useTranslation()
 	const [createCheckout, { isLoading }] = useCreateCheckoutMutation()
+	const [completeFake, { isLoading: isCompletingFake }] = useCompleteFakeCheckoutMutation()
 	const amounts = paid ?? paymentAmounts(priceSek, kind)
 	const format = (value: number) => value.toLocaleString(i18n.language)
 
 	const handlePay = async () => {
 		const result = await createCheckout({ orderId, kind })
-		// Stripe Checkout (or the fake provider's local page) takes over the browser from here
-		if (!result.error) window.location.assign(result.data.url)
+		if (result.error) return
+		if (result.data.payment.provider === 'fake') {
+			// Dev/test: no Checkout page, the api marks the session paid on an authenticated call
+			await completeFake({ orderId, sessionId: result.data.payment.sessionId })
+			return
+		}
+		// Stripe Checkout takes over the browser from here
+		window.location.assign(result.data.url)
 	}
 
 	return (
@@ -82,7 +92,7 @@ function PaymentRow({ kind, priceSek, paid, due, orderId }: PaymentRowProps) {
 			{paid?.provider === 'fake' && <p className={styles.fake}>{t('payment.fakeNotice')}</p>}
 			{due && !paid && (
 				<div className={styles.actions}>
-					<Button disabled={isLoading} onClick={handlePay}>
+					<Button disabled={isLoading || isCompletingFake} onClick={handlePay}>
 						{t(`payment.action.pay.${kind}`)}
 					</Button>
 				</div>

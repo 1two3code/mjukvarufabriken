@@ -1,6 +1,13 @@
 import { ApiCaching, appApi } from '#/app/api.ts'
 
-import type { CheckoutResponse, Order, OrderDetail, OrderMutation, PaymentKind } from '@mf/models'
+import type {
+	CheckoutResponse,
+	Order,
+	OrderDetail,
+	OrderMutation,
+	Payment,
+	PaymentKind,
+} from '@mf/models'
 
 export const ordersApiSlice = appApi.enhanceEndpoints({ addTagTypes: ['order'] }).injectEndpoints({
 	endpoints: build => ({
@@ -36,6 +43,14 @@ export const ordersApiSlice = appApi.enhanceEndpoints({ addTagTypes: ['order'] }
 				body: { kind },
 			}),
 		}),
+		/** Fake provider only: "pays" the session in place of Stripe's Checkout page (dev/test) */
+		completeFakeCheckout: build.mutation<Payment, { orderId: string; sessionId: string }>({
+			query: ({ sessionId }) => ({ url: `/stripe/fake/checkout/${sessionId}`, method: 'POST' }),
+			invalidatesTags: (_result, _error, { orderId }) => [
+				{ type: 'order', id: orderId },
+				{ type: 'order', id: 'list' },
+			],
+		}),
 	}),
 })
 
@@ -45,4 +60,5 @@ export const {
 	useCreateOrderMutation,
 	useCancelOrderMutation,
 	useCreateCheckoutMutation,
+	useCompleteFakeCheckoutMutation,
 } = ordersApiSlice
