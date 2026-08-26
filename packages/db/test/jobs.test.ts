@@ -1,4 +1,4 @@
-import { getJob, isUuid, listEvents, updateJob } from '#/jobs.ts'
+import { getJob, isUuid, listEvents, toJob, updateJob } from '#/jobs.ts'
 
 import type { Db } from '#/index.ts'
 
@@ -22,5 +22,42 @@ describe('jobs repository', () => {
 		await expect(getJob(untouchable, 'abc')).resolves.toBeUndefined()
 		await expect(updateJob(untouchable, 'abc', { status: 'failed' })).resolves.toBeUndefined()
 		await expect(listEvents(untouchable, 'abc')).resolves.toEqual([])
+	})
+
+	it('Maps gates and gate_waivers from the row (waivers reach the orchestrator)', () => {
+		const report = {
+			name: 'review' as const,
+			ok: true,
+			startedAt: '2026-08-26T10:00:00.000Z',
+			durationMs: 5,
+			tokens: 1,
+			summary: 'ok',
+		}
+		const row = {
+			id: '0b5c1d3e-9a7f-4c2b-8e1d-2f3a4b5c6d7e',
+			order_id: 'o',
+			org_id: 'g',
+			status: 'delivered' as const,
+			spec: {} as never,
+			budget_tokens: 1,
+			tokens_used: 0,
+			max_workers: 1,
+			max_duration_minutes: 1,
+			plan: null,
+			reason: null,
+			gates: [report],
+			gate_waivers: ['apps/api/src/x.ts:12'],
+			task_arn: null,
+			repository_url: null,
+			started_at: null,
+			finished_at: null,
+			created_at: new Date(0),
+		}
+
+		expect(toJob(row)).toMatchObject({ gates: [report], gateWaivers: ['apps/api/src/x.ts:12'] })
+		expect(toJob({ ...row, gates: null, gate_waivers: [] })).toMatchObject({
+			gates: undefined,
+			gateWaivers: undefined,
+		})
 	})
 })

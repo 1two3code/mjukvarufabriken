@@ -125,18 +125,23 @@ try {
 		}
 	)
 
-	// The terminal write never overrides a kill that landed after the last poll; usage and the
-	// plan are still persisted on the killed row. Gate reports (`outcome.gates`) are emitted as
-	// `gate` events; TODO(persistence): also write them to `jobs.gates` (migration 0005) once
-	// `@mf/db` `JobUpdate` carries `gates` — the m3-hardening/persistence streams own that mapping.
+	// The terminal write never overrides a kill that landed after the last poll; usage, the plan
+	// and the gate reports are still persisted on the killed row.
 	const finalRow = await setStatus({
 		status: outcome.status,
 		tokensUsed: outcome.tokensUsed,
 		plan: outcome.plan,
 		reason: outcome.reason,
+		gates: outcome.gates,
 		finishedAt: new Date(),
 	})
-	if (!finalRow) await updateJob(db, jobId, { tokensUsed: outcome.tokensUsed, plan: outcome.plan })
+	if (!finalRow) {
+		await updateJob(db, jobId, {
+			tokensUsed: outcome.tokensUsed,
+			plan: outcome.plan,
+			gates: outcome.gates,
+		})
+	}
 	const status = finalRow?.status ?? 'killed'
 	log('job finished', {
 		jobId,
