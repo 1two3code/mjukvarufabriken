@@ -28,6 +28,7 @@ export const jobEventType = [
 	'merge',
 	'verify',
 	'gate',
+	'delivery',
 	'notify',
 	'done',
 	'failed',

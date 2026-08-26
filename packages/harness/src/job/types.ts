@@ -1,4 +1,14 @@
-import type { GateReport, Job, JobBudget, NewJobEvent, Plan, Spec, Task } from '@mf/models'
+import type {
+	Deliverable,
+	GateReport,
+	Job,
+	JobBudget,
+	NewJobEvent,
+	Plan,
+	Spec,
+	Task,
+} from '@mf/models'
+import type { DeliveryOutcome, DeliveryTarget } from './delivery/types.ts'
 
 /** Input the orchestrator needs — a subset of the stored `Job` row */
 export type JobInput = Pick<Job, 'id' | 'spec' | 'budget' | 'gateWaivers'> & {
@@ -6,6 +16,8 @@ export type JobInput = Pick<Job, 'id' | 'spec' | 'budget' | 'gateWaivers'> & {
 	repoDir: string
 	/** Commit the repo was seeded from; the review gate diffs `seedCommit..main` (default: root) */
 	seedCommit?: string
+	/** Where to deliver after green gates (M5); without it the job ends at the gates */
+	delivery?: DeliveryTarget
 }
 
 export type JobOutcome = {
@@ -15,6 +27,8 @@ export type JobOutcome = {
 	reason?: string
 	/** Reports of the gates that ran, in order (empty when the build never reached them) */
 	gates: GateReport[]
+	/** Repo URL, deploy URL and bundle location once delivered (M5) */
+	deliverable?: Deliverable
 }
 
 /** Token usage of one model message, all buckets counted against the budget */
@@ -109,6 +123,20 @@ export type OrchestratorPorts = {
 	acceptanceTests: GatePort
 	review: GatePort
 	acceptanceCheck: GatePort
+	/** M5 delivery after green gates; optional so gates-only runs (gates-demo) need no clients */
+	deliver?: (input: DeliveryPortInput) => Promise<DeliveryOutcome>
+}
+
+export type DeliveryPortInput = {
+	jobId: string
+	spec: Spec
+	plan?: Plan
+	gates: GateReport[]
+	repoDir: string
+	target: DeliveryTarget
+	signal: AbortSignal
+	onUsage: (usage: TokenUsage) => void
+	emit: (event: NewJobEvent) => Promise<void>
 }
 
 export type OrchestratorHooks = {
