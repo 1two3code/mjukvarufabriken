@@ -40,6 +40,7 @@ export const publicUrls = new Set([
 	'/bff/auth/verify',
 	'/bff/auth/refresh',
 	'/bff/auth/logout',
+	'/bff/contact',
 	'/.well-known/jwks.json',
 	'/health',
 ])
