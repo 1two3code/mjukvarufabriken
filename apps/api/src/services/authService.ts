@@ -35,14 +35,17 @@ declare module 'fastify' {
 			logout: (refreshToken: string) => Promise<void>
 			/**
 			 * Signs a GitHub account in (M6): the user already linked to the account, else the user
-			 * with the same verified email (linked now), else a new user + org with the magic-link
-			 * rules. Throws EntityInvalid('githubEmail') when GitHub has no verified email for it.
+			 * with the same verified email (linked now — replacing an earlier link, since GitHub
+			 * verifies an address on one account at a time), else a new user + org with the
+			 * magic-link rules. Throws EntityInvalid('githubEmail') when GitHub has no verified
+			 * email for it.
 			 */
 			signInWithGithub: (profile: GithubProfile) => Promise<User>
 			/**
 			 * One-shot portal link (`/auth/callback?token=…`, 2 min) for a user just authenticated
 			 * by another provider. Consumed by `verifyMagicLink` exactly like an emailed link, so
-			 * the token pair never travels in a redirect url.
+			 * the token pair never travels in a redirect url. Stored with purpose `login`, so it
+			 * never counts against the address's emailed-link rate limit.
 			 */
 			createLoginLink: (user: User) => Promise<string>
 		}
@@ -150,6 +153,14 @@ const plugin: FastifyPluginAsync = async app => {
 			if (!profile.email) throw new EntityInvalid('githubEmail', profile.login)
 
 			const user = await userService.findOrCreateByEmail(profile.email)
+			if (user.githubId) {
+				// The verified email moved to another GitHub account (the old one deleted or
+				// re-created): the user follows their email — allowed, but worth a trace
+				app.log.warn(
+					{ userId: user.id, from: user.githubLogin, to: profile.login },
+					'GitHub sign-in re-links the user to another GitHub account'
+				)
+			}
 			return (await db.users.linkGithub(user.id, identity)) ?? user
 		},
 
@@ -159,6 +170,7 @@ const plugin: FastifyPluginAsync = async app => {
 				tokenHash: hashToken(token),
 				email: user.email,
 				expiresAt: addMinutes(new Date(), loginLinkTtlMinutes),
+				purpose: 'login',
 			})
 			return buildMagicLink(secrets.portalUrl, token)
 		},

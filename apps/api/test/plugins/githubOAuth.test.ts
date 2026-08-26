@@ -1,6 +1,7 @@
 import {
 	githubApiUrl,
 	githubAuthorizeUrl,
+	githubRequestTimeoutMs,
 	githubTokenUrl,
 	pickVerifiedEmail,
 } from '#/plugins/githubOAuth.ts'
@@ -89,6 +90,22 @@ describe('GitHub OAuth plugin (githubOauth)', () => {
 		await expect(app.githubOauth.fetchProfile({ code: 'abc', redirectUri })).rejects.toThrow(
 			/\/user failed: HTTP 401/
 		)
+	})
+
+	it('Gives up on a stalled GitHub endpoint after the timeout instead of hanging the callback', async () => {
+		// Arrange — every call carries a timeout signal; the token endpoint never answers, so the
+		// signal fires (AbortSignal.timeout runs on internal timers, hence the simulated abort)
+		const fetchSpy = vi.spyOn(globalThis, 'fetch').mockImplementation((_url, init) => {
+			expect(init?.signal).toBeInstanceOf(AbortSignal)
+			return Promise.reject(new DOMException('The operation was aborted', 'TimeoutError'))
+		})
+
+		// Act + Assert
+		await expect(app.githubOauth.fetchProfile({ code: 'abc', redirectUri })).rejects.toThrow(
+			`exchange failed: timeout after ${githubRequestTimeoutMs} ms`
+		)
+		expect(fetchSpy).toHaveBeenCalledTimes(1)
+		fetchSpy.mockRestore()
 	})
 
 	it('Picks the primary verified email, falls back to any verified one, never an unverified one', () => {

@@ -38,6 +38,8 @@ export const readStateCookie = (cookieHeader: string | undefined) => {
 
 /** Constant-time comparison of the callback's `state` with the cookie */
 export const isSameState = (expected: string | undefined, actual: string) => {
-	if (!expected || expected.length !== actual.length) return false
-	return timingSafeEqual(Buffer.from(expected), Buffer.from(actual))
+	if (!expected) return false
+	// Byte lengths, not string lengths: timingSafeEqual throws on buffers of different size
+	const [a, b] = [Buffer.from(expected), Buffer.from(actual)]
+	return a.length === b.length && timingSafeEqual(a, b)
 }

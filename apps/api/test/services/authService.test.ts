@@ -75,6 +75,7 @@ describe('Auth Service', () => {
 			await expect(app.db.auth.getMagicLink(hashToken(token))).resolves.toEqual({
 				tokenHash: hashToken(token),
 				email,
+				purpose: 'email',
 				createdAt: '2026-08-26T10:00:00.000Z',
 				expiresAt: `2026-08-26T10:${magicLinkTtlMinutes}:00.000Z`,
 			})
@@ -266,6 +267,28 @@ describe('Auth Service', () => {
 			await expect(app.db.users.findByEmail('new@acme.se')).resolves.toBeUndefined()
 		})
 
+		it('Follows the verified email to a new GitHub account, replacing the old link with a warning', async () => {
+			// Arrange — the old account was deleted and re-created under a new id/login
+			const warn = vi.spyOn(app.log, 'warn')
+			const first = await app.authService.signInWithGithub(
+				createMockGithubProfile({ id: '1', login: 'old-acme', email: 'anna@acme.se' })
+			)
+
+			// Act
+			const again = await app.authService.signInWithGithub(
+				createMockGithubProfile({ id: '2', login: 'new-acme', email: 'anna@acme.se' })
+			)
+
+			// Assert
+			expect(again).toMatchObject({ id: first.id, githubId: '2', githubLogin: 'new-acme' })
+			await expect(app.db.users.findByGithubId('1')).resolves.toBeUndefined()
+			await expect(app.db.users.listOrgs()).resolves.toHaveLength(1)
+			expect(warn).toHaveBeenCalledWith(
+				{ userId: first.id, from: 'old-acme', to: 'new-acme' },
+				expect.stringContaining('re-links')
+			)
+		})
+
 		it('Refuses an account without a verified email', async () => {
 			// Act + Assert
 			await expect(
@@ -276,6 +299,21 @@ describe('Auth Service', () => {
 	})
 
 	describe('createLoginLink', () => {
+		it('Never counts against the emailed-link rate limit of the address', async () => {
+			// Arrange — more GitHub sign-ins than the emailed-link limit allows
+			const user = createMockUser({ email })
+			for (let i = 0; i <= magicLinkRateLimit.max; i++) {
+				await app.authService.createLoginLink(user)
+			}
+
+			// Act
+			await app.authService.requestMagicLink(email)
+
+			// Assert
+			expect(app.email.send).toHaveBeenCalledTimes(1)
+		})
+
+
 		it('Returns a short-lived one-shot portal link that verifyMagicLink accepts once', async () => {
 			// Arrange
 			vi.useFakeTimers({ toFake: ['Date'] })
@@ -291,6 +329,7 @@ describe('Auth Service', () => {
 			expect(link).toBe(`${app.secrets.portalUrl}/auth/callback?token=${token}`)
 			await expect(app.db.auth.getMagicLink(hashToken(token))).resolves.toMatchObject({
 				email,
+				purpose: 'login',
 				expiresAt: `2026-08-26T10:0${loginLinkTtlMinutes}:00.000Z`,
 			})
 			expect(app.email.send).not.toHaveBeenCalled()

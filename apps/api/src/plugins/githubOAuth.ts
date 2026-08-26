@@ -35,6 +35,8 @@ export const githubTokenUrl = 'https://github.com/login/oauth/access_token'
 export const githubApiUrl = 'https://api.github.com'
 /** Grants `/user/emails` (read of the profile is implied); nothing on repos */
 export const githubScope = 'user:email'
+/** A stalled GitHub endpoint must not hold the callback request open until the ALB gives up */
+export const githubRequestTimeoutMs = 10_000
 
 type TokenResponse = { access_token?: string; error?: string; error_description?: string }
 type UserResponse = { id: number; login: string; name: string | null }
@@ -43,6 +45,19 @@ type EmailEntry = { email: string; primary: boolean; verified: boolean }
 export class GithubOAuthError extends Error {
 	constructor(step: string, detail: string) {
 		super(`GitHub OAuth ${step} failed: ${detail}`)
+	}
+}
+
+/** `fetch` with the timeout; an abort becomes a GithubOAuthError for the step */
+const fetchWithTimeout = async (step: string, url: string, init: RequestInit) => {
+	try {
+		return await fetch(url, { ...init, signal: AbortSignal.timeout(githubRequestTimeoutMs) })
+	} catch (error) {
+		const name = (error as Error).name
+		if (name === 'TimeoutError' || name === 'AbortError') {
+			throw new GithubOAuthError(step, `timeout after ${githubRequestTimeoutMs} ms`)
+		}
+		throw error
 	}
 }
 
@@ -65,7 +80,7 @@ export const createGithubOauthClient = (credentials: {
 	clientSecret: string
 }): GitHubOAuthClient => {
 	const api = async <T>(path: string, accessToken: string): Promise<T> => {
-		const response = await fetch(`${githubApiUrl}${path}`, {
+		const response = await fetchWithTimeout(path, `${githubApiUrl}${path}`, {
 			headers: {
 				accept: 'application/vnd.github+json',
 				authorization: `Bearer ${accessToken}`,
@@ -78,7 +93,7 @@ export const createGithubOauthClient = (credentials: {
 	}
 
 	const exchangeCode = async (code: string, redirectUri: string) => {
-		const response = await fetch(githubTokenUrl, {
+		const response = await fetchWithTimeout('exchange', githubTokenUrl, {
 			method: 'POST',
 			headers: { accept: 'application/json', 'content-type': 'application/json' },
 			body: JSON.stringify({

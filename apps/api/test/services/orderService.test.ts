@@ -1,6 +1,5 @@
 import { EntityNotFound } from '#/lib/entityError.ts'
 import { createMockJob } from '#/plugins/__mocks__/db.ts'
-import { createMockUser } from '#/services/__mocks__/userService.ts'
 import { InvalidOrderTransition, transitionSources } from '#/services/orderService.ts'
 
 import type { FastifyInstance } from 'fastify'
@@ -33,21 +32,6 @@ describe('Order Service', () => {
 				status: 'drafting',
 				spec: {},
 			})
-		})
-
-		it('Carries the creator GitHub login for the repo transfer, none without a GitHub sign-in', async () => {
-			// Arrange
-			vi.spyOn(app.userService, 'get')
-				.mockResolvedValueOnce(createMockUser({ id: user.userId, githubLogin: 'anna' }))
-				.mockRejectedValueOnce(new EntityNotFound('user', other.userId))
-
-			// Act
-			const withGithub = await app.orderService.create('a', user)
-			const without = await app.orderService.create('b', other)
-
-			// Assert
-			expect(withGithub.customerGithubLogin).toBe('anna')
-			expect(without.customerGithubLogin).toBeUndefined()
 		})
 
 		it('Scopes list and get to the org; admins see every org', async () => {

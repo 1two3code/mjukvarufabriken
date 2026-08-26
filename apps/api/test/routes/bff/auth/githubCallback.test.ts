@@ -48,9 +48,14 @@ describe('GET /bff/auth/github/callback route', () => {
 		// Act
 		const mismatch = await app.inject({ url, headers: { cookie: `${stateCookieName}=other` } })
 		const missing = await app.inject({ url })
+		// Same character count as the cookie but more bytes: must be a redirect, never a 500
+		const multibyte = await app.inject({
+			url: `/bff/auth/github/callback?code=abc&state=${encodeURIComponent('state-12é')}`,
+			headers: { cookie },
+		})
 
 		// Assert
-		for (const response of [mismatch, missing]) {
+		for (const response of [mismatch, missing, multibyte]) {
 			expect(response.statusCode).toBe(302)
 			expect(response.headers.location).toBe(`${portalCallback}?error=state`)
 		}
@@ -59,7 +64,7 @@ describe('GET /bff/auth/github/callback route', () => {
 	})
 
 	it('Reports a denied authorization and a missing code back to the portal', async () => {
-		// Act
+		// Act — the portal page forwards GitHub's own `?error=access_denied&state=` here
 		const denied = await app.inject({
 			url: `/bff/auth/github/callback?error=access_denied&state=${state}`,
 			headers: { cookie },
@@ -71,6 +76,7 @@ describe('GET /bff/auth/github/callback route', () => {
 
 		// Assert
 		expect(denied.headers.location).toBe(`${portalCallback}?error=denied`)
+		expect(denied.headers['set-cookie']).toContain(`${stateCookieName}=; Max-Age=0`)
 		expect(noCode.headers.location).toBe(`${portalCallback}?error=failed`)
 		expect(app.githubOauth.fetchProfile).not.toHaveBeenCalled()
 	})
