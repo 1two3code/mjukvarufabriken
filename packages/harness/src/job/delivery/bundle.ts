@@ -3,6 +3,7 @@ import { tmpdir } from 'node:os'
 import { extname, join, relative } from 'node:path'
 
 import { exec, git, tail } from '#job/exec.ts'
+import { ensureShared } from '#job/worker.ts'
 
 import type { DeliverableFile, DeliverableFileName } from '@mf/models'
 import type { ArtifactStore } from './types.ts'
@@ -105,7 +106,9 @@ const findSiteDist = async (repoDir: string) => {
 export type SiteUploadOutcome = { url: string | null; files: number; reason?: string }
 
 /**
- * `npm run build` in the repo and upload the SPA bundle to `deliverables/<jobId>/site/`.
+ * `npm run build` in the repo — the repo's build scripts, vite config and plugins are customer
+ * (model-written) code, so it runs as the worker uid like every other repo script — and upload
+ * the SPA bundle to `deliverables/<jobId>/site/`.
  * v1 limitation: the artifacts bucket is private and not a website endpoint, so the returned
  * URL only works through a presigned link / the console — a CloudFront preview is M6+.
  */
@@ -115,7 +118,12 @@ export const uploadSite = async (
 	artifacts: ArtifactStore,
 	signal?: AbortSignal
 ): Promise<SiteUploadOutcome> => {
-	const build = await exec('npm', ['run', 'build', '--silent'], { cwd: repoDir, signal })
+	await ensureShared(repoDir)
+	const build = await exec('npm', ['run', 'build', '--silent'], {
+		cwd: repoDir,
+		signal,
+		asWorker: true,
+	})
 	if (build.code !== 0) {
 		return {
 			url: null,
