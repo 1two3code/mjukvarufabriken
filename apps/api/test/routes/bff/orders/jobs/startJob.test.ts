@@ -48,7 +48,7 @@ describe('POST /bff/orders/:orderId/jobs route', () => {
 		expect(app.orderService.transition).not.toHaveBeenCalled()
 	})
 
-	it('Responds 409 depositNotPaid before the deposit (customers), not for admins', async () => {
+	it('Responds 409 depositNotPaid before the deposit (customers)', async () => {
 		// Arrange
 		vi.spyOn(app.orderService, 'get').mockResolvedValue(
 			createMockOrder({ id: 'order-1', status: 'frozen' })
@@ -61,6 +61,28 @@ describe('POST /bff/orders/:orderId/jobs route', () => {
 		expect(response.statusCode).toBe(409)
 		expect(response.json().error.code).toBe('depositNotPaid')
 		expect(app.jobService.start).not.toHaveBeenCalled()
+	})
+
+	it('Lets an admin start a build on a frozen order and marks it building', async () => {
+		// Arrange: the admin override — the auth mock's session is patched to the admin role
+		app = await createTestApp()
+		app.addHook('onRequest', async request => {
+			request.session = { ...request.session, role: 'admin' }
+		})
+		app.register(startJob)
+		vi.spyOn(app.orderService, 'get').mockResolvedValue(
+			createMockOrder({ id: 'order-1', status: 'frozen' })
+		)
+		const job = createMockJob({ orderId: 'order-1' })
+		vi.spyOn(app.jobService, 'start').mockResolvedValue(job)
+
+		// Act
+		const response = await app.inject({ method: 'POST', url })
+
+		// Assert
+		expect(response.statusCode).toBe(201)
+		expect(app.jobService.start).toHaveBeenCalledWith('order-1', { ...session, role: 'admin' })
+		expect(app.orderService.transition).toHaveBeenCalledWith('order-1', 'building')
 	})
 
 	it('Responds 404 for an unknown order', async () => {

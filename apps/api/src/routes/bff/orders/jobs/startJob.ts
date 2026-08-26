@@ -1,5 +1,5 @@
 import { z } from 'zod'
-import { JobResponseSchema } from '@mf/models'
+import { canTransitionOrder, JobResponseSchema } from '@mf/models'
 import { tryCatch } from '@mf/utils/function'
 
 import { EntityNotFound } from '#/lib/entityError.ts'
@@ -40,8 +40,9 @@ const route: FastifyPluginAsyncZod = async function (app) {
 		if (error instanceof JobAlreadyActive) return reply.error(409, error, 'jobAlreadyActive')
 		if (error) return reply.error(500, error)
 
-		// First build after the deposit: the order is now building (a retry is already there)
-		if (order.status === 'deposit_paid') {
+		// First build (after the deposit, or an admin override from frozen): the order is now
+		// building, so a delivered job later moves it to delivered (a retry is already there)
+		if (canTransitionOrder(order.status, 'building')) {
 			await orderService.transition(order.id, 'building').catch(transitionError => {
 				app.log.warn(
 					{ err: transitionError, orderId: order.id },

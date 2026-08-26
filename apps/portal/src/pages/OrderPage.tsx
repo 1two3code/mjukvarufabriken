@@ -2,8 +2,9 @@ import styles from './OrderPage.module.css'
 
 import { useTranslation } from 'react-i18next'
 import { Link, useParams, useSearchParams } from 'react-router-dom'
-import { isActiveJobStatus } from '@mf/models'
+import { customerCancellableOrderStatus, isActiveJobStatus } from '@mf/models'
 
+import { usePermission } from '#/hooks/usePermission.ts'
 import { useCancelOrderMutation, useGetOrderQuery } from '#/features/orders/ordersApiSlice.ts'
 import { OrderStatusBadge } from '#/features/orders/OrderStatusBadge.tsx'
 import { OrderStepper } from '#/features/orders/OrderStepper.tsx'
@@ -39,10 +40,9 @@ const nextStep = (detail: OrderDetail) => {
 	}
 }
 
-const cancellable = new Set<OrderDetail['order']['status']>([
-	'drafting',
-	'ready',
-	'frozen',
+/** Admins may also cancel after the deposit (the build is killed, the deposit refunded) */
+const adminCancellable = new Set<OrderDetail['order']['status']>([
+	...customerCancellableOrderStatus,
 	'deposit_paid',
 	'building',
 ])
@@ -61,6 +61,10 @@ export function OrderPage() {
 		pollingInterval: pollingInterval,
 	})
 	const [cancel, { isLoading: isCancelling }] = useCancelOrderMutation()
+	const { hasPermission } = usePermission()
+	const cancellable = hasPermission('job:admin')
+		? adminCancellable
+		: new Set(customerCancellableOrderStatus)
 
 	if (isLoading) return <Spinner center />
 	if (isError || !detail) return <p className={styles.error}>{t('order.page.loadError')}</p>

@@ -1,5 +1,11 @@
 import fp from 'fastify-plugin'
-import { canTransitionOrder, isSpecComplete, orderTransitions } from '@mf/models'
+import {
+	canTransitionOrder,
+	customerCancellableOrderStatus,
+	isActiveJobStatus,
+	isSpecComplete,
+	orderTransitions,
+} from '@mf/models'
 
 import { EntityInvalid, EntityNotFound } from '#/lib/entityError.ts'
 
@@ -22,7 +28,12 @@ declare module 'fastify' {
 			 * `InvalidOrderTransition` when the current status does not allow it.
 			 */
 			transition: (orderId: string, to: OrderStatus) => Promise<Order>
-			/** Customer cancel: allowed until the deposit is paid */
+			/**
+			 * Cancels the order. Customers may cancel until the deposit is paid; admins also from
+			 * `deposit_paid`/`building`. Any active build is killed and open Checkout sessions are
+			 * expired so nothing can be paid for a cancelled order; a paid deposit is reported as a
+			 * refund to do (warning in the log; admins refund in Stripe).
+			 */
 			cancel: (orderId: string, session: BackendSession) => Promise<Order>
 		}
 	}
@@ -57,7 +68,7 @@ const toJobSummary = (job: Job): JobSummary => ({
 })
 
 const plugin: FastifyPluginAsync = async app => {
-	const { db } = app
+	const { db, jobService, paymentProvider } = app
 
 	const scoped = (order: Order | undefined, session: BackendSession, id: string) => {
 		if (!order || (!isAdmin(session) && order.orgId !== session.orgId)) {
@@ -124,10 +135,40 @@ const plugin: FastifyPluginAsync = async app => {
 			}
 		},
 		cancel: async (orderId, session) => {
-			await get(orderId, session)
-			return transition(orderId, 'cancelled')
+			const order = await get(orderId, session)
+			if (!isAdmin(session) && !customerCancellableOrderStatus.includes(order.status)) {
+				throw new InvalidOrderTransition(orderId, order.status, 'cancelled')
+			}
+			const cancelled = await transition(orderId, 'cancelled')
+
+			// Nothing may keep spending or get paid for a cancelled order; each step is best effort
+			// so a Stripe/ECS hiccup does not undo the cancel (the log line is the follow-up)
+			const [jobs, payments] = await Promise.all([
+				db.jobs.list({ orderId }),
+				db.orders.listPayments(orderId),
+			])
+			for (const job of jobs.filter(job => isActiveJobStatus(job.status))) {
+				await jobService.kill(job.id).catch(error => {
+					app.log.error({ err: error, orderId, jobId: job.id }, 'Cancelled but could not kill')
+				})
+			}
+			for (const payment of payments.filter(payment => payment.status === 'pending')) {
+				await paymentProvider.expireSession(payment.sessionId).catch(error => {
+					app.log.error(
+						{ err: error, orderId, sessionId: payment.sessionId },
+						'Cancelled but could not expire the Checkout session'
+					)
+				})
+			}
+			if (payments.some(payment => payment.status === 'paid')) {
+				app.log.warn({ orderId }, 'Cancelled with a paid deposit — refund it in Stripe')
+			}
+			return cancelled
 		},
 	})
 }
 
-export default fp(plugin, { name: '#internal/orderService', dependencies: ['#internal/db'] })
+export default fp(plugin, {
+	name: '#internal/orderService',
+	dependencies: ['#internal/db', '#internal/jobService', '#internal/stripe'],
+})

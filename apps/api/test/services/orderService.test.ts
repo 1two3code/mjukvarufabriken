@@ -99,13 +99,59 @@ describe('Order Service', () => {
 	})
 
 	describe('cancel', () => {
-		it('Cancels the org’s own order until the build has delivered', async () => {
+		const walk = async (id: string, path: OrderStatus[]) => {
+			for (const status of path) await app.orderService.transition(id, status)
+		}
+
+		it('Cancels the org’s own order until the deposit is paid', async () => {
 			const { id } = await app.orderService.create('x', user)
 			await expect(app.orderService.cancel(id, other)).rejects.toBeInstanceOf(EntityNotFound)
 			await expect(app.orderService.cancel(id, user)).resolves.toMatchObject({
 				status: 'cancelled',
 			})
 			await expect(app.orderService.cancel(id, user)).rejects.toBeInstanceOf(InvalidOrderTransition)
+		})
+
+		it('Expires open Checkout sessions so a cancelled order cannot be paid', async () => {
+			const { id } = await app.orderService.create('x', user)
+			await walk(id, ['ready', 'frozen'])
+			await app.db.orders.insertPayment({
+				orderId: id,
+				kind: 'deposit',
+				provider: 'stripe',
+				amountSek: 7_500,
+				vatSek: 1_875,
+				totalSek: 9_375,
+				sessionId: 'cs_open',
+			})
+			vi.mocked(app.paymentProvider.expireSession).mockRejectedValueOnce(new Error('down'))
+
+			// A Stripe hiccup does not undo the cancel
+			await expect(app.orderService.cancel(id, user)).resolves.toMatchObject({
+				status: 'cancelled',
+			})
+			expect(app.paymentProvider.expireSession).toHaveBeenCalledWith('cs_open')
+		})
+
+		it('Refuses customers after the deposit; admins cancel and the active build is killed', async () => {
+			const { id } = await app.orderService.create('x', user)
+			await walk(id, ['ready', 'frozen', 'deposit_paid', 'building'])
+			vi.spyOn(app.db.jobs, 'list').mockResolvedValue([
+				createMockJob({ id: 'job-live', orderId: id, status: 'building' }),
+				createMockJob({ id: 'job-old', orderId: id, status: 'failed' }),
+			])
+
+			await expect(app.orderService.cancel(id, user)).rejects.toMatchObject({
+				from: 'building',
+				to: 'cancelled',
+			})
+			expect(app.jobService.kill).not.toHaveBeenCalled()
+
+			await expect(app.orderService.cancel(id, admin)).resolves.toMatchObject({
+				status: 'cancelled',
+			})
+			expect(app.jobService.kill).toHaveBeenCalledTimes(1)
+			expect(app.jobService.kill).toHaveBeenCalledWith('job-live')
 		})
 	})
 

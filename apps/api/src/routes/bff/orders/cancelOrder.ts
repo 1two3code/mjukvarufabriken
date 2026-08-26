@@ -15,7 +15,7 @@ const schema = {
 
 const config = { permissions: ['spec:write'] } satisfies FastifyContextConfig
 
-/** Customer cancel — allowed until the build has delivered */
+/** Cancel — customers until the deposit is paid, admins also during the build (job killed) */
 const route: FastifyPluginAsyncZod = async function (app) {
 	const { orderService } = app
 
