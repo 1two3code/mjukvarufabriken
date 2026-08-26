@@ -6,12 +6,15 @@ import accessControlPlugin from '#/plugins/accessControl.ts'
 import anthropicPlugin from '#/plugins/anthropic.ts'
 import authPlugin from '#/plugins/auth.ts'
 import authKeysPlugin from '#/plugins/authKeys.ts'
+import dbPlugin from '#/plugins/db.ts'
+import ecsPlugin from '#/plugins/ecs.ts'
 import emailPlugin from '#/plugins/email.ts'
 import errorHandlingPlugin from '#/plugins/errorHandling.ts'
 import secretsPlugin from '#/plugins/secrets.ts'
 import storePlugin from '#/plugins/store.ts'
 import authService from '#/services/authService.ts'
 import itemService from '#/services/itemService.ts'
+import jobService from '#/services/jobService.ts'
 import specService from '#/services/specService.ts'
 import userService from '#/services/userService.ts'
 
@@ -45,6 +48,8 @@ export async function createServer({ logLevel }: Options = {}): Promise<FastifyI
 		// Plugins
 		.register(secretsPlugin)
 		.register(storePlugin)
+		.register(dbPlugin)
+		.register(ecsPlugin)
 		.register(anthropicPlugin)
 		.register(authKeysPlugin)
 		.register(emailPlugin)
@@ -52,6 +57,7 @@ export async function createServer({ logLevel }: Options = {}): Promise<FastifyI
 		// Services
 		.register(itemService)
 		.register(specService)
+		.register(jobService)
 		.register(userService)
 		.register(authService)
 

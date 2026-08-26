@@ -1,0 +1,62 @@
+import fp from 'fastify-plugin'
+import { mergeDeep } from '@mf/utils/object'
+
+import type { FastifyInstance, FastifyPluginAsync } from 'fastify'
+import type { PartialDeep } from 'type-fest'
+import type { Job, JobEvent } from '@mf/models'
+
+const defaultJob: Job = {
+	id: 'job-1',
+	orderId: 'order-1',
+	orgId: 'org-1',
+	status: 'queued',
+	spec: {
+		goal: 'A booking app for a small gym with 200 members',
+		users: ['members', 'staff'],
+		features: [
+			{
+				title: 'Book a class',
+				description: 'Members book a spot in a class',
+				acceptanceCriteria: ['A member can book a class with free spots'],
+			},
+		],
+		nonGoals: ['Payments'],
+		stackConstraints: [],
+		sizeClass: 'S',
+	},
+	budget: { maxTokens: 2_000_000, maxWorkers: 2, maxDurationMinutes: 120 },
+	tokensUsed: 0,
+	createdAt: '2026-08-26T12:00:00.000Z',
+}
+
+const defaultEvent: JobEvent = {
+	id: 1,
+	jobId: 'job-1',
+	type: 'started',
+	payload: { budget: defaultJob.budget },
+	createdAt: '2026-08-26T12:00:01.000Z',
+}
+
+export const createMockJob = (overrides?: PartialDeep<Job>): Job => mergeDeep(defaultJob, overrides)
+export const createMockJobEvent = (overrides?: PartialDeep<JobEvent>): JobEvent =>
+	mergeDeep(defaultEvent, overrides)
+
+const mockPlugin: FastifyPluginAsync = async app => {
+	const mock: FastifyInstance['db'] = {
+		available: true,
+		jobs: {
+			insert: vi.fn(job => Promise.resolve(createMockJob({ ...job, id: 'job-1' }))),
+			get: vi.fn((id: string) => Promise.resolve(createMockJob({ id }))),
+			list: vi.fn().mockResolvedValue([createMockJob()]),
+			update: vi.fn((id: string, update) => Promise.resolve(createMockJob({ id, ...update }))),
+			appendEvent: vi.fn((jobId: string, event) =>
+				Promise.resolve(createMockJobEvent({ jobId, ...event }))
+			),
+			listEvents: vi.fn().mockResolvedValue([createMockJobEvent()]),
+		},
+	}
+
+	app.decorate('db', mock)
+}
+
+export default fp(mockPlugin, { name: '#internal/db' })

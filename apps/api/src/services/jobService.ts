@@ -1,0 +1,131 @@
+import fp from 'fastify-plugin'
+import { isActiveJobStatus, SpecSchema } from '@mf/models'
+
+import { EntityInvalid, EntityNotFound } from '#/lib/entityError.ts'
+
+import type { FastifyInstance, FastifyPluginAsync } from 'fastify'
+import type { BackendSession, Job, JobBudget, JobEvent, SizeClass } from '@mf/models'
+
+declare module 'fastify' {
+	interface FastifyInstance {
+		jobService: {
+			/** Starts a build for a frozen spec: inserts the job, then `ecs:RunTask` when configured */
+			start: (orderId: string, session: BackendSession) => Promise<Job>
+			/** Org-scoped read; admins see every job */
+			get: (jobId: string, session: BackendSession) => Promise<Job>
+			listForOrder: (orderId: string, session: BackendSession) => Promise<Job[]>
+			listEvents: (jobId: string, after: number, session: BackendSession) => Promise<JobEvent[]>
+			/** Admin kill switch: marks the row killed and stops the Fargate task */
+			kill: (jobId: string) => Promise<Job>
+			listAll: () => Promise<Job[]>
+		}
+	}
+}
+
+/** The spec must be frozen before a build starts */
+export class SpecNotFrozen extends EntityInvalid {
+	constructor(orderId: string) {
+		super('spec', orderId)
+	}
+}
+
+/** Only one active job per order */
+export class JobAlreadyActive extends EntityInvalid {
+	constructor(orderId: string) {
+		super('job', orderId)
+	}
+}
+
+/** Hard token budget per size class (PLAN.md M3): S 2M / M 6M / L 15M */
+export const budgetForSize: Record<SizeClass, JobBudget> = {
+	S: { maxTokens: 2_000_000, maxWorkers: 2, maxDurationMinutes: 120 },
+	M: { maxTokens: 6_000_000, maxWorkers: 3, maxDurationMinutes: 240 },
+	L: { maxTokens: 15_000_000, maxWorkers: 4, maxDurationMinutes: 480 },
+}
+
+const isAdmin = (session: BackendSession) => session.role === 'admin'
+
+const plugin: FastifyPluginAsync = async app => {
+	const { db, ecs, specService } = app
+
+	const scoped = (job: Job | undefined, session: BackendSession, id: string) => {
+		if (!job || (!isAdmin(session) && job.orgId !== session.orgId)) {
+			throw new EntityNotFound('job', id)
+		}
+		return job
+	}
+
+	const get: FastifyInstance['jobService']['get'] = async (jobId, session) =>
+		scoped(await db.jobs.get(jobId), session, jobId)
+
+	app.decorate('jobService', {
+		get,
+		start: async (orderId, session) => {
+			const draft = await specService.get(orderId)
+			if (draft.status !== 'frozen') throw new SpecNotFrozen(orderId)
+			const spec = SpecSchema.parse(draft.spec)
+			const sizeClass = spec.sizeClass ?? 'S'
+
+			const existing = await db.jobs.list({ orderId })
+			if (existing.some(job => isActiveJobStatus(job.status))) throw new JobAlreadyActive(orderId)
+
+			const job = await db.jobs.insert({
+				orderId,
+				orgId: session.orgId,
+				spec,
+				budget: budgetForSize[sizeClass],
+			})
+
+			if (!ecs.configured) {
+				app.log.warn({ jobId: job.id }, `ECS not configured — run: npm run job:dev -- ${job.id}`)
+				return job
+			}
+			try {
+				const taskArn = await ecs.runJob(job.id)
+				if (!taskArn) return job
+				return (await db.jobs.update(job.id, { taskArn })) ?? job
+			} catch (error) {
+				const reason = `ecs:RunTask failed: ${(error as Error).message}`
+				app.log.error({ err: error, jobId: job.id }, reason)
+				await db.jobs.appendEvent(job.id, { type: 'failed', payload: { reason } })
+				return (
+					(await db.jobs.update(job.id, { status: 'failed', reason, finishedAt: new Date() })) ??
+					job
+				)
+			}
+		},
+		listForOrder: async (orderId, session) => {
+			const jobs = await db.jobs.list({ orderId })
+			return isAdmin(session) ? jobs : jobs.filter(job => job.orgId === session.orgId)
+		},
+		listEvents: async (jobId, after, session) => {
+			await get(jobId, session)
+			return db.jobs.listEvents(jobId, after)
+		},
+		kill: async jobId => {
+			const job = await db.jobs.get(jobId)
+			if (!job) throw new EntityNotFound('job', jobId)
+			if (!isActiveJobStatus(job.status)) return job
+
+			const reason = 'killed by admin'
+			const killed =
+				(await db.jobs.update(jobId, { status: 'killed', reason, finishedAt: new Date() })) ?? job
+			await db.jobs.appendEvent(jobId, { type: 'killed', payload: { reason } })
+			if (job.taskArn) {
+				await ecs.stopTask(job.taskArn, reason).catch(error => {
+					app.log.warn(
+						{ err: error, jobId },
+						'ecs:StopTask failed — the job polls its row and aborts itself'
+					)
+				})
+			}
+			return killed
+		},
+		listAll: () => db.jobs.list(),
+	})
+}
+
+export default fp(plugin, {
+	name: '#internal/jobService',
+	dependencies: ['#internal/db', '#internal/ecs', '#internal/specService'],
+})

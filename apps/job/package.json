@@ -1,0 +1,21 @@
+{
+  "name": "@mf/job",
+  "version": "0.1.0",
+  "description": "Build-job container entrypoint: loads a job from Postgres and drives the @mf/harness orchestrator",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "start": "node src/index.ts",
+    "lint": "eslint ./; tsgo --noemit"
+  },
+  "imports": {
+    "#/*": "./src/*"
+  },
+  "dependencies": {
+    "@anthropic-ai/sdk": "^0.120.0",
+    "@aws-sdk/client-secrets-manager": "^3.1118.0",
+    "@mf/db": "*",
+    "@mf/harness": "*",
+    "@mf/models": "*"
+  }
+}

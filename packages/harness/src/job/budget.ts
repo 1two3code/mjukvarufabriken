@@ -15,11 +15,12 @@ export class BudgetTracker {
 	private tokens = 0
 	private abortReason: AbortReason | undefined
 	private readonly startedAt: number
+	private readonly budget: JobBudget
+	private readonly now: () => number
 
-	constructor(
-		private readonly budget: JobBudget,
-		private readonly now: () => number = Date.now
-	) {
+	constructor(budget: JobBudget, now: () => number = Date.now) {
+		this.budget = budget
+		this.now = now
 		this.startedAt = now()
 	}
 
