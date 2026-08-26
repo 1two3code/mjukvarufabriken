@@ -11,5 +11,5 @@
     "noEmit": true,
     "allowImportingTsExtensions": true
   },
-  "include": ["bin", "lib"]
+  "include": ["bin", "lib", "test"]
 }

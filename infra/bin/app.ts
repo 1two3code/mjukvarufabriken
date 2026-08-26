@@ -2,6 +2,7 @@ import { App, Tags } from 'aws-cdk-lib'
 
 import { config } from '../lib/config.ts'
 import { createRelativePath } from '../lib/helpers.ts'
+import { OpsStack } from '../lib/ops-stack.ts'
 import { ResourcesStack } from '../lib/resources-stack.ts'
 import { WebStack } from '../lib/web-stack.ts'
 
@@ -32,7 +33,10 @@ for (const environment of config.environments) {
 		repositoryRoot,
 	})
 
-	for (const stack of [resources, web]) {
+	// Alarms + budget last: reads the log groups, ALB, RDS and NAT gateway of the two above
+	const ops = new OpsStack(app, `ops-${environment.name}`, { env, environment, resources, web })
+
+	for (const stack of [resources, web, ops]) {
 		Tags.of(stack).add('Service', config.serviceName)
 		Tags.of(stack).add('Environment', environment.name)
 	}
