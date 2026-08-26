@@ -4,7 +4,8 @@ import { z } from 'zod'
  * Resident agent (M8): the contract between a resident installation running in the customer's
  * AWS account (`@mf/resident`) and the factory api. The resident meters its own usage and
  * reports one record per day to `POST /internal/resident/usage` (bearer = the installation's
- * token); m6-orders turns the records into Stripe usage-based billing.
+ * token); the api persists them (`resident_usage`), aggregates them per installation and month
+ * and reports the month's billable amount to the payment provider (Stripe billing meter).
  */
 
 // MARK: Ids
@@ -75,6 +76,106 @@ export const ResidentUsageResponseSchema = z.object({
 	stored: z.literal(true),
 })
 export type ResidentUsageResponse = z.infer<typeof ResidentUsageResponseSchema>
+
+// MARK: Installations (factory side)
+/**
+ * What the factory knows about a resident installation beyond its bearer token: the customer
+ * org it belongs to and the payment provider's customer id its usage is billed to. Created on
+ * the first usage record (unlinked) and completed by an admin (`PUT /bff/admin/resident/
+ * installations/:id`).
+ */
+export const ResidentInstallationSchema = z.object({
+	id: z.string().min(1),
+	orgId: z.string().optional(),
+	/** Stripe customer id (`cus_…`) the metered subscription belongs to; unset → not billable */
+	billingCustomerId: z.string().optional(),
+	createdAt: z.iso.datetime(),
+	updatedAt: z.iso.datetime(),
+})
+export type ResidentInstallation = z.infer<typeof ResidentInstallationSchema>
+
+export const ResidentInstallationMutationSchemas = {
+	UpsertInstallation: z
+		.object({
+			orgId: z.string().min(1).nullable().optional(),
+			billingCustomerId: z.string().min(1).nullable().optional(),
+		})
+		.strict(),
+}
+export type ResidentInstallationMutation = {
+	UpsertInstallation: z.infer<typeof ResidentInstallationMutationSchemas.UpsertInstallation>
+}
+
+// MARK: Monthly usage (billing)
+/** Usage billed as whole US cents (`billableUsd × 100`, rounded) — the meter's unit */
+export const usdCentsOf = (usd: number) => Math.round(usd * 100)
+
+/** What has been reported to the payment provider for one installation and month */
+export const ResidentUsageReportSchema = z.object({
+	installationId: z.string().min(1),
+	month: ResidentMonthSchema,
+	/** Cumulative cents reported so far (a later run reports only the difference) */
+	usdCents: z.number().int().nonnegative(),
+	provider: z.enum(['stripe', 'fake']),
+	/** Provider reference of the last report (meter event identifier) */
+	reference: z.string().optional(),
+	reportedAt: z.iso.datetime(),
+})
+export type ResidentUsageReport = z.infer<typeof ResidentUsageReportSchema>
+
+/** One installation's month, aggregated over its daily records */
+export const ResidentUsageSummarySchema = z.object({
+	installationId: z.string().min(1),
+	orgId: z.string().optional(),
+	repository: z.string(),
+	month: ResidentMonthSchema,
+	/** Days with a record */
+	days: z.number().int().nonnegative(),
+	totalTokens: z.number().int().nonnegative(),
+	listPriceUsd: z.number().nonnegative(),
+	billableUsd: z.number().nonnegative(),
+	tasks: ResidentTaskCountsSchema,
+	/** Latest record's cap view (the cap is per month, so the last day carries the total) */
+	monthlyCap: z.object({
+		tokens: z.number().int().nonnegative(),
+		usedTokens: z.number().int().nonnegative(),
+	}),
+	/** Set once something has been reported to the provider for this month */
+	report: ResidentUsageReportSchema.optional(),
+})
+export type ResidentUsageSummary = z.infer<typeof ResidentUsageSummarySchema>
+
+export const ResidentUsageQuerySchema = z.object({
+	month: ResidentMonthSchema.optional(),
+	installationId: z.string().min(1).optional(),
+})
+export type ResidentUsageQuery = z.infer<typeof ResidentUsageQuerySchema>
+
+/**
+ * Outcome per installation of a billing run for one month: `reported` = the unbilled part
+ * was reported now; `unchanged` = nothing new since the last run; `no_customer` = the
+ * installation has no billing customer id yet; `failed` = the provider rejected it
+ */
+export const residentBillingOutcome = ['reported', 'unchanged', 'no_customer', 'failed'] as const
+export type ResidentBillingOutcome = (typeof residentBillingOutcome)[number]
+
+export const ResidentBillingResultSchema = z.object({
+	installationId: z.string(),
+	outcome: z.enum(residentBillingOutcome),
+	/** Cents reported in this run (0 unless `reported`) */
+	usdCents: z.number().int().nonnegative(),
+	/** Cumulative cents reported for the month after this run */
+	totalUsdCents: z.number().int().nonnegative(),
+	reason: z.string().optional(),
+})
+export type ResidentBillingResult = z.infer<typeof ResidentBillingResultSchema>
+
+export const ResidentBillingRunResponseSchema = z.object({
+	month: ResidentMonthSchema,
+	provider: z.enum(['stripe', 'fake']),
+	results: z.array(ResidentBillingResultSchema),
+})
+export type ResidentBillingRunResponse = z.infer<typeof ResidentBillingRunResponseSchema>
 
 // MARK: Audit
 export const residentAuditType = [

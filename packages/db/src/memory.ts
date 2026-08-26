@@ -7,8 +7,28 @@
  */
 import { isActiveJobStatus, isOrderSpecFrozen, toSpecStatus } from '@mf/models'
 
-import type { Job, JobEvent, Order, OrderStatus, Org, Payment, SpecDraft, User } from '@mf/models'
-import type { MagicLink, NewOrg, NewUser, RefreshToken, Repositories } from './repositories.ts'
+import type {
+	Job,
+	JobEvent,
+	Order,
+	OrderStatus,
+	Org,
+	Payment,
+	ResidentInstallation,
+	ResidentUsageRecord,
+	ResidentUsageReport,
+	ResidentUsageSummary,
+	SpecDraft,
+	User,
+} from '@mf/models'
+import type {
+	MagicLink,
+	NewOrg,
+	NewUser,
+	RefreshToken,
+	Repositories,
+	ResidentUsageFilter,
+} from './repositories.ts'
 
 /** What an order row holds in memory: the order record plus the draft's spec-phase fields */
 type OrderEntry = {
@@ -46,6 +66,11 @@ export const createMemoryRepositories = (): Repositories => {
 	const orgs = new Map<string, Org>()
 	const magicLinks = new Map<string, MagicLink>()
 	const refreshTokens = new Map<string, RefreshToken>()
+	const installations = new Map<string, ResidentInstallation>()
+	/** `installationId/day` → record */
+	const usage = new Map<string, ResidentUsageRecord>()
+	/** `installationId/month` → report */
+	const usageReports = new Map<string, ResidentUsageReport>()
 
 	const byCreatedDesc = <T extends { createdAt: string }>(items: T[]) =>
 		items.sort((a, b) => b.createdAt.localeCompare(a.createdAt))
@@ -99,6 +124,41 @@ export const createMemoryRepositories = (): Repositories => {
 		const created: Org = { id: crypto.randomUUID(), name: org.name, createdAt: now() }
 		orgs.set(created.id, created)
 		return clone(created)
+	}
+
+	// MARK: Resident helpers
+	const ensureInstallation = (id: string) => {
+		const existing = installations.get(id)
+		if (existing) return existing
+		const created: ResidentInstallation = { id, createdAt: now(), updatedAt: now() }
+		installations.set(id, created)
+		return created
+	}
+	const matchesUsage = (record: ResidentUsageRecord, filter: ResidentUsageFilter) =>
+		(filter.installationId === undefined || record.installationId === filter.installationId) &&
+		(filter.month === undefined || record.month === filter.month)
+	/** Mirrors the SQL group-by: sums per installation and month, cap view from the latest day */
+	const summarize = (records: ResidentUsageRecord[]): ResidentUsageSummary => {
+		const latest = records.toSorted((a, b) => b.day.localeCompare(a.day))[0]!
+		const sum = (pick: (record: ResidentUsageRecord) => number) =>
+			records.reduce((total, record) => total + pick(record), 0)
+		return {
+			installationId: latest.installationId,
+			orgId: installations.get(latest.installationId)?.orgId,
+			repository: latest.repository,
+			month: latest.month,
+			days: records.length,
+			totalTokens: sum(record => record.totalTokens),
+			listPriceUsd: sum(record => record.cost.listPriceUsd),
+			billableUsd: sum(record => record.cost.billableUsd),
+			tasks: {
+				started: sum(record => record.tasks.started),
+				succeeded: sum(record => record.tasks.succeeded),
+				failed: sum(record => record.tasks.failed),
+				pullRequestsOpened: sum(record => record.tasks.pullRequestsOpened),
+			},
+			monthlyCap: clone(latest.monthlyCap),
+		}
 	}
 
 	return {
@@ -371,6 +431,72 @@ export const createMemoryRepositories = (): Repositories => {
 						refreshTokens.delete(hash)
 					}
 				}
+			},
+		},
+
+		resident: {
+			getInstallation: async id => clone(installations.get(id)),
+			listInstallations: async () => byCreatedDesc([...installations.values()].map(clone)),
+			upsertInstallation: async upsert => {
+				const existing = ensureInstallation(upsert.id)
+				const next: ResidentInstallation = {
+					...existing,
+					orgId: upsert.orgId === undefined ? existing.orgId : (upsert.orgId ?? undefined),
+					billingCustomerId:
+						upsert.billingCustomerId === undefined
+							? existing.billingCustomerId
+							: (upsert.billingCustomerId ?? undefined),
+					updatedAt: now(),
+				}
+				installations.set(upsert.id, next)
+				return clone(next)
+			},
+			upsertUsage: async record => {
+				ensureInstallation(record.installationId)
+				usage.set(`${record.installationId}/${record.day}`, clone(record))
+				return clone(record)
+			},
+			listUsage: async (filter = {}) =>
+				[...usage.values()]
+					.filter(record => matchesUsage(record, filter))
+					.sort((a, b) => b.day.localeCompare(a.day))
+					.slice(0, 1000)
+					.map(clone),
+			summarizeUsage: async (filter = {}) => {
+				const groups = new Map<string, ResidentUsageRecord[]>()
+				for (const record of usage.values()) {
+					if (!matchesUsage(record, filter)) continue
+					const key = `${record.installationId}/${record.month}`
+					groups.set(key, [...(groups.get(key) ?? []), record])
+				}
+				return [...groups.values()]
+					.map(summarize)
+					.sort(
+						(a, b) =>
+							b.month.localeCompare(a.month) || a.installationId.localeCompare(b.installationId)
+					)
+			},
+			getUsageReport: async (installationId, month) =>
+				clone(usageReports.get(`${installationId}/${month}`)),
+			listUsageReports: async month =>
+				[...usageReports.values()]
+					.filter(report => month === undefined || report.month === month)
+					.sort(
+						(a, b) =>
+							b.month.localeCompare(a.month) || a.installationId.localeCompare(b.installationId)
+					)
+					.map(clone),
+			upsertUsageReport: async report => {
+				const next: ResidentUsageReport = {
+					installationId: report.installationId,
+					month: report.month,
+					usdCents: report.usdCents,
+					provider: report.provider,
+					reference: report.reference,
+					reportedAt: now(),
+				}
+				usageReports.set(`${report.installationId}/${report.month}`, next)
+				return clone(next)
 			},
 		},
 	}

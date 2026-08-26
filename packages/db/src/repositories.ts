@@ -11,6 +11,10 @@ import type {
 	OrderStatus,
 	Org,
 	Payment,
+	ResidentInstallation,
+	ResidentUsageRecord,
+	ResidentUsageReport,
+	ResidentUsageSummary,
 	SpecDraft,
 	User,
 } from '@mf/models'
@@ -149,9 +153,49 @@ export type AuthRepository = {
 	prune: () => Promise<void>
 }
 
+// MARK: Resident (M8)
+
+export type ResidentUsageFilter = { installationId?: string; month?: string }
+
+/** `undefined` keeps the stored value, `null` clears it */
+export type ResidentInstallationUpsert = {
+	id: string
+	orgId?: string | null
+	billingCustomerId?: string | null
+}
+
+export type NewResidentUsageReport = Pick<
+	ResidentUsageReport,
+	'installationId' | 'month' | 'usdCents' | 'provider' | 'reference'
+>
+
+export type ResidentRepository = {
+	getInstallation: (id: string) => Promise<ResidentInstallation | undefined>
+	/** Newest first */
+	listInstallations: () => Promise<ResidentInstallation[]>
+	upsertInstallation: (upsert: ResidentInstallationUpsert) => Promise<ResidentInstallation>
+	/**
+	 * Stores the day's record (one per installation and day, last write wins) and creates the
+	 * installation row on first contact
+	 */
+	upsertUsage: (record: ResidentUsageRecord) => Promise<ResidentUsageRecord>
+	/** Newest day first */
+	listUsage: (filter?: ResidentUsageFilter) => Promise<ResidentUsageRecord[]>
+	/** One summary per installation and month, newest month first (without `report`) */
+	summarizeUsage: (filter?: ResidentUsageFilter) => Promise<ResidentUsageSummary[]>
+	getUsageReport: (
+		installationId: string,
+		month: string
+	) => Promise<ResidentUsageReport | undefined>
+	listUsageReports: (month?: string) => Promise<ResidentUsageReport[]>
+	/** Sets the cumulative cents reported for the month (insert or replace) */
+	upsertUsageReport: (report: NewResidentUsageReport) => Promise<ResidentUsageReport>
+}
+
 export type Repositories = {
 	jobs: JobsRepository
 	orders: OrdersRepository
 	users: UsersRepository
 	auth: AuthRepository
+	resident: ResidentRepository
 }
