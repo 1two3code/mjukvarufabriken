@@ -69,9 +69,9 @@ Everything that needs someone else's approval lives in TODO-EXTERNAL.md and is N
 - [ ] Built THROUGH the harness (first case study) — 2026-08-26: the site was built by hand tonight; it will be rebuilt through the factory as the M10 dogfood case
 
 ### M8 — Resident agent mode
-- [ ] Deploy agent into customer's AWS account (CDK template) with scoped IAM + customer's own Anthropic key or metered via ours
-- [ ] Monthly token cap, pause button, audit log of every action
-- [ ] Metering → Stripe usage-based billing
+- [x] Deploy agent into customer's AWS account (CDK template) with scoped IAM + customer's own Anthropic key or metered via ours — 2026-08-26, `@mf/resident` (Fastify service: issues labelled `resident` / `POST /tasks` → `@mf/harness` build in a fresh clone → pull request) + `infra/resident` (own CDK app: Fargate task, 4 secrets incl. the customer's Anthropic key, audit/metering bucket, task role limited to those + ECS Exec, one repo via `GITHUB_REPOSITORY`); code + synth verified (`infra/resident` tests), not deployed to a customer account. docs/RESIDENT.md.
+- [x] Monthly token cap, pause button, audit log of every action — 2026-08-26, `RESIDENT_MONTHLY_TOKENS` (persisted month counter, task budget = what is left, overshoot ≤ one model turn), `POST /pause|/resume` (persisted flag, doubles as the kill switch for the task in flight), `audit/<day>.jsonl` in the bucket + `GET /audit?day=`; verified with fakes (`packages/resident/test`), not deployed.
+- [ ] Metering → Stripe usage-based billing — 2026-08-26: metering done (daily `usage/<day>.json`: tokens by model, tasks, list price × 1.5; `POST /internal/resident/usage` contract in `@mf/models`, api stores records in memory via `residentService`, bearer per installation from `RESIDENT_INSTALLATIONS`). Stripe usage-based billing of those records is m6-orders' provider interface — not built.
 
 ### M9 — Ops
 - [x] Logs + alerts: token burn per job, failed jobs, cost anomalies — 2026-08-26, `ops-<env>` stack (SNS `mf-alerts-<env>` → adminEmails, 9 alarms, monthly budget); synth-verified + `infra/test`, deploy pending (main session). E-mail subscription confirmation + cost-allocation tag in TODO-EXTERNAL.
