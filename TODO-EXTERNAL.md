@@ -15,6 +15,7 @@ Start these NOW; none of them block building the software.
 | AWS: service quota increases (Fargate vCPU, App Runner) | AWS | 1–3 days | parallel jobs |
 | AWS SES production access (leave sandbox) | AWS | ~1 day | customer email |
 | Domain mjukvaruhuset.se — check availability, buy | registrar | hours | site live |
+| GitHub OAuth App for "Sign in with GitHub" (client id + secret, callback `https://portal.<env>.mjukvaruhuset.se/auth/github/callback`) under the `mjukvaruhuset` org | you | minutes (needs the org first) | M6 GitHub sign-in |
 | BankID integration (via a broker e.g. Criipto/Signicat) | broker | weeks | later, not v1 |
 | Trademark check on "Mjukvaruhuset" (PRV) | you | days | brand risk |
 | Hard network egress fence for build jobs: Fargate sidecars share the task ENI, so the tinyproxy allowlist is app-level (HTTPS_PROXY). A proxy in its own task/SG + VPC endpoints for Secrets Manager/S3 gives a real fence (~10 USD/month) — decide before pilots | you | hours | untrusted-code isolation |

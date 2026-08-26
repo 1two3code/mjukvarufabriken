@@ -57,6 +57,7 @@ Everything that needs someone else's approval lives in TODO-EXTERNAL.md and is N
 
 ### M6 — Portal + payment
 - [x] Magic-link auth, org/user model — 2026-08-26, login verified end-to-end on dev by Hasse (pulled forward; in-memory store until Postgres. Api is its own EdDSA token issuer: `/bff/auth/{magic-link,verify,refresh,logout}`, `/.well-known/jwks.json`; `User`/`Org` models, org named after email domain, admins via `AUTH_ADMIN_EMAILS`; portal email form → `/auth/callback`; infra: `auth-jwt-private-key` secret, SES identity + DKIM, dev uses the `log` email transport until SES production access)
+- [ ] Sign in with GitHub (decided 2026-08-26): OAuth App → `/bff/auth/github` + callback issuing the same EdDSA session tokens, `githubId`/`githubLogin` on `User`, account linking by verified email; magic link stays as fallback. Doubles as the customer's GitHub identity for M5 repo transfer. Same plugin shape later for Google / BankID. Needs the OAuth App client id/secret (TODO-EXTERNAL)
 - [ ] Order flow: new order → spec chat → freeze → Stripe deposit → build → deliver → Stripe balance
 - [ ] Live job progress, deliverables, invoices (Stripe-hosted), token usage
 - [ ] Admin view: all jobs, budgets, kill switch
