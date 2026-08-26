@@ -13,6 +13,8 @@ export type ResidentConfig = {
 	factoryApiUrl: string
 	/** Put the control api behind a public ALB (default: reachable inside the VPC only) */
 	exposeApi: boolean
+	/** ACM certificate for the ALB's HTTPS listener — required with `exposeApi` */
+	certificateArn?: string
 	/** Fargate sizing */
 	cpu: number
 	memoryMiB: number
@@ -49,6 +51,7 @@ export const loadConfig = (app: App): ResidentConfig => {
 		taskTokens: contextNumber(app, 'taskTokens', 6_000_000),
 		factoryApiUrl: contextString(app, 'factoryApiUrl') || 'https://api.mjukvaruhuset.se',
 		exposeApi: contextString(app, 'exposeApi') === 'true',
+		certificateArn: contextString(app, 'certificateArn'),
 		cpu: contextNumber(app, 'cpu', 2048),
 		memoryMiB: contextNumber(app, 'memoryMiB', 4096),
 		workerModel: contextString(app, 'workerModel'),

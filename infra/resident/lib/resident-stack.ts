@@ -1,14 +1,15 @@
 import { CfnOutput, Duration, RemovalPolicy, Stack, Tags } from 'aws-cdk-lib'
+import { Certificate } from 'aws-cdk-lib/aws-certificatemanager'
 import { Peer, Port, SecurityGroup, SubnetType, Vpc } from 'aws-cdk-lib/aws-ec2'
 import {
 	Cluster,
 	ContainerImage,
-	Secret as EcsSecret,
 	FargateService,
 	FargateTaskDefinition,
 	LogDrivers,
 } from 'aws-cdk-lib/aws-ecs'
 import { ApplicationLoadBalancedFargateService } from 'aws-cdk-lib/aws-ecs-patterns'
+import { ApplicationProtocol, SslPolicy } from 'aws-cdk-lib/aws-elasticloadbalancingv2'
 import { LogGroup, RetentionDays } from 'aws-cdk-lib/aws-logs'
 import { BlockPublicAccess, Bucket, BucketEncryption } from 'aws-cdk-lib/aws-s3'
 import { Secret } from 'aws-cdk-lib/aws-secretsmanager'
@@ -24,7 +25,12 @@ export type ResidentStackProps = StackProps & {
 	repositoryRoot: string
 }
 
-/** Secrets the customer fills in after the first deploy (placeholders are generated) */
+/**
+ * Secrets the customer fills in after the first deploy. Until then each holds a JSON placeholder
+ * (`{"placeholder":"…","<name>":"<random>"}`) that the resident's `config.ts` recognises as "not
+ * configured" — a random string alone would pass for a credential. The admin token is the
+ * exception: its generated value is a usable bearer right away.
+ */
 export const residentSecretNames = [
 	'anthropic-api-key',
 	'github-token',
@@ -74,11 +80,20 @@ export class ResidentStack extends Stack {
 		})
 
 		// MARK: Secrets — placeholders, filled with `aws secretsmanager put-secret-value`
-		const createSecret = (name: ResidentSecretName) =>
+		const createSecret = (name: ResidentSecretName, { usable = false } = {}) =>
 			new Secret(this, `Secret-${name}`, {
 				secretName: `mf-resident/${config.installationId}/${name}`,
 				description: `${name} for the Mjukvaruhuset resident on ${config.repository} — fill via put-secret-value`,
-				generateSecretString: { excludePunctuation: true, passwordLength: 32 },
+				generateSecretString: {
+					excludePunctuation: true,
+					passwordLength: 32,
+					...(usable
+						? {}
+						: {
+								secretStringTemplate: JSON.stringify({ placeholder: 'fill via put-secret-value' }),
+								generateStringKey: name,
+							}),
+				},
 				removalPolicy: RemovalPolicy.DESTROY,
 			})
 		this.secrets = {
@@ -86,7 +101,7 @@ export class ResidentStack extends Stack {
 			'github-token': createSecret('github-token'),
 			'factory-token': createSecret('factory-token'),
 			// The generated value is a usable admin token right away
-			'admin-token': createSecret('admin-token'),
+			'admin-token': createSecret('admin-token', { usable: true }),
 		}
 
 		// MARK: Service
@@ -102,8 +117,10 @@ export class ResidentStack extends Stack {
 			memoryLimitMiB: config.memoryMiB,
 			family: `mf-resident-${config.installationId}`.slice(0, 255),
 		})
-		// Only ARNs and non-secret settings in the task definition; every credential is read
-		// from Secrets Manager at start-up (the resident's `config.ts`).
+		// Only ARNs and non-secret settings in the task definition; every credential is read from
+		// Secrets Manager at start-up (the resident's `config.ts`) and never injected by ECS: the
+		// worker sessions share the container (same uid) and could read the initial environment of
+		// pid 1 from /proc, which `delete process.env[...]` does not touch.
 		const environment: Record<string, string> = {
 			ENV: 'resident',
 			GITHUB_REPOSITORY: config.repository,
@@ -128,8 +145,6 @@ export class ResidentStack extends Stack {
 			}),
 			logging: LogDrivers.awsLogs({ logGroup, streamPrefix: 'resident' }),
 			environment,
-			// ECS injects the value at start (never in the task definition); the process wipes it
-			secrets: { RESIDENT_ADMIN_TOKEN: EcsSecret.fromSecretsManager(this.secrets['admin-token']) },
 			portMappings: [{ containerPort: 5176 }],
 			healthCheck: {
 				command: ['CMD-SHELL', 'wget -qO- http://127.0.0.1:5176/health || exit 1'],
@@ -139,10 +154,12 @@ export class ResidentStack extends Stack {
 			stopTimeout: Duration.seconds(120),
 		})
 
-		// MARK: Least privilege — read the four secrets, read/write the bucket, nothing else
+		// MARK: Least privilege — read the four secrets, read + put on the bucket (no delete: the
+		// versioned audit trail must not be erasable with the task's own credentials), nothing else
 		const { taskRole } = this.taskDefinition
 		for (const secret of Object.values(this.secrets)) secret.grantRead(taskRole)
-		this.bucket.grantReadWrite(taskRole)
+		this.bucket.grantRead(taskRole)
+		this.bucket.grantPut(taskRole)
 
 		const securityGroup = new SecurityGroup(this, 'ServiceSecurityGroup', {
 			vpc,
@@ -151,6 +168,11 @@ export class ResidentStack extends Stack {
 		})
 
 		if (config.exposeApi) {
+			// The admin bearer and `POST /tasks` (code changes in the customer's repo) travel over
+			// this listener: HTTPS only, with the customer's ACM certificate; http redirects.
+			if (!config.certificateArn) {
+				throw new Error('exposeApi needs -c certificateArn=<ACM certificate ARN> (HTTPS only)')
+			}
 			const exposed = new ApplicationLoadBalancedFargateService(this, 'Service', {
 				cluster,
 				taskDefinition: this.taskDefinition,
@@ -159,7 +181,11 @@ export class ResidentStack extends Stack {
 				taskSubnets: { subnetType: SubnetType.PUBLIC },
 				securityGroups: [securityGroup],
 				publicLoadBalancer: true,
-				listenerPort: 80,
+				protocol: ApplicationProtocol.HTTPS,
+				listenerPort: 443,
+				certificate: Certificate.fromCertificateArn(this, 'Certificate', config.certificateArn),
+				sslPolicy: SslPolicy.RECOMMENDED_TLS,
+				redirectHTTP: true,
 				minHealthyPercent: 0,
 				maxHealthyPercent: 100,
 				circuitBreaker: { rollback: true },
@@ -168,9 +194,9 @@ export class ResidentStack extends Stack {
 			exposed.targetGroup.configureHealthCheck({ path: '/health' })
 			this.service = exposed.service
 			new CfnOutput(this, 'ControlApiUrl', {
-				value: `http://${exposed.loadBalancer.loadBalancerDnsName}`,
+				value: `https://${exposed.loadBalancer.loadBalancerDnsName}`,
 				description:
-					'Control api (bearer = the admin-token secret): /status /pause /resume /tasks /audit',
+					'Control api (bearer = the admin-token secret; point the certificate DNS name here): /status /pause /resume /tasks /audit',
 			})
 		} else {
 			this.service = new FargateService(this, 'Service', {

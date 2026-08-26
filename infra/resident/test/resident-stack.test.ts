@@ -42,15 +42,28 @@ describe('ResidentStack', () => {
 
 	it('creates the four secrets and passes only their ARNs to the container', () => {
 		template.resourceCountIs('AWS::SecretsManager::Secret', 4)
-		for (const name of ['anthropic-api-key', 'github-token', 'factory-token', 'admin-token']) {
+		for (const name of ['anthropic-api-key', 'github-token', 'factory-token']) {
+			// A JSON placeholder the resident recognises as "not configured" (a bare random string would pass for a credential)
 			template.hasResourceProperties('AWS::SecretsManager::Secret', {
 				Name: `mf-resident/acme--shop/${name}`,
+				GenerateSecretString: Match.objectLike({
+					SecretStringTemplate: '{"placeholder":"fill via put-secret-value"}',
+					GenerateStringKey: name,
+				}),
 			})
 		}
+		template.hasResourceProperties('AWS::SecretsManager::Secret', {
+			Name: 'mf-resident/acme--shop/admin-token',
+			GenerateSecretString: Match.not(Match.objectLike({ SecretStringTemplate: Match.anyValue() })),
+		})
 		const [definition] = Object.values(template.findResources('AWS::ECS::TaskDefinition'))
 		const [container] = definition!.Properties.ContainerDefinitions as {
 			Environment: { Name: string; Value: unknown }[]
+			Secrets?: unknown[]
 		}[]
+		// No ECS secret injection either: the initial environment of pid 1 is readable from /proc
+		// by the worker sessions, which share the container
+		assert.equal(container!.Secrets, undefined)
 		for (const { Name, Value } of container!.Environment) {
 			assert.ok(
 				typeof Value !== 'string' || !/sk-ant|ghp_|whsec_/.test(Value),
@@ -61,7 +74,7 @@ describe('ResidentStack', () => {
 		}
 	})
 
-	it('grants the task role read on the secrets and read/write on the bucket, nothing else', () => {
+	it('grants the task role read on the secrets and read + put (never delete) on the bucket, nothing else', () => {
 		const policies = Object.values(template.findResources('AWS::IAM::Policy')).filter(policy =>
 			JSON.stringify(policy).includes('TaskDefinitionTaskRole')
 		)
@@ -70,6 +83,19 @@ describe('ResidentStack', () => {
 			Action: string | string[]
 		}[]
 		const actions = statements.flatMap(statement => [statement.Action].flat())
+		const s3Actions = actions.filter(action => action.startsWith('s3:')).sort()
+		// Exactly what store.ts uses (Get/Put/List); the versioned audit trail is not erasable
+		assert.deepEqual(s3Actions, [
+			's3:Abort*',
+			's3:GetBucket*',
+			's3:GetObject*',
+			's3:List*',
+			's3:PutObject',
+			's3:PutObjectLegalHold',
+			's3:PutObjectRetention',
+			's3:PutObjectTagging',
+			's3:PutObjectVersionTagging',
+		])
 		for (const action of actions) {
 			assert.ok(
 				// ssmmessages + logs: ECS Exec (`aws ecs execute-command`), the pause path without an ALB
@@ -79,7 +105,6 @@ describe('ResidentStack', () => {
 				`unexpected action ${action}`
 			)
 		}
-		assert.ok(actions.some(action => action.startsWith('s3:PutObject')))
 	})
 
 	it('runs one task on Fargate in public subnets without a NAT gateway, bucket retained', () => {
@@ -100,9 +125,20 @@ describe('ResidentStack', () => {
 		})
 	})
 
-	it('puts the control api behind a public load balancer only when asked', () => {
-		const exposed = synth({ exposeApi: 'true', installationId: 'acme-prod' }).template
+	it('puts the control api behind a public HTTPS load balancer only when asked, and only with a certificate', () => {
+		const certificateArn = 'arn:aws:acm:eu-north-1:123456789012:certificate/abc'
+		const exposed = synth({ exposeApi: 'true', installationId: 'acme-prod', certificateArn }).template
 		exposed.resourceCountIs('AWS::ElasticLoadBalancingV2::LoadBalancer', 1)
+		exposed.hasResourceProperties('AWS::ElasticLoadBalancingV2::Listener', {
+			Port: 443,
+			Protocol: 'HTTPS',
+			Certificates: [{ CertificateArn: certificateArn }],
+		})
+		exposed.hasResourceProperties('AWS::ElasticLoadBalancingV2::Listener', {
+			Port: 80,
+			DefaultActions: [Match.objectLike({ Type: 'redirect' })],
+		})
 		exposed.hasOutput('ControlApiUrl', {})
+		assert.throws(() => synth({ exposeApi: 'true', installationId: 'acme-http' }), /certificateArn/)
 	})
 })
