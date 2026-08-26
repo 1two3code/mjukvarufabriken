@@ -203,7 +203,7 @@ export const acceptanceTestsSystemPrompt = (spec: Spec, criteria: Criterion[]) =
 # Definition of done
 1. Every criterion listed below has exactly one test file named after it.
 2. \`npm run lint\` and \`npm test\` pass from the repository root.
-3. Everything is committed: git add -A && git commit -m "test(acceptance): tests from acceptance criteria".
+3. Leave your changes in the working tree, uncommitted — the harness commits them (git writes in this repository are refused for your user).
 If a criterion cannot be met by the app as built, still write the test that expresses the criterion and let it fail — a separate fix pass will handle the app code. Never weaken a test to make it pass.
 
 # Acceptance criteria
@@ -220,7 +220,7 @@ export const acceptanceFixSystemPrompt = (spec: Spec, criteria: Criterion[]) =>
 Rules:
 - Never edit, delete, skip or weaken any file under an \`acceptance\` directory — the tests are the contract. If you believe a test is wrong, leave it and explain in your final message.
 - \`npm run lint\` and \`npm test\` must pass from the repository root when you are done.
-- Commit your work: git add -A && git commit -m "fix(acceptance): make acceptance tests pass".
+- Leave your changes in the working tree, uncommitted — the harness commits them (git writes in this repository are refused for your user).
 
 # Acceptance criteria
 ${renderCriteria(criteria)}
@@ -248,7 +248,7 @@ export const acceptanceTestsGate = async (
 	const session = await runSession({
 		cwd: repoDir,
 		systemPrompt,
-		prompt: `Write the acceptance tests for the ${criteria.length} criteria in your instructions. Start by reading CLAUDE.md and checking whether apps/app already has a test setup. Run lint + tests, then commit.`,
+		prompt: `Write the acceptance tests for the ${criteria.length} criteria in your instructions. Start by reading CLAUDE.md and checking whether apps/app already has a test setup. Run lint + tests; do not commit.`,
 		signal,
 		onUsage: count,
 		model,
@@ -284,7 +284,7 @@ export const acceptanceTestsGate = async (
 		const fix = await runSession({
 			cwd: repoDir,
 			systemPrompt: acceptanceFixSystemPrompt(spec, criteria),
-			prompt: `The acceptance tests fail. Fix the application (never the tests) so that \`npm run lint\` and \`npm test\` pass, then commit.\n\n${verification.output}`,
+			prompt: `The acceptance tests fail. Fix the application (never the tests) so that \`npm run lint\` and \`npm test\` pass; do not commit.\n\n${verification.output}`,
 			signal,
 			onUsage: count,
 			model,
@@ -353,7 +353,7 @@ ${findings.map(f => `- [${f.id}] ${f.severity.toUpperCase()} ${f.file}:${f.line}
 # Definition of done
 1. Every finding above is fixed.
 2. \`npm run lint\` and \`npm test\` pass from the repository root.
-3. Committed: git add -A && git commit -m "fix(review): address review findings".
+3. Leave your changes in the working tree, uncommitted — the harness commits them (git writes in this repository are refused for your user).
 
 # The spec
 ${renderSpecForPlanning(spec)}
@@ -504,7 +504,7 @@ export const reviewGate = async (
 	const fix = await runSession({
 		cwd: repoDir,
 		systemPrompt: reviewFixSystemPrompt(input.spec, actionable),
-		prompt: `Fix the ${actionable.length} review finding(s) in your instructions, run lint + tests and commit.`,
+		prompt: `Fix the ${actionable.length} review finding(s) in your instructions, run lint + tests; do not commit.`,
 		signal,
 		onUsage: count,
 		model,

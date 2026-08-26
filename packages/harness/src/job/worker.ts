@@ -4,7 +4,17 @@ import { dirname, join, relative } from 'node:path'
 
 import { query } from '@anthropic-ai/claude-agent-sdk'
 
-import { exec, git, launch, sandboxEnv, sandboxUser, tail, workerEnv } from './exec.ts'
+import {
+	exec,
+	git,
+	killProcessGroup,
+	launch,
+	launchCommandLine,
+	sandboxEnv,
+	sandboxUser,
+	tail,
+	workerEnv,
+} from './exec.ts'
 import { renderSpecForPlanning } from './planner.ts'
 import { totalTokens } from './types.ts'
 import { createUsageAccumulator } from './usage.ts'
@@ -105,9 +115,16 @@ export const gateScopeForChanges = (areas: string[], changedFiles: string[]): Ga
 	return outside.length ? { full: true } : scope
 }
 
-/** Files a task branch changed against main (committed; call after `commitLeftovers`) */
+/**
+ * Files a task branch changed against main (committed; call after `commitLeftovers`). Runs in
+ * the task clone, whose `.git` the worker owns, hence as the worker uid (see `createWorktree`).
+ */
 export const changedFiles = async (dir: string, signal?: AbortSignal) => {
-	const result = await exec('git', ['diff', '--name-only', 'main...HEAD'], { cwd: dir, signal })
+	const result = await exec('git', ['diff', '--name-only', 'main...HEAD'], {
+		cwd: dir,
+		signal,
+		asWorker: true,
+	})
 	return result.stdout.split('\n').filter(Boolean)
 }
 
@@ -223,47 +240,136 @@ export const shareNodeModules = async (repoDir: string, targetDir: string) => {
 	}
 }
 
+export type ShareOptions = {
+	/**
+	 * `private` (default): `.git` stays the job's — the worker may read it (review sessions run
+	 * `git diff`, tests may call git) but not write it. `shared`: `.git` belongs to the worker
+	 * too (a task clone, where the worker commits).
+	 */
+	gitDir?: 'private' | 'shared'
+}
+
 /**
- * Makes a directory writable for the worker uid (`sandboxUser`): the job and the workers are
+ * Makes a tree writable for the worker uid (`sandboxUser`): the job and the workers are
  * different users in one group, `/work` carries the setgid bit so everything below it is
  * group-owned, and this puts the group write bit on what was created with a stricter mode (the
- * template copy, `cp -al` — which also re-applies the source group — and anything git checked
- * out before `umask 002` took effect). Hard-linked `node_modules` files are shared inodes, so
- * their mode changes for every worktree at once — same as before, when everything was one uid.
+ * template copy, `cp -al`, anything git checked out before `umask 002` took effect). Only
+ * directories and files with a single link get the bit: the hard-linked `node_modules`
+ * (`shareNodeModules`) share their inodes with the image's template and every other worktree,
+ * so a writable inode would let one worker rewrite the package code every later gate executes.
+ * A worker can still replace such a file in its own tree (the directory is writable), which
+ * touches nothing but that directory entry. Symlinks are skipped (chmod would follow them).
  * A no-op without a sandbox user.
  */
-export const shareWithWorker = async (dir: string) => {
+export const shareWithWorker = async (dir: string, { gitDir = 'private' }: ShareOptions = {}) => {
 	if (!sandboxUser()) return
 	const { gid } = await stat(dir)
-	await exec('chgrp', ['-R', String(gid), dir], { cwd: dir })
-	await exec('chmod', ['-R', 'g+rwX', dir], { cwd: dir })
+	const gitPath = join(dir, '.git')
+	const prune = gitDir === 'private' ? ['-path', gitPath, '-prune', '-o'] : []
+	const select = ['(', '-type', 'd', '-o', '-type', 'f', '-links', '1', ')']
+	await exec('find', [dir, ...prune, ...select, '-exec', 'chgrp', String(gid), '{}', '+'], {
+		cwd: dir,
+	})
+	await exec('find', [dir, ...prune, ...select, '-exec', 'chmod', 'g+rwX', '{}', '+'], {
+		cwd: dir,
+	})
+	if (gitDir === 'private') await protectGitDir(dir)
 	shared.add(dir)
+}
+
+/**
+ * Keeps the main repo's `.git` the job's own: group = the job's primary group (not the shared
+ * `work` group; no setgid bit, so what git creates later inherits it) and no group write bit,
+ * world-readable. Git reads repo config (`core.fsmonitor`, merge drivers, `diff.external`,
+ * `url.<base>.insteadOf`, …) for every command the job runs as its own uid — merge, diff, the
+ * delivery push with the org token — and executes what it finds, so a worker that could write
+ * `.git/config` (or replace it: any write needs the directory, git renames lock files into
+ * place) would run code as the job uid. Refs and objects are covered by the same rule: a worker
+ * cannot move `main` past the gates. Workers therefore never commit in the main repo; the
+ * harness commits what a session in it leaves behind. A no-op without a sandbox user or when
+ * `.git` is not a directory.
+ */
+export const protectGitDir = async (repoDir: string) => {
+	if (!sandboxUser()) return
+	const gitPath = join(repoDir, '.git')
+	const info = await stat(gitPath).catch(() => undefined)
+	if (!info?.isDirectory()) return
+	await exec('chgrp', ['-R', String(process.getgid?.() ?? info.gid), gitPath], { cwd: repoDir })
+	await exec('chmod', ['-R', 'g-w,g-s,o+rX', gitPath], { cwd: repoDir })
 }
 
 const shared = new Set<string>()
 
-/** `shareWithWorker` once per directory and process — before the first worker runs in it */
+/**
+ * `shareWithWorker` once per directory and process — before the first worker runs in it. The
+ * `.git` protection is re-applied every time (cheap, and a long-lived process may have re-cloned
+ * the same path).
+ */
 export const ensureShared = async (dir: string) => {
-	if (!shared.has(dir)) await shareWithWorker(dir)
+	if (shared.has(dir)) await protectGitDir(dir)
+	else await shareWithWorker(dir)
 }
 
-/** `git worktree add -b task/<id>` from the current main, with node_modules shared */
+/**
+ * A task's working copy: a full clone of the main repo (`--no-hardlinks`, so no object inode is
+ * shared with the job's `.git`) on branch `task/<id>`, node_modules hard-linked in, the whole
+ * tree — `.git` included — handed to the worker. The worker commits there; `fetchTaskBranch`
+ * brings the branch into the main repo afterwards. The main repo's `.git` is protected first
+ * (`ensureShared`), before any worker exists. Kept under `<work>/worktrees/<id>` and called a
+ * worktree for the rest of the harness, though it no longer shares refs with the main repo.
+ */
 export const createWorktree = async (repoDir: string, task: Task, signal?: AbortSignal) => {
 	const dir = worktreeDir(repoDir, task.id)
 	const branch = `task/${task.id}`
-	await rm(dir, { recursive: true, force: true })
+	await ensureShared(repoDir)
+	await removeWorktree(repoDir, task.id)
 	await exec('git', ['branch', '-D', branch], { cwd: repoDir, signal })
-	await git(['worktree', 'prune'], { cwd: repoDir, signal })
-	await git(['worktree', 'add', '-b', branch, dir, 'main'], { cwd: repoDir, signal })
+	await git(['clone', '-q', '--no-hardlinks', '-b', 'main', repoDir, dir], { cwd: repoDir, signal })
+	await git(['checkout', '-q', '-b', branch], { cwd: dir, signal })
+	// A clone starts without the main repo's identity; the worker commits with the job's
+	for (const key of ['user.name', 'user.email']) {
+		const value = (await exec('git', ['config', key], { cwd: repoDir, signal })).stdout.trim()
+		if (value) await git(['config', key, value], { cwd: dir, signal })
+	}
 	await shareNodeModules(repoDir, dir)
-	await shareWithWorker(dir)
+	await shareWithWorker(dir, { gitDir: 'shared' })
 	return { dir, branch }
 }
 
+/** Removes a task clone; what the worker created is removed as the worker first */
 export const removeWorktree = async (repoDir: string, taskId: string) => {
 	const dir = worktreeDir(repoDir, taskId)
-	await exec('git', ['worktree', 'remove', '--force', dir], { cwd: repoDir })
+	if (!(await exists(dir))) return
+	if (sandboxUser()) await exec('rm', ['-rf', dir], { cwd: dirname(dir), asWorker: true })
 	await rm(dir, { recursive: true, force: true })
+}
+
+/**
+ * Fetches `task/<id>` from the task clone into the main repo. The clone is the worker's: its
+ * config, hooks and objects are untrusted, so `git upload-pack` runs there as the worker uid
+ * (`--upload-pack`, through `launch`) while the job's side only parses the pack, fsck'ed on the
+ * way in (`fetch.fsckObjects`) — the trust model of fetching from any remote.
+ */
+export const fetchTaskBranch = async (
+	repoDir: string,
+	dir: string,
+	branch: string,
+	signal?: AbortSignal
+) => {
+	const uploadPack = launchCommandLine(launch('git', ['upload-pack'], { asWorker: true }))
+	await git(
+		[
+			'-c',
+			'fetch.fsckObjects=true',
+			'fetch',
+			'-q',
+			'--no-tags',
+			`--upload-pack=${uploadPack}`,
+			dir,
+			`+refs/heads/${branch}:refs/heads/${branch}`,
+		],
+		{ cwd: repoDir, signal }
+	)
 }
 
 // MARK: Verification
@@ -472,26 +578,49 @@ export const sessionEnv = (
 	CLAUDE_AGENT_SDK_CLIENT_APP: 'mf-harness/0.1',
 })
 
-/**
- * Spawns the Agent SDK's Claude Code process as the sandbox worker uid (`launch` → `setpriv`).
- * The SDK's default spawner is a plain local `spawn`; this one only changes who the process
- * runs as. stderr is inherited so the CLI's own diagnostics reach the job log.
- */
-export const spawnWorkerProcess: NonNullable<Options['spawnClaudeCodeProcess']> = ({
-	command,
-	args,
-	cwd,
-	env,
-	signal,
-}) => {
-	const launched = launch(command, args, { asWorker: true })
-	return spawn(launched.command, launched.args, {
-		cwd,
-		env,
-		signal,
-		stdio: ['pipe', 'pipe', 'inherit'],
-	})
+export type WorkerSpawner = {
+	spawn: NonNullable<Options['spawnClaudeCodeProcess']>
+	/** Last lines the Claude Code process wrote to stderr — for the session's error text */
+	stderrTail: () => string
 }
+
+/**
+ * Spawns the Agent SDK's Claude Code process as the sandbox worker uid (`launch` → `setpriv`)
+ * in its own process group, killed whole when the process exits, so nothing a Bash tool call
+ * backgrounded outlives the session. The SDK's default spawner is a plain local `spawn` that
+ * also reads stderr into the tail it puts in its spawn/exit errors; with a custom spawner it
+ * wires only stdin/stdout, so stderr is read here: forwarded to the job log and kept as a tail
+ * that `runSession` appends to a failed session's result.
+ */
+export const createWorkerSpawner = (
+	forward: (chunk: string) => void = chunk => process.stderr.write(chunk)
+): WorkerSpawner => {
+	let stderr = ''
+	return {
+		spawn: ({ command, args, cwd, env, signal }) => {
+			const launched = launch(command, args, { asWorker: true })
+			const child = spawn(launched.command, launched.args, {
+				cwd,
+				env,
+				signal,
+				stdio: ['pipe', 'pipe', 'pipe'],
+				detached: true,
+			})
+			child.stderr.on('data', chunk => {
+				const text = String(chunk)
+				stderr = tail(`${stderr}${text}`, 40)
+				forward(text)
+			})
+			child.on('exit', () => killProcessGroup(child.pid))
+			return child
+		},
+		stderrTail: () => stderr.trim(),
+	}
+}
+
+/** `spawnClaudeCodeProcess` with the default stderr forwarding, for callers that need no tail */
+export const spawnWorkerProcess: NonNullable<Options['spawnClaudeCodeProcess']> = options =>
+	createWorkerSpawner().spawn(options)
 
 const messageUsage = (message: SDKMessage): TokenUsage | undefined => {
 	if (message.type !== 'assistant') return undefined
@@ -530,6 +659,7 @@ export const runSession = async ({
 	else signal.addEventListener('abort', onAbort, { once: true })
 
 	const resolvedEffort = resolveEffort(effort)
+	const spawner = sandboxUser() ? createWorkerSpawner() : undefined
 	const options: Options = {
 		cwd,
 		model: resolveWorkerModel(model),
@@ -547,9 +677,13 @@ export const runSession = async ({
 		maxTurns,
 		abortController: controller,
 		env: sessionEnv(),
-		...(sandboxUser() ? { spawnClaudeCodeProcess: spawnWorkerProcess } : {}),
+		...(spawner ? { spawnClaudeCodeProcess: spawner.spawn } : {}),
 	}
 	await ensureShared(cwd)
+	const withStderr = (text: string) => {
+		const stderr = spawner?.stderrTail()
+		return stderr ? `${text}. stderr: ${stderr}` : text
+	}
 
 	const usage = createUsageAccumulator(onUsage)
 	let ok = false
@@ -576,7 +710,7 @@ export const runSession = async ({
 				result =
 					message.subtype === 'success'
 						? message.result
-						: `${message.subtype}: ${message.errors.join('; ')}`
+						: withStderr(`${message.subtype}: ${message.errors.join('; ')}`)
 				console.log(
 					JSON.stringify({
 						message: 'session result',
@@ -590,6 +724,9 @@ export const runSession = async ({
 				)
 			}
 		}
+	} catch (error) {
+		if (error instanceof Error) error.message = withStderr(error.message)
+		throw error
 	} finally {
 		signal.removeEventListener('abort', onAbort)
 	}
@@ -617,18 +754,20 @@ export type RunTaskInput = {
 	ports?: Partial<TaskPorts>
 }
 
-const hasCommits = async (dir: string, branch: string, signal: AbortSignal) => {
-	const result = await exec('git', ['rev-list', '--count', `main..${branch}`], { cwd: dir, signal })
+/** True when `branch` (fetched into the main repo) has commits past main */
+const hasCommits = async (repoDir: string, branch: string, signal: AbortSignal) => {
+	const result = await exec('git', ['rev-list', '--count', `main..${branch}`], {
+		cwd: repoDir,
+		signal,
+	})
 	return result.code === 0 && Number(result.stdout.trim()) > 0
 }
 
-/** Commit whatever the agent left uncommitted so the branch is complete */
+/** Commit whatever the agent left uncommitted so the branch is complete (in the worker's clone) */
 const commitLeftovers = async (dir: string, task: Task, signal: AbortSignal) => {
-	await exec('git', ['add', '-A'], { cwd: dir, signal })
-	await exec('git', ['commit', '-q', '-m', `chore(${task.id}): ${task.title} (auto-commit)`], {
-		cwd: dir,
-		signal,
-	})
+	const options = { cwd: dir, signal, asWorker: true }
+	await exec('git', ['add', '-A'], options)
+	await exec('git', ['commit', '-q', '-m', `chore(${task.id}): ${task.title} (auto-commit)`], options)
 }
 
 /**
@@ -730,7 +869,8 @@ export const runTask = async ({
 			return { ok: false, tokens, branch, reason: withNotes(verification.output) }
 		}
 	}
-	if (!(await hasCommits(dir, branch, signal))) {
+	await fetchTaskBranch(repoDir, dir, branch, signal)
+	if (!(await hasCommits(repoDir, branch, signal))) {
 		return { ok: false, tokens, branch, reason: withNotes('worker produced no commits') }
 	}
 	return { ok: true, tokens, branch, ...(notes.length ? { notes } : {}) }

@@ -1,10 +1,14 @@
-import { mkdir, mkdtemp, rm, stat, writeFile } from 'node:fs/promises'
+import { link, mkdir, mkdtemp, readFile, rm, stat, writeFile } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 
 import { exec } from '#job/exec.ts'
 import {
+	createWorkerSpawner,
+	createWorktree,
+	ensureShared,
 	evaluateVitestReport,
+	fetchTaskBranch,
 	gateCommands,
 	gateScopeForAreas,
 	gateScopeForChanges,
@@ -12,6 +16,8 @@ import {
 	maxTurnsForSpec,
 	renderCommand,
 	repoConventions,
+	protectGitDir,
+	removeWorktree,
 	resolveEffort,
 	sessionEnv,
 	shareWithWorker,
@@ -19,6 +25,7 @@ import {
 	verifyRepo,
 	workerLimits,
 	workerSystemPrompt,
+	worktreeDir,
 } from '#job/worker.ts'
 
 import type { Plan, Spec, Task } from '@mf/models'
@@ -223,6 +230,22 @@ describe('sessionEnv', () => {
 	})
 })
 
+const mode = async (path: string) => (await stat(path)).mode & 0o7777
+
+/** The sandbox-user tests need util-linux setpriv on PATH (exec wraps every child in it) */
+const hasSetpriv = async () =>
+	(await exec('setpriv', ['--version'], { cwd: process.cwd() })).code === 0
+
+/** Pretends a sandbox user is configured (a different uid; nothing switches to it here) */
+const withSandboxUser = () => {
+	const umask = process.umask()
+	vi.stubEnv('WORKER_UID', String((process.getuid?.() ?? 0) + 1))
+	return () => {
+		process.umask(umask)
+		vi.unstubAllEnvs()
+	}
+}
+
 describe('shareWithWorker', () => {
 	const fakeTree = async () => {
 		const dir = await mkdtemp(join(tmpdir(), 'mf-share-'))
@@ -231,6 +254,84 @@ describe('shareWithWorker', () => {
 		await writeFile(join(dir, 'secret.sh'), 'x', { mode: 0o700 })
 		return dir
 	}
+
+	/** A `.git` as `git init` leaves it under a setgid work dir: group-writable, setgid dirs */
+	const fakeGit = async (dir: string) => {
+		await mkdir(join(dir, '.git/refs/heads'), { recursive: true, mode: 0o2775 })
+		await writeFile(join(dir, '.git/config'), '[core]\n', { mode: 0o664 })
+		await writeFile(join(dir, '.git/refs/heads/main'), 'abc\n', { mode: 0o664 })
+	}
+
+	it('Leaves a hard-linked file alone (shared inode) but opens its directory', async () => {
+		if (!(await hasSetpriv())) return
+		const dir = await fakeTree()
+		const restore = withSandboxUser()
+		try {
+			await mkdir(join(dir, 'template/node_modules/pkg'), { recursive: true, mode: 0o755 })
+			await writeFile(join(dir, 'template/node_modules/pkg/index.js'), 'x', { mode: 0o644 })
+			await mkdir(join(dir, 'node_modules/pkg'), { recursive: true, mode: 0o755 })
+			await link(
+				join(dir, 'template/node_modules/pkg/index.js'),
+				join(dir, 'node_modules/pkg/index.js')
+			)
+			await shareWithWorker(dir)
+			expect(await mode(join(dir, 'node_modules/pkg/index.js'))).toBe(0o644)
+			expect(await mode(join(dir, 'template/node_modules/pkg/index.js'))).toBe(0o644)
+			expect(await mode(join(dir, 'node_modules/pkg'))).toBe(0o775)
+			expect(await mode(join(dir, 'src/a.ts'))).toBe(0o664)
+		} finally {
+			restore()
+			await rm(dir, { recursive: true, force: true })
+		}
+	})
+
+	it('Keeps the main repo\'s .git the job\'s own: readable, never group-writable', async () => {
+		if (!(await hasSetpriv())) return
+		const dir = await fakeTree()
+		await fakeGit(dir)
+		const restore = withSandboxUser()
+		try {
+			await shareWithWorker(dir)
+			expect(await mode(join(dir, '.git'))).toBe(0o755)
+			expect(await mode(join(dir, '.git/refs/heads'))).toBe(0o755)
+			expect(await mode(join(dir, '.git/config'))).toBe(0o644)
+			expect(await mode(join(dir, '.git/refs/heads/main'))).toBe(0o644)
+			expect((await stat(join(dir, '.git/config'))).gid).toBe(process.getgid?.())
+			expect(await mode(join(dir, 'src/a.ts'))).toBe(0o664)
+
+			// A task clone's .git belongs to the worker
+			const clone = await fakeTree()
+			await fakeGit(clone)
+			await shareWithWorker(clone, { gitDir: 'shared' })
+			expect(await mode(join(clone, '.git/config'))).toBe(0o664)
+			expect(await mode(join(clone, '.git'))).toBe(0o775)
+			await rm(clone, { recursive: true, force: true })
+		} finally {
+			restore()
+			await rm(dir, { recursive: true, force: true })
+		}
+	})
+
+	it('ensureShared shares a tree once but re-protects .git every time', async () => {
+		if (!(await hasSetpriv())) return
+		const dir = await fakeTree()
+		await fakeGit(dir)
+		const restore = withSandboxUser()
+		try {
+			await ensureShared(dir)
+			expect(await mode(join(dir, 'src/a.ts'))).toBe(0o664)
+			await exec('chmod', ['644', 'src/a.ts'], { cwd: dir })
+			await exec('chmod', ['664', '.git/config'], { cwd: dir })
+			await ensureShared(dir)
+			expect(await mode(join(dir, 'src/a.ts'))).toBe(0o644)
+			expect(await mode(join(dir, '.git/config'))).toBe(0o644)
+			// No .git, or a gitfile: nothing to protect
+			await protectGitDir(join(dir, 'src'))
+		} finally {
+			restore()
+			await rm(dir, { recursive: true, force: true })
+		}
+	})
 
 	it('Is a no-op without a sandbox user', async () => {
 		const dir = await fakeTree()
@@ -259,6 +360,126 @@ describe('shareWithWorker', () => {
 			vi.unstubAllEnvs()
 			await rm(dir, { recursive: true, force: true })
 		}
+	})
+})
+
+// MARK: Task clones
+
+const gitEnv = {
+	GIT_AUTHOR_NAME: 'test',
+	GIT_AUTHOR_EMAIL: 'test@example.com',
+	GIT_COMMITTER_NAME: 'test',
+	GIT_COMMITTER_EMAIL: 'test@example.com',
+}
+
+const seedRepo = async () => {
+	const root = await mkdtemp(join(tmpdir(), 'mf-clone-'))
+	const dir = join(root, 'repo')
+	await mkdir(dir)
+	const run = (args: string[]) => exec('git', args, { cwd: dir, env: gitEnv })
+	await run(['init', '-q', '-b', 'main'])
+	await writeFile(join(dir, 'README.md'), 'seed\n')
+	await writeFile(join(dir, '.gitignore'), 'node_modules\n')
+	await mkdir(join(dir, 'node_modules/pkg'), { recursive: true })
+	await writeFile(join(dir, 'node_modules/pkg/index.js'), 'module.exports = 1\n')
+	await run(['add', '-A'])
+	await run(['commit', '-q', '-m', 'seed'])
+	return { root, dir }
+}
+
+const taskOf = (id: string): Task => ({ ...task(['apps/app']), id })
+
+describe('createWorktree + fetchTaskBranch', () => {
+	it('Clones the main repo per task (own .git, node_modules linked) and fetches the branch back', async () => {
+		const { root, dir: repoDir } = await seedRepo()
+		try {
+			const { dir, branch } = await createWorktree(repoDir, taskOf('t1'))
+			expect(dir).toBe(worktreeDir(repoDir, 't1'))
+			expect(branch).toBe('task/t1')
+			// A full clone, not a linked worktree: .git is a directory with its own refs
+			expect((await stat(join(dir, '.git'))).isDirectory()).toBe(true)
+			expect((await stat(join(dir, '.git/refs'))).isDirectory()).toBe(true)
+			const source = await stat(join(repoDir, 'node_modules/pkg/index.js'))
+			expect((await stat(join(dir, 'node_modules/pkg/index.js'))).ino).toBe(source.ino)
+			// The branch exists only in the clone until it is fetched
+			const before = await exec('git', ['rev-parse', '-q', '--verify', branch], { cwd: repoDir })
+			expect(before.code).not.toBe(0)
+
+			await writeFile(join(dir, 'apps.txt'), 'work\n')
+			await exec('git', ['add', '-A'], { cwd: dir, env: gitEnv })
+			await exec('git', ['commit', '-q', '-m', 'feat: work'], { cwd: dir, env: gitEnv })
+			await fetchTaskBranch(repoDir, dir, branch)
+
+			const count = await exec('git', ['rev-list', '--count', `main..${branch}`], { cwd: repoDir })
+			expect(count.stdout.trim()).toBe('1')
+			const file = await exec('git', ['show', `${branch}:apps.txt`], { cwd: repoDir })
+			expect(file.stdout).toBe('work\n')
+
+			// Re-creating the task drops the old branch and clone
+			const again = await createWorktree(repoDir, taskOf('t1'))
+			expect(again.dir).toBe(dir)
+			expect(await readFile(join(dir, 'README.md'), 'utf8')).toBe('seed\n')
+			const reset = await exec('git', ['rev-parse', '-q', '--verify', branch], { cwd: repoDir })
+			expect(reset.code).not.toBe(0)
+
+			await removeWorktree(repoDir, 't1')
+			await expect(stat(dir)).rejects.toThrow()
+			await removeWorktree(repoDir, 't1')
+		} finally {
+			await rm(root, { recursive: true, force: true })
+		}
+	})
+})
+
+describe('createWorkerSpawner', () => {
+	const stdoutOf = (child: { stdout: NodeJS.ReadableStream }) =>
+		new Promise<string>(resolve => {
+			let out = ''
+			child.stdout.on('data', chunk => (out += String(chunk)))
+			child.stdout.on('end', () => resolve(out))
+		})
+	const exited = (child: { on: (event: 'exit', listener: () => void) => unknown }) =>
+		new Promise<void>(resolve => child.on('exit', () => resolve()))
+
+	it('Keeps a stderr tail for the session error and forwards stderr to the log', async () => {
+		const forwarded: string[] = []
+		const spawner = createWorkerSpawner(chunk => forwarded.push(chunk))
+		const child = spawner.spawn({
+			command: 'sh',
+			args: ['-c', 'echo out; echo "setpriv: reuid failed" >&2; exit 1'],
+			cwd: process.cwd(),
+			env: process.env,
+			signal: new AbortController().signal,
+		})
+		const [out] = await Promise.all([stdoutOf(child), exited(child)])
+		expect(out).toBe('out\n')
+		expect(spawner.stderrTail()).toBe('setpriv: reuid failed')
+		expect(forwarded.join('')).toContain('setpriv: reuid failed')
+	})
+
+	it('Kills what the session backgrounded when the Claude Code process exits', async () => {
+		const spawner = createWorkerSpawner(() => {})
+		const child = spawner.spawn({
+			command: 'sh',
+			args: ['-c', 'sleep 30 & echo $!'],
+			cwd: process.cwd(),
+			env: process.env,
+			signal: new AbortController().signal,
+		})
+		const [out] = await Promise.all([stdoutOf(child), exited(child)])
+		const background = Number(out.trim())
+		expect(background).toBeGreaterThan(0)
+		const deadline = Date.now() + 3000
+		const alive = () => {
+			try {
+				process.kill(background, 0)
+				return true
+			} catch {
+				return false
+			}
+		}
+		while (alive() && Date.now() < deadline) await new Promise(r => setTimeout(r, 25))
+		expect(alive()).toBe(false)
 	})
 })
 
