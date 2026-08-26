@@ -3,6 +3,7 @@ import { resolve } from 'node:path'
 
 import { customerCancellableOrderStatus } from '@mf/models'
 
+import { githubScope } from '#/plugins/githubOAuth.ts'
 import { magicLinkTtlMinutes, refreshTokenTtlDays } from '#/services/authService.ts'
 import { contactRateLimit } from '#/services/contactService.ts'
 import { orgNameFromEmail } from '#/services/userService.utils.ts'
@@ -34,17 +35,13 @@ describe('Legal drafts vs. code', () => {
 		}
 	})
 
-	it('Describes magic-link login only — no GitHub sign-in exists in the api', () => {
-		for (const route of ['requestMagicLink', 'verifyMagicLink']) {
+	it('Describes both login methods the api has: magic link and GitHub sign-in', () => {
+		for (const route of ['requestMagicLink', 'verifyMagicLink', 'github', 'githubCallback']) {
 			expect(() => read(`apps/api/src/routes/bff/auth/${route}.ts`)).not.toThrow()
 		}
-		expect(() => read('apps/api/src/routes/bff/auth/github.ts')).toThrow()
 
-		for (const text of Object.values(drafts)) {
-			expect(withoutOpenPoints(text)).not.toMatch(
-				/inloggning med GitHub|GitHub-inloggning|GitHub sign-in|GitHub login/i
-			)
-		}
+		expect(withoutOpenPoints(drafts.villkorWebb)).toMatch(/inloggning med GitHub/i)
+		expect(drafts.villkorWebb).toContain(`\`${githubScope}\``)
 	})
 
 	it('States the token lifetimes the api uses', () => {

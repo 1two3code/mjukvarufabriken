@@ -34,8 +34,13 @@ namnges som standard efter e-postadressens domän (t.ex. `acme.se`) eller, om ad
 allmän e-postleverantör (t.ex. gmail.com, outlook.com), efter den del av adressen som står före
 `@`. Namnet kan ändras på begäran. Ingen ansluts automatiskt till en annan organisation på grund
 av e-postdomän; ytterligare användare läggs till i en organisation av oss på organisationens
-begäran. _[Öppen punkt: inloggning med GitHub (PLAN M6) är inte byggd — lägg till den här och i
-punkterna 8.3, 9.1 och 12.1 när den finns.]_
+begäran. Du kan också logga in med GitHub ("Sign in with GitHub"): vi hämtar då ditt GitHub-id,
+ditt GitHub-användarnamn och din verifierade primära e-postadress hos GitHub (behörighet
+`user:email`, ingen åtkomst till dina kodförråd) och kopplar dem till kontot med samma
+e-postadress, eller skapar ett nytt konto. GitHubs åtkomsttoken används bara under själva
+inloggningen och sparas inte. Saknar GitHub-kontot en verifierad e-postadress avvisas
+inloggningen. Ett konto kan ha en GitHub-koppling åt gången; loggar du in med ett annat
+GitHub-konto med samma e-postadress ersätts kopplingen.
 
 2.2 Du ansvarar för att din e-postadress är skyddad. Engångslänkar är giltiga i 15 minuter och
 får inte vidarebefordras. Meddela oss omedelbart vid misstanke om obehörig åtkomst.
@@ -108,7 +113,7 @@ _DRAFT — EJ GRANSKAD_
 |---|---|---|---|---|
 | 8.1 Besök på Webbplatsen | IP-adress, tidpunkt, begärd sida, webbläsartyp (i tekniska loggar hos vår innehållsleverans- och webbserver) | Leverera sidan, säkerhet, felsökning | Berättigat intresse (drift och säkerhet) | Loggar raderas inom 30 dagar _[öppen punkt: sätt motsvarande retention på CloudFront-/ALB-loggar i infra]_ |
 | 8.2 Kontaktformulär | Namn, e-post, ev. företag, meddelande, avsändar-IP (för begränsning av antal försändelser) | Besvara din förfrågan | Berättigat intresse (besvara förfrågan) / åtgärder inför avtal | E-post hos oss tills ärendet är avslutat, längst 12 månader; IP-räknaren endast i arbetsminnet i högst 10 minuter |
-| 8.3 Konto i Portalen | E-postadress, namn (om lämnat), organisation, roll (användare, eller administratör för vår egen personal), tidpunkt för inloggning; engångslänkar och uppdateringsbevis (refresh tokens) | Autentisering, behörigheter, avtalsfullgörande | Fullgörande av avtal / åtgärder inför avtal | Kontots livstid + 12 månader; engångslänkar 15 minuter; uppdateringsbevis 30 dagar |
+| 8.3 Konto i Portalen | E-postadress, namn (om lämnat), organisation, roll (användare, eller administratör för vår egen personal), tidpunkt för inloggning; engångslänkar och uppdateringsbevis (refresh tokens); vid inloggning med GitHub även GitHub-id och GitHub-användarnamn (även på beställningar som skapas av det kontot) | Autentisering, behörigheter, avtalsfullgörande | Fullgörande av avtal / åtgärder inför avtal | Kontots livstid + 12 månader; engångslänkar 15 minuter; uppdateringsbevis 30 dagar |
 | 8.4 Beställningar och byggen | Specifikationer, ordrar, byggloggar, gate-rapporter, leverabler, tokenförbrukning | Fullgöra Kundavtalet, support, bokföring | Fullgörande av avtal; rättslig förpliktelse (bokföringslagen) | Enligt Kundavtalet/PUB-avtalet; bokföringsunderlag 7 år |
 | 8.5 Betalningar | Belopp, tidpunkt, betalstatus, Stripes kund- och betalningsreferens, faktura-/kvittolänk. Kortuppgifter lämnas direkt till Stripe och når aldrig oss | Ta betalt, fakturera | Fullgörande av avtal; rättslig förpliktelse (bokföring) | 7 år (bokföring) |
 | 8.6 E-post till dig | E-postadress, innehåll (engångslänkar, leverans- och byggmeddelanden) | Autentisering och avtalsmeddelanden | Fullgörande av avtal | Loggar hos e-posttjänsten enligt 8.1 |
@@ -122,7 +127,7 @@ _DRAFT — EJ GRANSKAD_
 
 9.1 Vi använder följande leverantörer som personuppgiftsbiträden: **Amazon Web Services**
 (all drift, region Stockholm eu-north-1; e-post via Amazon SES), **Stripe** (betalningar),
-**GitHub** (leverans av kod till kundens kodförråd), **Anthropic** (språkmodell som behandlar
+**GitHub** (leverans av kod till kundens kodförråd samt, om du väljer det, inloggning med GitHub — GitHub är då självständigt ansvarig för sin egen behandling av ditt GitHub-konto), **Anthropic** (språkmodell som behandlar
 specifikationer och kod vid byggen). Se `pub-avtal.md` punkt 6 för detaljer.
 
 9.2 Stripe, GitHub och Anthropic kan behandla uppgifter i USA. Överföringen sker med stöd av
@@ -170,8 +175,9 @@ berättigat intresse. Kontakta hej@mjukvaruhuset.se; vi svarar inom en månad.
 _DRAFT — EJ GRANSKAD_
 
 12.1 Trafik krypteras (TLS), data lagras krypterat i AWS region Stockholm, hemligheter hanteras
-i en dedikerad hemlighetstjänst, inloggning sker utan lösenord (engångslänk via e-post) med
-kortlivade signerade bevis, och åtkomst till kunddata är avgränsad per organisation. Se vidare
+i en dedikerad hemlighetstjänst, inloggning sker utan lösenord (engångslänk via e-post eller
+inloggning med GitHub via OAuth med skydd mot förfalskade återanrop) med kortlivade signerade
+bevis, och åtkomst till kunddata är avgränsad per organisation. Se vidare
 `pub-avtal.md` punkt 7.
 
 ## 13. Ändringar av policyn
@@ -191,8 +197,9 @@ _DRAFT — NOT REVIEWED. This summary is for orientation only; the Swedish text 
 
 - Apply to the public site mjukvaruhuset.se and the customer portal; orders are governed by the
   customer agreement and resident addendum, which take precedence.
-- Accounts are created by e-mail magic link (15-minute validity) only (no other login method
-  until built — open point); each first sign-in gets its own org, named after the e-mail domain or,
+- Accounts are created by e-mail magic link (15-minute validity) or by GitHub sign-in (GitHub
+  id, username and verified primary e-mail are read with the `user:email` scope, the GitHub token
+  is never stored, one GitHub link per account); each first sign-in gets its own org, named after the e-mail domain or,
   for public mail providers, the local part of the address; nobody joins another org by domain —
   additional users are added by us on the org's request. Users protect their e-mail access; we
   may suspend accounts for abuse.
@@ -224,5 +231,5 @@ _DRAFT — NOT REVIEWED. This summary is for orientation only; the Swedish text 
 - Rights: access, rectification, erasure, restriction, portability, objection; reply within one
   month; complaints to the Swedish Authority for Privacy Protection (IMY); account deletion on
   request subject to legal retention.
-- Security: TLS, encryption at rest in eu-north-1, secrets manager, passwordless login with
+- Security: TLS, encryption at rest in eu-north-1, secrets manager, passwordless login (magic link or GitHub OAuth) with
   short-lived signed tokens, org-scoped data.
