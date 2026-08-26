@@ -5,6 +5,9 @@ import { Link, useParams, useSearchParams } from 'react-router-dom'
 import { customerCancellableOrderStatus, isActiveJobStatus } from '@mf/models'
 
 import { usePermission } from '#/hooks/usePermission.ts'
+import { Deliverables } from '#/features/jobs/Deliverables.tsx'
+import { GateReports } from '#/features/jobs/GateReports.tsx'
+import { useGetJobQuery } from '#/features/jobs/jobsApiSlice.ts'
 import { useCancelOrderMutation, useGetOrderQuery } from '#/features/orders/ordersApiSlice.ts'
 import { OrderStatusBadge } from '#/features/orders/OrderStatusBadge.tsx'
 import { OrderStepper } from '#/features/orders/OrderStepper.tsx'
@@ -61,6 +64,9 @@ export function OrderPage() {
 		pollingInterval: pollingInterval,
 	})
 	const [cancel, { isLoading: isCancelling }] = useCancelOrderMutation()
+	// The full job row carries the gate reports; the order detail only has a summary of it
+	const latestJobId = detail?.latestJob?.id ?? ''
+	const { data: job } = useGetJobQuery(latestJobId, { skip: !latestJobId, pollingInterval })
 	const { hasPermission } = usePermission()
 	const cancellable = hasPermission('job:admin')
 		? adminCancellable
@@ -165,6 +171,12 @@ export function OrderPage() {
 
 				<aside className={styles.side}>
 					<PaymentPanel detail={detail} />
+					{job && (
+						<>
+							<GateReports gates={job.gates} />
+							<Deliverables job={job} />
+						</>
+					)}
 				</aside>
 			</div>
 		</>

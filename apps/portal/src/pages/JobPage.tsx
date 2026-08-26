@@ -43,7 +43,7 @@ export function JobPage() {
 					<JobEventLog job={job} />
 					<aside className={styles.side}>
 						<JobStatusCard job={job} />
-						<GateReports gates={job.gates} />
+						<GateReports gates={job.gates} expanded />
 						<Deliverables job={job} />
 					</aside>
 				</div>

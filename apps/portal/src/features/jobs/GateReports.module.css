@@ -49,10 +49,57 @@
 	border-left-color: var(--error);
 }
 
+.details {
+	display: flex;
+	flex-direction: column;
+	gap: var(--spacing-xxs);
+}
+
 .header {
+	cursor: pointer;
 	display: flex;
 	gap: var(--spacing-xs);
 	justify-content: space-between;
+}
+
+.headline {
+	overflow: hidden;
+
+	margin: 0;
+
+	color: var(--secondary-text-color);
+	text-overflow: ellipsis;
+	white-space: nowrap;
+}
+
+/* The collapsed row shows the first line of the summary; the open one shows all of it */
+.details[open] + .headline {
+	display: none;
+}
+
+.detailList {
+	display: flex;
+	flex-direction: column;
+	gap: var(--spacing-xxs);
+	margin: 0;
+}
+
+.detail {
+	display: grid;
+	grid-template-columns: max-content 1fr;
+	gap: var(--spacing-xs);
+}
+
+.detailKey {
+	composes: composable-caption-font from global;
+	color: var(--secondary-text-color);
+}
+
+.detailValue {
+	composes: composable-caption-font from global;
+	overflow-x: auto;
+	margin: 0;
+	white-space: pre-wrap;
 }
 
 .name {

@@ -26,11 +26,13 @@ type PaymentRowProps = {
 	kind: PaymentKind
 	priceSek: number
 	paid?: Payment
+	/** A Checkout session opened but not completed yet */
+	pending?: Payment
 	due: boolean
 	orderId: string
 }
 
-function PaymentRow({ kind, priceSek, paid, due, orderId }: PaymentRowProps) {
+function PaymentRow({ kind, priceSek, paid, pending, due, orderId }: PaymentRowProps) {
 	const { t, i18n } = useTranslation()
 	const [createCheckout, { isLoading }] = useCreateCheckoutMutation()
 	const [completeFake, { isLoading: isCompletingFake }] = useCompleteFakeCheckoutMutation()
@@ -58,9 +60,13 @@ function PaymentRow({ kind, priceSek, paid, due, orderId }: PaymentRowProps) {
 						? t('payment.paidAt', {
 								date: paid.paidAt ? new Date(paid.paidAt).toLocaleDateString(i18n.language) : '',
 							})
-						: due
-							? t('payment.due')
-							: t('payment.notYet')}
+						: pending
+							? t('payment.pending', {
+									date: new Date(pending.createdAt).toLocaleDateString(i18n.language),
+								})
+							: due
+								? t('payment.due')
+								: t('payment.notYet')}
 				</span>
 			</div>
 			<dl className={styles.amounts}>
@@ -107,8 +113,8 @@ export function PaymentPanel({ detail }: PaymentPanelProps) {
 	const { order, payments } = detail
 	if (order.priceSek === undefined) return null
 
-	const paidOf = (kind: PaymentKind) =>
-		payments.find(payment => payment.kind === kind && payment.status === 'paid')
+	const paymentOf = (kind: PaymentKind, status: Payment['status']) =>
+		payments.findLast(payment => payment.kind === kind && payment.status === status)
 
 	return (
 		<section className={styles.panel}>
@@ -120,7 +126,8 @@ export function PaymentPanel({ detail }: PaymentPanelProps) {
 						key={kind}
 						kind={kind}
 						priceSek={order.priceSek!}
-						paid={paidOf(kind)}
+						paid={paymentOf(kind, 'paid')}
+						pending={paymentOf(kind, 'pending')}
 						due={order.status === dueIn[kind]}
 						orderId={order.id}
 					/>

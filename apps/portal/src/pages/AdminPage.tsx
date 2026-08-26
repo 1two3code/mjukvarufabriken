@@ -1,7 +1,7 @@
 import styles from './AdminPage.module.css'
 
 import { useTranslation } from 'react-i18next'
-import { Navigate } from 'react-router-dom'
+import { Link, Navigate } from 'react-router-dom'
 
 import { usePermission } from '#/hooks/usePermission.ts'
 import { useGetAdminJobsQuery } from '#/features/admin/adminApiSlice.ts'
@@ -26,7 +26,10 @@ export function AdminPage() {
 	return (
 		<>
 			<h1>{t('page.admin.title')}</h1>
-			<p className={styles.intro}>{t('page.admin.intro')}</p>
+			<p className={styles.intro}>
+				{t('page.admin.intro')}{' '}
+				<Link to="/admin/resident">{t('page.admin.action.resident')}</Link>
+			</p>
 			<AdminTotals jobs={jobs} />
 			<h2 className={styles.jobsTitle}>{t('page.admin.jobsTitle')}</h2>
 			<AdminJobsTable jobs={jobs} isLoading={isLoading} isError={isError} />
