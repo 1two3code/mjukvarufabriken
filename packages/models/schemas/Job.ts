@@ -75,8 +75,17 @@ export const JobBudgetSchema = z.object({
 export type JobBudget = z.infer<typeof JobBudgetSchema>
 
 // MARK: Gates
-/** QA gates in the order they run after the last merge; the first red gate fails the job */
-export const gateName = ['verify', 'acceptance-tests', 'review', 'acceptance-check'] as const
+/**
+ * QA gates in the order they run after the last merge; the first red gate fails the job.
+ * `licence` is deterministic (no model call): dependency licences against a denylist.
+ */
+export const gateName = [
+	'verify',
+	'acceptance-tests',
+	'review',
+	'licence',
+	'acceptance-check',
+] as const
 export type GateName = (typeof gateName)[number]
 
 export const reviewSeverity = ['high', 'medium', 'low'] as const
@@ -93,6 +102,35 @@ export const ReviewFindingSchema = z.object({
 	failureScenario: z.string().min(1),
 })
 export type ReviewFinding = z.infer<typeof ReviewFindingSchema>
+
+/** One installed package as the licence gate saw it (also a row of `THIRD-PARTY-LICENCES.md`) */
+export const LicenceEntrySchema = z.object({
+	name: z.string().min(1),
+	version: z.string().min(1),
+	/** SPDX expression from `package.json`, or `UNKNOWN` when the package declares none */
+	licence: z.string().min(1),
+	repository: z.string().optional(),
+})
+export type LicenceEntry = z.infer<typeof LicenceEntrySchema>
+
+/** A package the denylist rejected; `waiverId` is what `Job.gateWaivers` must contain to accept it */
+export const LicenceViolationSchema = LicenceEntrySchema.extend({
+	waiverId: z.string().min(1),
+	reason: z.string().min(1),
+})
+export type LicenceViolation = z.infer<typeof LicenceViolationSchema>
+
+/** `GateReport.details` of the licence gate */
+export const LicenceGateDetailsSchema = z.object({
+	packages: z.number().int().nonnegative(),
+	/** Licence expression → number of packages */
+	byLicence: z.record(z.string(), z.number().int().nonnegative()),
+	violations: z.array(LicenceViolationSchema),
+	waived: z.array(LicenceViolationSchema),
+	/** Path of the generated licence list, relative to the repo root */
+	file: z.string(),
+})
+export type LicenceGateDetails = z.infer<typeof LicenceGateDetailsSchema>
 
 export const acceptanceStatus = ['met', 'unmet', 'unknown'] as const
 export type AcceptanceStatus = (typeof acceptanceStatus)[number]
@@ -144,7 +182,7 @@ export const JobSchema = z.object({
 	reason: z.string().optional(),
 	/** QA gate reports in run order (M4); absent until the first gate has run */
 	gates: z.array(GateReportSchema).optional(),
-	/** Review finding ids (`<file>:<line>`) an admin has waived for this job */
+	/** Review finding ids (`<file>:<line>`) and licence waivers (`licence:<pkg>@<version>`) an admin has waived for this job */
 	gateWaivers: z.array(z.string()).optional(),
 	/** ECS task ARN once the job runs on Fargate */
 	taskArn: z.string().optional(),
