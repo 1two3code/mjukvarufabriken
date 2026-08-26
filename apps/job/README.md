@@ -1,6 +1,13 @@
 # @mf/job — build-job container
 
-One container = one job. The entrypoint (`src/index.ts`) reads `JOB_ID`, loads the job row and its frozen spec from Postgres (`@mf/db`), seeds `/work/repo` from the golden template baked into the image (`templates/web`, `git init`, one commit), then runs the `@mf/harness` orchestrator and writes status, `tokens_used` and events back. Same code path locally and on Fargate.
+One container = one job. The entrypoint (`src/index.ts`) reads `JOB_ID`, loads the job and its frozen spec through a `JobReporter` (`src/reporter.ts`), seeds `/work/repo` from the golden template baked into the image (`templates/web`, `git init`, one commit), then runs the `@mf/harness` orchestrator and streams status, `tokens_used` and events back through the same reporter. Two implementations, one code path:
+
+| Reporter | Selected by | Used |
+|---|---|---|
+| `api` | `API_URL` + `JOB_TOKEN` (the api's `ecs:RunTask` container override) | Fargate. Talks only to `GET /internal/jobs/:id` (spec, budget, waivers, kill flag), `POST /internal/jobs/:id/events` (batch) and `PATCH /internal/jobs/:id` (status/tokens/plan/gates/urls). Bearer = a random 32-byte per-job token whose sha256 is on the row (`jobs.report_token_hash`); it can reach nothing but its own job. Retries 5xx/network errors, gives up on 4xx, sends events strictly in order |
+| `db` | `DATABASE_URL` | `npm run job:dev` and the docker compose `job` profile against the local Postgres |
+
+The container never holds a database credential on Fargate (docs/M3-REVIEW.md #18): no `DATABASE_SECRET_ARN`, no secret grant, no 5432 security-group rule. The api forwards `notify` events to `AUTH_ADMIN_EMAILS` and appends `gate` reports to `jobs.gates` on ingestion.
 
 ```
 plan (Anthropic SDK, PLAN_MODEL)          → job_events: planned {plan}
@@ -24,7 +31,7 @@ After the last merge `@mf/harness` `runGates` runs four gates in order; the firs
 | `review` | 1 read-only reviewer (structured `ReviewFinding[]`) + at most 1 fix + 1 re-review | no unwaived **high** finding open after the fix; medium/low are recorded in `details`. Finding ids are `<file>:<line>`; `jobs.gate_waivers` lists ids an admin has waived |
 | `acceptance-check` | 1 read-only session (structured `AcceptanceReport`) | every criterion id is `met` with evidence (test file + what it asserts) |
 
-On `failed`/`killed` the orchestrator also emits a `notify` event (`{ to: 'admins', subject, text }`); the api forwards it as an email once job events go through the api (TODO in `apps/api/src/services/jobService.ts`). Gate reports are meant to land on `jobs.gates` (migration `0005_jobs_gates.sql`) — the `@mf/db` mapping is pending (TODO in `src/index.ts`).
+On `failed`/`killed` the orchestrator also emits a `notify` event (`{ to: 'admins', subject, text }`); the api mails it to the admins when it ingests the event (`jobService.reportEvents`) and appends every `gate` payload to `jobs.gates` (migration `0005_jobs_gates.sql`); the final PATCH stores the full list again.
 
 ### Running only the gates on a built repo
 
@@ -40,19 +47,20 @@ Live Agent SDK sessions (needs `ANTHROPIC_API_KEY`, honours `WORKER_MODEL`); pri
 | Variable | Purpose |
 |---|---|
 | `JOB_ID` (or argv) | Job to run — set by the api's `ecs:RunTask` override or `npm run job:dev -- <id>` |
-| `DATABASE_URL` / `DATABASE_SECRET_ARN` | Postgres; the ARN is the RDS-generated secret, resolved at startup |
+| `API_URL`, `JOB_TOKEN` | Fargate: the api to report to and the per-job bearer token (RunTask override, never logged; deleted from the environment before any worker starts) |
+| `DATABASE_URL` | Local: report straight to Postgres instead |
 | `ANTHROPIC_API_KEY` / `ANTHROPIC_API_KEY_SECRET_ARN` | Model access for planner + workers |
 | `PLAN_MODEL`, `WORKER_MODEL` | Model overrides (default `claude-sonnet-5`) |
 | `WORK_DIR`, `TEMPLATE_DIR` | `/work` and `/usr/src/templates/web` in the image |
 | `HTTP_PROXY`, `HTTPS_PROXY`, `NO_PROXY`, `NODE_USE_ENV_PROXY=1` | Egress through the allowlist sidecar |
 
-No customer secrets are passed in: the container only sees the job id, the database and the Anthropic key. The database location and secret ARNs are dropped from the environment before any worker session starts (`@mf/harness` `sandboxEnv` also strips `DATABASE_*`, `*_SECRET_ARN`, `AWS_*`, `ECS_*`), so the agent's shell only inherits the Anthropic key and the proxy settings — the database credential itself is still reachable through the task role until the job reports via the api (see docs/M3-REVIEW.md #18). The job never pushes anywhere (M5 adds delivery).
+No customer secrets are passed in: the container only sees the job id, the report token (or the local database url) and the Anthropic key. The token, the database location and the secret ARNs are dropped from the environment before any worker session starts (`@mf/harness` `sandboxEnv` also strips `DATABASE_*`, `*_SECRET_ARN`, `AWS_*`, `ECS_*`), so the agent's shell only inherits the Anthropic key and the proxy settings. The task role can read the Anthropic key secret and put objects into the artifacts bucket — nothing else. The job never pushes anywhere (M5 adds delivery).
 
 ## Budget, kill switch, egress
 
 - **Budget**: every planner/worker/merge message's usage is summed in one `BudgetTracker`; crossing `budget.maxTokens` (or `maxDurationMinutes`) aborts every in-flight session via a shared `AbortController` and the job ends `failed` with reason `budget exceeded`. `tokens_used` is persisted after every task and merge.
-- **Kill switch**: `POST /bff/admin/jobs/:jobId/kill` sets `jobs.status = 'killed'` and calls `ecs:StopTask` when a task ARN is stored. The orchestrator also polls the row every 10 s and aborts itself, so a kill works even if StopTask lags.
-- **Egress allowlist**: `proxy/` builds a tinyproxy sidecar (`FilterDefaultDeny`, see `proxy/filter`: npm, GitHub, Anthropic). On Fargate it runs in the same task; the job container gets `HTTP_PROXY`/`HTTPS_PROXY` pointing at `localhost:8888`, `NO_PROXY` for the ECS credential endpoint + AWS APIs, and the job security group allows only 443/80 out plus 5432 to the database. Note: Fargate sidecars share the task ENI, so the security group cannot distinguish proxy traffic from a process that ignores `HTTPS_PROXY`; a hard network fence needs a proxy in its own task/SG (see TODO-EXTERNAL.md). Locally, docker compose puts the job on an `internal` network where only the proxy has internet, which *is* a hard fence — that is where the allowlist is verified.
+- **Kill switch**: `POST /bff/admin/jobs/:jobId/kill` sets `jobs.status = 'killed'` and calls `ecs:StopTask` when a task ARN is stored. The orchestrator also polls `GET /internal/jobs/:id` (`killed`) every 10 s and aborts itself, so a kill works even if StopTask lags; a status PATCH answered with `killed: true` short-circuits the next poll.
+- **Egress allowlist**: `proxy/` builds a tinyproxy sidecar (`FilterDefaultDeny`, see `proxy/filter`: npm, GitHub, Anthropic). On Fargate it runs in the same task; the job container gets `HTTP_PROXY`/`HTTPS_PROXY` pointing at `localhost:8888`, `NO_PROXY` for the ECS credential endpoint, Secrets Manager, the artifacts bucket and the api host (the api appends its own host via the RunTask override, `JOB_NO_PROXY`), and the job security group allows only 443/80 out — no database rule. Note: Fargate sidecars share the task ENI, so the security group cannot distinguish proxy traffic from a process that ignores `HTTPS_PROXY`; a hard network fence needs a proxy in its own task/SG (see TODO-EXTERNAL.md). Locally, docker compose puts the job on an `internal` network where only the proxy has internet, which *is* a hard fence — that is where the allowlist is verified.
 
 ## Local runs
 
