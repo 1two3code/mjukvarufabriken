@@ -22,7 +22,7 @@ plan (Anthropic SDK, PLAN_MODEL)          → job_events: planned {plan}
 | `WORK_DIR`, `TEMPLATE_DIR` | `/work` and `/usr/src/templates/web` in the image |
 | `HTTP_PROXY`, `HTTPS_PROXY`, `NO_PROXY`, `NODE_USE_ENV_PROXY=1` | Egress through the allowlist sidecar |
 
-No customer secrets are passed in: the container only sees the job id, the database and the Anthropic key. The job never pushes anywhere (M5 adds delivery).
+No customer secrets are passed in: the container only sees the job id, the database and the Anthropic key. The database location and secret ARNs are dropped from the environment before any worker session starts (`@mf/harness` `sandboxEnv` also strips `DATABASE_*`, `*_SECRET_ARN`, `AWS_*`, `ECS_*`), so the agent's shell only inherits the Anthropic key and the proxy settings — the database credential itself is still reachable through the task role until the job reports via the api (see docs/M3-REVIEW.md #18). The job never pushes anywhere (M5 adds delivery).
 
 ## Budget, kill switch, egress
 

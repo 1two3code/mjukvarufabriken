@@ -11,9 +11,10 @@ export default defineConfig({
 				'packages/utils/src/**/*.ts',
 				'packages/harness/src/**/*.ts',
 				'packages/db/src/**/*.ts',
+				'apps/job/src/**/*.ts',
 			],
 			exclude: ['**/*index.ts', '**/*server.ts', '**/*types.ts', '**/__mocks__/*'],
 		},
-		projects: ['apps/api', 'packages/utils', 'packages/harness', 'packages/db'],
+		projects: ['apps/api', 'apps/job', 'packages/utils', 'packages/harness', 'packages/db'],
 	},
 })

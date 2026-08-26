@@ -44,6 +44,9 @@ export const seedRepo = async (templateDir: string, workDir: string, jobId: stri
 	await mkdir(workDir, { recursive: true })
 	await cp(templateDir, repoDir, {
 		recursive: true,
+		// Keep workspace symlinks (node_modules/@template/* -> ../../packages/*) relative; the
+		// default rewrites them to absolute paths into the immutable template
+		verbatimSymlinks: true,
 		// Skip only a nested .git directory — not .gitignore and friends
 		filter: source => source !== gitDir && !source.startsWith(`${gitDir}/`),
 	})
