@@ -45,6 +45,7 @@ Everything that needs someone else's approval lives in TODO-EXTERNAL.md and is N
 - [x] Progress events streamed to DB (portal shows them live) — 2026-08-26 (`@mf/db` postgres driver + `migrate` + job repositories, `0002_jobs_task_arn`; api `db`/`ecs` plugins + `jobService` + 6 routes, 30 api tests; portal `/orders/:orderId/job` polls `events?after=` every 3 s, Start build on frozen spec, admin kill button)
 
 ### M4 — QA gates
+- [ ] M3 hardening: the job reports status/events/usage to the api over an authenticated per-job endpoint instead of holding the RDS master secret (remove `DATABASE_SECRET_ARN` grant + job↔DB SG rule; docs/M3-REVIEW.md #18)
 - [ ] Tests generated from acceptance criteria and must pass
 - [ ] Independent review agent (correctness + security), findings must be fixed or waived
 - [ ] Acceptance-check agent: every criterion mapped to evidence
@@ -75,6 +76,7 @@ Everything that needs someone else's approval lives in TODO-EXTERNAL.md and is N
 - [ ] Logs + alerts: token burn per job, failed jobs, cost anomalies
 - [ ] Backups (RDS automated), incident runbook
 - [ ] Security baseline: secrets in Secrets Manager, least-privilege IAM, dependency scanning
+- [ ] RDS TLS `verify-full` by default with the RDS CA bundle in the api/job images (`DATABASE_SSL`, docs/M3-REVIEW.md #12)
 
 ### M10 — Proof
 - [ ] Dogfood: 3 internal apps built end-to-end from spec, results logged in TOKENS.md

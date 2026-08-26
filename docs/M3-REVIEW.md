@@ -1,11 +1,11 @@
 # M3 review findings (2026-08-26)
 
-Produced by a 25-agent review workflow over `1afdb0f..f2683f4` (5 area reviewers, one independent refuter per finding; 20 confirmed, 0 refuted). Status column is maintained by hand.
+Produced by a 25-agent review workflow over `1afdb0f..f2683f4` (5 area reviewers, one independent refuter per finding; 20 confirmed, 0 refuted). Status column is maintained by hand. Findings 11 and 17 are the same non-uuid id issue seen from db and api; both are closed by the repository guard.
 
 ## 1. [high] mergeTask/verify rejections escape runJob: no terminal event, job row stuck, poll interval leaked
 
 - Area: harness — `packages/harness/src/job/orchestrator.ts:80`
-- Status: open
+- Status: fixed (2c119e1)
 
 **Claim.** `ports.mergeTask` (line 80) and `ports.verify` (line 182) are not wrapped in try/catch, unlike `ports.runTask`. `mergeTask` throws whenever `git checkout main` fails (`git()` = execOrThrow) or when the budget/kill abort fires while a git `exec` with `signal` is in flight (spawn emits AbortError → exec rejects). The rejection poisons `mergeQueue` (every later `.then` chain is skipped), rejects the task's `run` promise, and `await Promise.race(...)` at line 164 rethrows it out of `runJob`, bypassing `finish()` — so `clearInterval(poll)` never runs, no `failed`/`killed` event is emitted, `onTokens` is not persisted, and in apps/job the top-level `await runJob` becomes an unhandled rejection with no `updateJob(status: 'failed'|'killed')`.
 
@@ -16,7 +16,7 @@ Produced by a 25-agent review workflow over `1afdb0f..f2683f4` (5 area reviewers
 ## 2. [medium] Merge repair commits files that still contain conflict markers once the agent has `git add`ed them
 
 - Area: harness — `packages/harness/src/job/merge.ts:97`
-- Status: open
+- Status: fixed (2c119e1)
 
 **Claim.** After the repair session the only check is `conflictedFiles()` (`git diff --diff-filter=U`), which lists a file only while it is unmerged in the index. As soon as the agent runs `git add` on a file (which the prompt instructs it to do) it is no longer `U`, regardless of whether `<<<<<<<`/`>>>>>>>` markers remain. Line 106 then `git add -A`s and commits the merge into main. The docstring claims a still-conflicted merge is aborted; it is not. The final lint/test only catches markers in linted TS files, not in JSON/MD/CSS/config files.
 
@@ -32,7 +32,7 @@ and add a merge.test.ts case where the fake session writes markers then `git add
 ## 3. [low] Planner HTTP call ignores the abort signal, so budget/kill/wall-clock cannot cancel it
 
 - Area: harness — `packages/harness/src/job/planner.ts:154`
-- Status: open
+- Status: fixed (2c119e1)
 
 **Claim.** `call()` only checks `signal?.aborted` before issuing the request; `client.messages.create` is not passed `{ signal }` as a request option, so an in-flight planning call (up to 16k output tokens, and a retry) keeps running after `BudgetTracker.abort()`. The brief requires aborting all in-flight model calls on budget breach/kill.
 
@@ -43,7 +43,7 @@ and add a merge.test.ts case where the fake session writes markers then `git add
 ## 4. [high] seedRepo rewrites workspace symlinks to absolute paths into the immutable template
 
 - Area: job-container — `apps/job/src/repo.ts:44`
-- Status: open
+- Status: fixed (2c48548)
 
 **Claim.** `fs.cp(templateDir, repoDir, { recursive: true })` uses the default `verbatimSymlinks: false`, which resolves relative symlink targets against the SOURCE and writes them absolute. Verified on Node 24.15: a `node_modules/@t/m -> ../../packages/m` link in the source becomes `/abs/path/to/src/packages/m` in the copy. Because the image pre-installs `templates/web/node_modules` (so `npm i` in the seeded repo is skipped), `/work/repo/node_modules/@template/{models,utils,access-control,api,app}` all point at `/usr/src/templates/web/...`, not at the seeded repo. `shareNodeModules` (`cp -al`) then propagates the same absolute links into every worktree, contradicting its own comment that workspace symlinks are relative.
 
@@ -60,7 +60,7 @@ await cp(templateDir, repoDir, {
 ## 5. [high] docker compose: job container cannot reach postgres (different networks)
 
 - Area: job-container — `docker-compose.yml:40`
-- Status: open
+- Status: fixed (2c48548)
 
 **Claim.** `job` declares `networks: [internal]`, while `postgres` declares no `networks:` and therefore joins only the implicit `default` network. Compose services on disjoint networks have no connectivity or DNS for each other, so `DATABASE_URL: postgres://mf:mf@postgres:5432/mf` is unresolvable from the job container. `depends_on: condition: service_healthy` still passes because it only checks the postgres container's health.
 
@@ -78,7 +78,7 @@ await cp(templateDir, repoDir, {
 ## 6. [high] Any throw after status='planning' leaves the job stuck in an active status forever
 
 - Area: job-container — `apps/job/src/index.ts:50`
-- Status: open
+- Status: fixed (2c48548)
 
 **Claim.** The entrypoint sets `status: 'planning'` and then runs `seedRepo`, `createLivePorts`, `runJob` and the final `updateJob` as bare top-level awaits with no try/catch. `seedRepo` throws on any git/cp failure or `npm i` non-zero exit; `runJob` itself can throw (e.g. `emit` failures are swallowed, but `ports.verify`, `ports.mergeTask` and `budget`/DB errors in `finish` are not). An unhandled rejection exits the process with code 1 without writing `failed`/`finishedAt`/`reason`.
 
@@ -115,7 +115,7 @@ Optionally also add an api-side reconciliation (e.g. on job read, if status is a
 ## 7. [medium] Database credentials and AWS task-role access are exposed to the model-driven worker shell
 
 - Area: job-container — `docker-compose.yml:43`
-- Status: open
+- Status: fixed (2c119e1 + 2c48548)
 
 **Claim.** The job container receives `DATABASE_URL` (compose) or `DATABASE_SECRET_ARN` + `AWS_CONTAINER_CREDENTIALS_RELATIVE_URI` (Fargate, endpoint 169.254.170.2 deliberately in NO_PROXY), and `index.ts` also copies the Anthropic key into `process.env`. `@mf/harness` runs the Agent SDK with `env: { ...process.env, ... }` and `exec` spawns with `{ ...process.env }`, so the Claude Code `Bash` tool inside each worker session inherits all of it. The worker's prompt is built from the customer-authored spec, so this is a prompt-injection-to-credential path, not just a trusted-operator concern. The README's claim that the container 'only sees the job id, the database and the Anthropic key' understates it: the agent sees them too, and the Fargate task role also reads the `github-token` secret and writes the artifacts bucket.
 
@@ -126,7 +126,7 @@ Optionally also add an api-side reconciliation (e.g. on job read, if status is a
 ## 8. [low] Final status write can overwrite an operator kill with delivered/failed
 
 - Area: job-container — `apps/job/src/index.ts:84`
-- Status: open
+- Status: fixed (2c48548 + 694b67f)
 
 **Claim.** The kill switch is detected only by a 10 s poll; the entrypoint unconditionally writes `status: outcome.status` at the end. If the api flips the row to `killed` after the last poll but before the final `updateJob`, the row ends as `delivered` (or `failed`) and the `killed` state is lost, even though `POST /admin/jobs/:id/kill` reported success.
 
@@ -137,7 +137,7 @@ Optionally also add an api-side reconciliation (e.g. on job read, if status is a
 ## 9. [medium] updateJob overwrites terminal 'killed' status, defeating the kill switch
 
 - Area: db — `packages/db/src/jobs.ts:138`
-- Status: open
+- Status: fixed (694b67f + 2c48548)
 
 **Claim.** updateJob applies `update jobs set ... where id = $1` with no status guard, so any later status write from the build task silently replaces a terminal status. The job process (apps/job/src/index.ts) calls updateJob with status 'building'/'verifying' from trackPhase and with outcome.status at the end, unconditionally, while the admin kill path (apps/api/src/services/jobService.ts:112) sets status 'killed' concurrently. isKilled only polls every 10s and the only signal is `status === 'killed'`.
 
@@ -148,7 +148,7 @@ Optionally also add an api-side reconciliation (e.g. on job read, if status is a
 ## 10. [medium] migrate has no cross-process lock; concurrent runners race and one crashes
 
 - Area: db — `packages/db/src/migrate.ts:23`
-- Status: open
+- Status: fixed (694b67f)
 
 **Claim.** migrate reads schema_migrations outside any lock, then applies each pending file in its own transaction. It is invoked at boot by every api task (desiredCount 2 in live, plus rolling deploys) and by every job task (apps/job/src/index.ts:26). Two processes that both see a file as pending both execute it; the loser fails with duplicate key on schema_migrations (or, for `create extension/table if not exists`, the well-known pg_type unique violation) and the whole run throws.
 
@@ -183,7 +183,7 @@ export const migrate = async (db, dir = migrationsDir) => {
 ## 11. [low] getJob/updateJob/listEvents throw on non-UUID ids instead of returning not-found
 
 - Area: db — `packages/db/src/jobs.ts:97`
-- Status: open
+- Status: fixed (694b67f)
 
 **Claim.** jobs.id and job_events.job_id are uuid columns; the repository passes the caller-supplied id straight in as a parameter, so a syntactically invalid id makes Postgres raise 22P02 ('invalid input syntax for type uuid') rather than returning zero rows. The api routes validate jobId only as z.string() (apps/api/src/routes/bff/jobs/getJobEvents.ts:12) and map non-EntityNotFound errors to 500.
 
@@ -194,7 +194,8 @@ export const migrate = async (db, dir = migrationsDir) => {
 ## 12. [low] Non-local connections use ssl 'require' which skips server certificate verification
 
 - Area: db — `packages/db/src/index.ts:43`
-- Status: open
+- Status: deferred
+- Deferred: needs the RDS CA bundle in the api/job images (or `NODE_EXTRA_CA_CERTS`) before `verify-full` can be the default — tracked under M9 in PLAN.md; `DATABASE_SSL=verify-full` remains available as an override.
 
 **Claim.** sslMode returns 'require' for every non-local host; in postgres.js 'require' maps to tls.connect with rejectUnauthorized:false, so the connection is encrypted but the RDS endpoint is never authenticated. The RDS credential is sent in the startup handshake over that unauthenticated channel. The code comments this as an M9 follow-up, but the default is exploitable today.
 
@@ -205,7 +206,7 @@ export const migrate = async (db, dir = migrationsDir) => {
 ## 13. [high] start() never checks the order belongs to the caller's org
 
 - Area: api — `apps/api/src/services/jobService.ts:66`
-- Status: open
+- Status: fixed (64e19ac)
 
 **Claim.** `start` only checks that the spec draft for `orderId` is frozen; it never verifies the order/spec belongs to `session.orgId`. Any authenticated `user` (job:write is in the default user role) can start a real Fargate build — spending up to 15M tokens of budget — against any other org's frozen order by guessing/knowing its id, and the resulting job is tagged with the attacker's orgId so the victim never sees it in `listForOrder`. `listForOrder`/`get` are org-scoped on the job row, but the write path is not, and the brief requires 'org-scoped via the order'.
 
@@ -216,7 +217,7 @@ export const migrate = async (db, dir = migrationsDir) => {
 ## 14. [medium] Double-start race: two concurrent POSTs create two active jobs and two Fargate tasks
 
 - Area: api — `apps/api/src/services/jobService.ts:71`
-- Status: open
+- Status: fixed (694b67f + 64e19ac)
 
 **Claim.** The 'one active job per order' rule is enforced as a read (`list`) followed by an `insert` with no transaction, row lock, or partial unique index on `jobs(order_id) where status in (active)`. Two overlapping requests both pass the check and both insert + RunTask.
 
@@ -227,7 +228,7 @@ export const migrate = async (db, dir = migrationsDir) => {
 ## 15. [medium] Migration failure is swallowed; api reports healthy with `db.available: true` and every job route 500s
 
 - Area: api — `apps/api/src/plugins/db.ts:94`
-- Status: open
+- Status: fixed (64e19ac)
 
 **Claim.** If `migrate` throws (bad SQL in a new migration, permission error, or the duplicate-DDL error that occurs when the two live tasks run migrate concurrently with no advisory lock), the plugin logs a warn and still decorates `db` as available. `/health` does not check the db, so the ECS deploy is marked healthy while `jobs` table columns may be missing and all job routes return 500 until someone reads logs.
 
@@ -238,7 +239,7 @@ export const migrate = async (db, dir = migrationsDir) => {
 ## 16. [low] ecs:RunTask returning no task and no failure leaves the job stuck 'queued' forever
 
 - Area: api — `apps/api/src/plugins/ecs.ts:68`
-- Status: open
+- Status: fixed (64e19ac)
 
 **Claim.** `runJob` returns `undefined` when `result.tasks` is empty and `failures` is empty (ECS can return an empty response e.g. on capacity/throttle edge cases); `start` then returns the job as-is with status `queued` and no taskArn, no failure event, and no log line. Nothing will ever run it, and the order is blocked by JobAlreadyActive until an admin kills it.
 
@@ -249,7 +250,7 @@ export const migrate = async (db, dir = migrationsDir) => {
 ## 17. [low] Non-UUID jobId yields 500 instead of 404 on job/event/kill routes
 
 - Area: api — `apps/api/src/routes/bff/jobs/getJob.ts:11`
-- Status: open
+- Status: fixed (694b67f)
 
 **Claim.** `params.jobId` is `z.string()` but `jobs.id`/`job_events.job_id` are uuid columns; postgres throws `invalid input syntax for type uuid` which is not an EntityNotFound, so the route returns 500 (same in getJobEvents.ts and admin/jobs/killJob.ts).
 
@@ -260,7 +261,8 @@ export const migrate = async (db, dir = migrationsDir) => {
 ## 18. [high] Master RDS credentials handed to the sandbox that runs untrusted agent code with bypassPermissions
 
 - Area: infra — `infra/lib/resources-stack.ts:238`
-- Status: open
+- Status: deferred
+- Deferred: the right fix is for the job to report status/events/usage via an authenticated api endpoint (per-job token in the RunTask override) so the task role needs no DB secret at all — tracked as "M3 hardening" under M4 in PLAN.md. Mitigated meanwhile by #7 (DB env scrubbed from worker sessions) and #20 (no GitHub token in the task).
 
 **Claim.** `this.databaseSecret.grantRead(jobTaskDefinition.taskRole)` plus `DATABASE_SECRET_ARN` in the job container env gives the sandbox the RDS master user (`mf`, owner of every table: orgs, users, orders, specs, jobs) — while the same container runs `@anthropic-ai/claude-agent-sdk` workers with `Bash` and `permissionMode: 'bypassPermissions'` (packages/harness/src/job/worker.ts:179-181) and executes the customer repo's `npm test`/`npm run lint`. The comment 'no customer secrets inside the sandbox' is no longer true: the secret is reachable both via the env var and via Secrets Manager (which bypasses the proxy through NO_PROXY `.amazonaws.com`), and the SG explicitly allows 5432 to the DB.
 
@@ -271,7 +273,7 @@ export const migrate = async (db, dir = migrationsDir) => {
 ## 19. [medium] NO_PROXY `.amazonaws.com` + 443-to-anywhere SG makes the egress allowlist bypassable through any AWS-hosted endpoint
 
 - Area: infra — `infra/lib/resources-stack.ts:229`
-- Status: open
+- Status: fixed (41429d8)
 
 **Claim.** The job container is told to skip the allowlist proxy for every `*.amazonaws.com` host, and the job security group permits TCP 443 to 0.0.0.0/0. The tinyproxy allowlist therefore never sees traffic to S3 (`*.s3.amazonaws.com`, presigned PUTs to any bucket), API Gateway (`*.execute-api.<region>.amazonaws.com`), Lambda function URLs, CloudFront-less ALBs (`*.elb.amazonaws.com`), etc. — all of which anyone can provision. This is a bypass even for well-behaved clients that honour HTTPS_PROXY, distinct from the documented 'shared ENI' caveat, and the comment 'everything else must pass the allowlist' is wrong.
 
@@ -284,7 +286,7 @@ NO_PROXY: `127.0.0.1,localhost,169.254.170.2,169.254.169.254,secretsmanager.${th
 ## 20. [medium] github-token secret granted to and advertised in the job task although the job never reads it
 
 - Area: infra — `infra/lib/resources-stack.ts:240`
-- Status: open
+- Status: fixed (41429d8)
 
 **Claim.** `this.secrets['github-token'].grantRead(taskRole)` and env `GITHUB_TOKEN_SECRET_ARN` remain in the task definition, but nothing in apps/job (`src/config.ts` only resolves DATABASE_SECRET_ARN and ANTHROPIC_API_KEY_SECRET_ARN) or packages/harness/src/job uses it; the README states the job 'never pushes anywhere (M5 adds delivery)'. This is an unused, org-level credential readable from a container executing untrusted code, with `github.com`/`api.github.com` on the proxy allowlist.
 
