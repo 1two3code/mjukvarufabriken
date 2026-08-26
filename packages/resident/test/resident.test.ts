@@ -52,8 +52,9 @@ const createFakePorts = ({ taskTokens = 1000, fail, hold = false }: FakePortOpti
 				])
 			}
 			onUsage({ inputTokens: taskTokens, outputTokens: 0 })
-			if (fail === 'task')
+			if (fail === 'task') {
 				return { ok: false, tokens: taskTokens, branch: `task/${task.id}`, reason: 'boom' }
+			}
 			return { ok: true, tokens: taskTokens, branch: `task/${task.id}` }
 		}),
 		mergeTask: vi.fn(async () => ({ ok: true, tokens: 0 })),
