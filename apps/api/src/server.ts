@@ -5,11 +5,15 @@ import cors from '@fastify/cors'
 import accessControlPlugin from '#/plugins/accessControl.ts'
 import anthropicPlugin from '#/plugins/anthropic.ts'
 import authPlugin from '#/plugins/auth.ts'
+import authKeysPlugin from '#/plugins/authKeys.ts'
+import emailPlugin from '#/plugins/email.ts'
 import errorHandlingPlugin from '#/plugins/errorHandling.ts'
 import secretsPlugin from '#/plugins/secrets.ts'
 import storePlugin from '#/plugins/store.ts'
+import authService from '#/services/authService.ts'
 import itemService from '#/services/itemService.ts'
 import specService from '#/services/specService.ts'
+import userService from '#/services/userService.ts'
 
 import type { FastifyInstance, LogLevel } from 'fastify'
 
@@ -42,10 +46,14 @@ export async function createServer({ logLevel }: Options = {}): Promise<FastifyI
 		.register(secretsPlugin)
 		.register(storePlugin)
 		.register(anthropicPlugin)
+		.register(authKeysPlugin)
+		.register(emailPlugin)
 
 		// Services
 		.register(itemService)
 		.register(specService)
+		.register(userService)
+		.register(authService)
 
 		// Request plugins
 		.register(errorHandlingPlugin)

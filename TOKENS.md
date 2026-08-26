@@ -15,3 +15,4 @@ Format: date | milestone | session tokens (in/out) | notes
 | 2026-08-26 | M1 prod-bundle fix | ~40k | ~5k | sessionSlice import cycle broke SPAs in prod; fixed in site/portal/template, verified headless |
 | 2026-08-26 | M2 spec engine | ~190k | ~35k | subagent: models Spec schema, harness engine + estimator (17 tests), api plugins/service/routes (+17 tests → 73), portal spec page sv/en; lint + 110 tests + build + smoke green; live model unverified (key empty) |
 | 2026-08-26 | M2 spec engine | ~190k | ~25k | subagent: models/harness/api/portal, 110 tests; infra secret wiring + dev deploy |
+| 2026-08-26 | M6 magic-link auth (pulled forward) | ~250k | ~45k | subagent: models User/Org/Auth.api, api authKeys/email/auth plugins + user/auth services + 5 routes (123 api tests, 160 total), portal login/callback/header sv+en, infra secret + SES + config; lint + build + smoke + synth green |

@@ -14,11 +14,21 @@ declare module 'fastify' {
 }
 
 /**
- * Collections in use. `specs` is keyed by orderId and holds `SpecDraft`s (M2).
- * TODO(M3/M6): back this with Postgres — see packages/db/migrations (add a `specs` table
- * or a jsonb column on `orders`) and swap this plugin for the @mf/db client.
+ * Collections in use. `specs` is keyed by orderId and holds `SpecDraft`s (M2). `users`, `orgs`,
+ * `magicLinks` (keyed by token hash) and `refreshTokens` (keyed by token hash) back the
+ * magic-link auth (M6, pulled forward).
+ * TODO(M3/M6): back this with Postgres — see packages/db/migrations (tables for orgs, users,
+ * magic_links, refresh_tokens, and a `specs` table or a jsonb column on `orders`) and swap
+ * this plugin for the @mf/db client. Until then everything is lost on restart.
  */
-export const storeCollections = { items: 'items', specs: 'specs' } as const
+export const storeCollections = {
+	items: 'items',
+	specs: 'specs',
+	users: 'users',
+	orgs: 'orgs',
+	magicLinks: 'magicLinks',
+	refreshTokens: 'refreshTokens',
+} as const
 
 /**
  * In-memory key/value store keyed by collection. It exists so the api runs without

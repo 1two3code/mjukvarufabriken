@@ -3,17 +3,35 @@ import { GetSecretValueCommand, SecretsManagerClient } from '@aws-sdk/client-sec
 
 import type { FastifyPluginAsync } from 'fastify'
 
+export const emailTransports = ['ses', 'log'] as const
+export type EmailTransport = (typeof emailTransports)[number]
+
 declare module 'fastify' {
 	interface FastifyInstance {
 		secrets: {
+			/** Deployment environment (`ENV`): `dev`, `live` or `local` */
+			env: string
 			/** Public URL of the SPA, used for CORS */
 			appUrl: string
-			/** JWKS endpoint of the identity provider */
-			authJwksUrl: string
-			/** Expected `iss` claim */
+			/** Public URL of the customer portal — magic links point here (`PORTAL_URL`) */
+			portalUrl: string
+			/** `iss` claim of tokens minted by this api and expected on incoming tokens (`AUTH_ISSUER`) */
 			authIssuer: string
-			/** Expected `aud` claim */
+			/** Expected `aud` claim (`AUTH_AUDIENCE`) */
 			authAudience: string
+			/**
+			 * Ed25519 private key as a JSON JWK string for signing access tokens. From
+			 * `AUTH_JWT_PRIVATE_KEY`, or resolved from Secrets Manager via
+			 * `AUTH_JWT_PRIVATE_KEY_SECRET_ARN`. Undefined → the `authKeys` plugin generates an
+			 * ephemeral key pair (dev convenience).
+			 */
+			authJwtPrivateKey?: string
+			/** Emails that sign in as `admin` (`AUTH_ADMIN_EMAILS`, comma-separated, lower-cased) */
+			authAdminEmails: string[]
+			/** How outgoing email is delivered (`EMAIL_TRANSPORT`): `ses`, or `log` (default outside live) */
+			emailTransport: EmailTransport
+			/** Sender address for outgoing email (`AUTH_EMAIL_FROM`) */
+			emailFrom: string
 			/**
 			 * Anthropic API key for the spec engine. From `ANTHROPIC_API_KEY`, or resolved from
 			 * Secrets Manager via `ANTHROPIC_API_KEY_SECRET_ARN` at startup. Undefined when neither
@@ -37,23 +55,41 @@ declare module 'fastify' {
 	}
 }
 
-const required = ['AUTH_JWKS_URL', 'AUTH_ISSUER', 'AUTH_AUDIENCE'] as const
+const required = ['AUTH_AUDIENCE'] as const
 
 /**
  * Secrets Manager values are either the raw string or a JSON object with a single key
- * (the CDK placeholders are created that way). Returns undefined for empty placeholders.
+ * (the CDK placeholders are created that way). Multi-key JSON (e.g. a JWK) is returned as-is.
+ * Returns undefined for empty placeholders.
  */
-const parseSecretString = (value: string | undefined) => {
+export const parseSecretString = (value: string | undefined) => {
 	const trimmed = value?.trim()
 	if (!trimmed) return undefined
 	if (!trimmed.startsWith('{')) return trimmed
 	try {
 		const parsed = JSON.parse(trimmed) as Record<string, unknown>
-		const first = Object.values(parsed).find(entry => typeof entry === 'string' && entry.trim())
-		return typeof first === 'string' ? first.trim() : undefined
+		const entries = Object.values(parsed)
+		if (entries.length !== 1) return trimmed
+		const [first] = entries
+		return typeof first === 'string' && first.trim() ? first.trim() : undefined
 	} catch {
 		return trimmed
 	}
+}
+
+const parseList = (value: string | undefined) =>
+	value
+		?.split(',')
+		.map(entry => entry.trim().toLowerCase())
+		.filter(Boolean) ?? []
+
+const isEmailTransport = (value: unknown): value is EmailTransport =>
+	typeof value === 'string' && (emailTransports as readonly string[]).includes(value)
+
+const parseEmailTransport = (value: string | undefined, env: string): EmailTransport => {
+	if (isEmailTransport(value)) return value
+	if (value) throw new Error(`EMAIL_TRANSPORT must be one of: ${emailTransports.join(', ')}`)
+	return env === 'live' ? 'ses' : 'log'
 }
 
 /**
@@ -84,11 +120,23 @@ const plugin: FastifyPluginAsync = async app => {
 		}
 	}
 
+	const env = process.env.ENV || 'local'
+	const appUrl = process.env.APP_URL || 'http://localhost:5173'
+	const port = process.env.PORT || '5174'
+
 	app.decorate('secrets', {
-		appUrl: process.env.APP_URL ?? 'http://localhost:5173',
-		authJwksUrl: process.env.AUTH_JWKS_URL!,
-		authIssuer: process.env.AUTH_ISSUER!,
+		env,
+		appUrl,
+		portalUrl: process.env.PORTAL_URL || appUrl,
+		authIssuer: process.env.AUTH_ISSUER || `http://localhost:${port}`,
 		authAudience: process.env.AUTH_AUDIENCE!,
+		authJwtPrivateKey: await resolveSecret(
+			'AUTH_JWT_PRIVATE_KEY',
+			'AUTH_JWT_PRIVATE_KEY_SECRET_ARN'
+		),
+		authAdminEmails: parseList(process.env.AUTH_ADMIN_EMAILS),
+		emailTransport: parseEmailTransport(process.env.EMAIL_TRANSPORT, env),
+		emailFrom: process.env.AUTH_EMAIL_FROM || 'noreply@mjukvaruhuset.se',
 		anthropicApiKey: await resolveSecret('ANTHROPIC_API_KEY', 'ANTHROPIC_API_KEY_SECRET_ARN'),
 		specModel: process.env.SPEC_MODEL || undefined,
 		infra: {

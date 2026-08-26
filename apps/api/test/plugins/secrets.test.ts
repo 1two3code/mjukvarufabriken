@@ -11,11 +11,14 @@ vi.mock('@aws-sdk/client-secrets-manager', () => ({
 }))
 
 const stubRequiredEnv = () => {
-	vi.stubEnv('AUTH_JWKS_URL', 'https://auth.example.com/jwks')
-	vi.stubEnv('AUTH_ISSUER', 'https://auth.example.com')
+	vi.stubEnv('AUTH_ISSUER', 'https://api.example.com')
 	vi.stubEnv('AUTH_AUDIENCE', 'audience')
 	vi.stubEnv('ANTHROPIC_API_KEY', '')
 	vi.stubEnv('ANTHROPIC_API_KEY_SECRET_ARN', '')
+	vi.stubEnv('AUTH_JWT_PRIVATE_KEY', '')
+	vi.stubEnv('AUTH_JWT_PRIVATE_KEY_SECRET_ARN', '')
+	vi.stubEnv('ENV', '')
+	vi.stubEnv('EMAIL_TRANSPORT', '')
 }
 
 describe('Secrets plugin (secrets)', () => {
@@ -35,16 +38,26 @@ describe('Secrets plugin (secrets)', () => {
 		vi.stubEnv('JOB_SUBNET_IDS', 'subnet-a,subnet-b')
 		vi.stubEnv('ANTHROPIC_API_KEY', 'sk-ant-env')
 		vi.stubEnv('SPEC_MODEL', 'claude-opus-5')
+		vi.stubEnv('ENV', 'dev')
+		vi.stubEnv('PORTAL_URL', 'https://portal.example.com')
+		vi.stubEnv('AUTH_ADMIN_EMAILS', 'Hasse@Example.com, anna@example.com,')
+		vi.stubEnv('AUTH_JWT_PRIVATE_KEY', '{"kty":"OKP"}')
+		vi.stubEnv('AUTH_EMAIL_FROM', 'hello@example.com')
 
 		// Act
 		const app = await createTestApp({ skipMock: '#/plugins/secrets.ts' })
 
 		// Assert
 		expect(app.secrets).toEqual({
+			env: 'dev',
 			appUrl: 'https://app.example.com',
-			authJwksUrl: 'https://auth.example.com/jwks',
-			authIssuer: 'https://auth.example.com',
+			portalUrl: 'https://portal.example.com',
+			authIssuer: 'https://api.example.com',
 			authAudience: 'audience',
+			authJwtPrivateKey: '{"kty":"OKP"}',
+			authAdminEmails: ['hasse@example.com', 'anna@example.com'],
+			emailTransport: 'log',
+			emailFrom: 'hello@example.com',
 			anthropicApiKey: 'sk-ant-env',
 			specModel: 'claude-opus-5',
 			infra: expect.objectContaining({
@@ -57,14 +70,63 @@ describe('Secrets plugin (secrets)', () => {
 
 	it('Throws when required environment variables are missing', async () => {
 		// Arrange
-		vi.stubEnv('AUTH_JWKS_URL', '')
-		vi.stubEnv('AUTH_ISSUER', 'https://auth.example.com')
 		vi.stubEnv('AUTH_AUDIENCE', '')
 
 		// Act & Assert
 		await expect(createTestApp({ skipMock: '#/plugins/secrets.ts' })).rejects.toThrow(
-			'Missing required environment variables: AUTH_JWKS_URL, AUTH_AUDIENCE'
+			'Missing required environment variables: AUTH_AUDIENCE'
 		)
+	})
+
+	it('Defaults the issuer, portal url, email settings and admin list', async () => {
+		// Arrange
+		stubRequiredEnv()
+		vi.stubEnv('AUTH_ISSUER', '')
+		vi.stubEnv('PORTAL_URL', '')
+		vi.stubEnv('APP_URL', '')
+		vi.stubEnv('PORT', '')
+		vi.stubEnv('AUTH_ADMIN_EMAILS', '')
+		vi.stubEnv('AUTH_EMAIL_FROM', '')
+
+		// Act
+		const app = await createTestApp({ skipMock: '#/plugins/secrets.ts' })
+
+		// Assert
+		expect(app.secrets).toMatchObject({
+			env: 'local',
+			portalUrl: 'http://localhost:5173',
+			authIssuer: 'http://localhost:5174',
+			authAdminEmails: [],
+			emailTransport: 'log',
+			emailFrom: 'noreply@mjukvaruhuset.se',
+		})
+	})
+
+	it('Defaults the email transport to ses in live', async () => {
+		// Arrange
+		stubRequiredEnv()
+		vi.stubEnv('ENV', 'live')
+
+		// Act
+		const app = await createTestApp({ skipMock: '#/plugins/secrets.ts' })
+
+		// Assert
+		expect(app.secrets.emailTransport).toBe('ses')
+	})
+
+	it('Resolves the JWT private key from Secrets Manager and keeps multi-key JSON intact', async () => {
+		// Arrange
+		stubRequiredEnv()
+		vi.stubEnv('AUTH_JWT_PRIVATE_KEY_SECRET_ARN', 'arn:jwk')
+		const jwk = '{"kty":"OKP","crv":"Ed25519","x":"abc","d":"def"}'
+		sendMock.mockResolvedValue({ SecretString: jwk })
+
+		// Act
+		const app = await createTestApp({ skipMock: '#/plugins/secrets.ts' })
+
+		// Assert
+		expect(sendMock).toHaveBeenCalledWith({ input: { SecretId: 'arn:jwk' } })
+		expect(app.secrets.authJwtPrivateKey).toBe(jwk)
 	})
 
 	it('Leaves the Anthropic key undefined when neither env nor ARN is set', async () => {

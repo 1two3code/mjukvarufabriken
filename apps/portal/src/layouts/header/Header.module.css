@@ -30,5 +30,16 @@
 }
 
 .user {
+	display: flex;
+	flex-direction: column;
+	align-items: flex-end;
 	color: var(--secondary-text-color);
+}
+
+.userName {
+	font-size: var(--font-size-s);
+}
+
+.orgName {
+	composes: composable-caption-font from global;
 }

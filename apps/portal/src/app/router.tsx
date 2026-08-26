@@ -2,6 +2,7 @@ import { createBrowserRouter } from 'react-router-dom'
 
 import { ProtectedLayout } from '#/layouts/templates/ProtectedLayout.tsx'
 import { PublicLayout } from '#/layouts/templates/PublicLayout.tsx'
+import { AuthCallbackPage } from '#/pages/AuthCallbackPage.tsx'
 import { HomePage } from '#/pages/HomePage.tsx'
 import { ItemsPage } from '#/pages/ItemsPage.tsx'
 import { LoginPage } from '#/pages/LoginPage.tsx'
@@ -13,6 +14,7 @@ export const router = createBrowserRouter([
 		element: <PublicLayout />,
 		children: [
 			{ path: '/login', element: <LoginPage /> },
+			{ path: '/auth/callback', element: <AuthCallbackPage /> },
 			{ path: '*', element: <NotFoundPage /> },
 		],
 	},

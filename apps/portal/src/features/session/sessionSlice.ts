@@ -1,7 +1,7 @@
 import { createSlice } from '@reduxjs/toolkit'
 
-import type { PayloadAction } from '@reduxjs/toolkit'
 import type { FrontendSession } from '@mf/models'
+import type { PayloadAction } from '@reduxjs/toolkit'
 
 export type SessionState = {
 	token: string | null
@@ -20,6 +20,7 @@ export const sessionSlice = createSlice({
 	initialState,
 	selectors: {
 		selectToken: state => state.token,
+		selectRefreshToken: state => state.refreshToken,
 		selectSession: state => {
 			if (!state.details) throw new Error('Session details not available')
 			return state.details
@@ -50,4 +51,4 @@ export const sessionSlice = createSlice({
 export const { clearSession, setSessionDetails, setTokens } = sessionSlice.actions
 
 // Selector exports
-export const { selectToken, selectSession } = sessionSlice.selectors
+export const { selectToken, selectRefreshToken, selectSession } = sessionSlice.selectors

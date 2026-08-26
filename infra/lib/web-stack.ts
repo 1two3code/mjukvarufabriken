@@ -128,6 +128,8 @@ export class WebStack extends Stack {
 		// Build jobs run in the private (NAT) subnets; the api passes these to ecs:RunTask
 		const jobSubnets = resources.vpc.selectSubnets({ subnetType: SubnetType.PRIVATE_WITH_EGRESS })
 
+		const apiUrl = domain ? `https://${domain.apiDomainName}` : undefined
+
 		const api = new ApplicationLoadBalancedFargateService(this, 'Api', {
 			cluster,
 			cpu: 512,
@@ -153,9 +155,11 @@ export class WebStack extends Stack {
 					LOG_LEVEL: isLive ? 'warn' : 'info',
 					SITE_URL: site.url,
 					PORTAL_URL: portal.url,
-					AUTH_JWKS_URL: environment.auth.jwksUrl,
-					AUTH_ISSUER: environment.auth.issuer,
 					AUTH_AUDIENCE: environment.auth.audience,
+					AUTH_JWT_PRIVATE_KEY_SECRET_ARN: resources.secrets['auth-jwt-private-key'].secretArn,
+					AUTH_ADMIN_EMAILS: environment.adminEmails.join(','),
+					AUTH_EMAIL_FROM: environment.email.from,
+					EMAIL_TRANSPORT: environment.email.transport,
 					DATABASE_SECRET_ARN: resources.databaseSecret.secretArn,
 					ARTIFACTS_BUCKET: resources.artifactsBucket.bucketName,
 					JOBS_CLUSTER_ARN: resources.jobsCluster.clusterArn,
@@ -171,14 +175,26 @@ export class WebStack extends Stack {
 			taskSubnets: { subnetType: SubnetType.PRIVATE_WITH_EGRESS },
 		})
 		api.targetGroup.configureHealthCheck({ path: '/health', interval: Duration.seconds(30) })
+		// The issuer is the api's own URL; without a custom domain it is only known after synth
+		api.taskDefinition.defaultContainer!.addEnvironment(
+			'AUTH_ISSUER',
+			environment.auth.issuer ?? apiUrl ?? `http://${api.loadBalancer.loadBalancerDnsName}`
+		)
 
 		// Least-privilege access to the shared resources
 		const taskRole = api.taskDefinition.taskRole
 		resources.databaseSecret.grantRead(taskRole)
 		resources.secrets['anthropic-api-key'].grantRead(taskRole)
+		resources.secrets['auth-jwt-private-key'].grantRead(taskRole)
 		resources.secrets['stripe-secret-key'].grantRead(taskRole)
 		resources.secrets['stripe-webhook-secret'].grantRead(taskRole)
 		resources.artifactsBucket.grantReadWrite(taskRole)
+
+		// Magic-link emails. With a verified domain identity the grant is scoped to it; without one
+		// (no `domain` config) SES is not set up and the api runs the `log` transport instead.
+		if (resources.emailIdentity) {
+			resources.emailIdentity.grantSendEmail(taskRole)
+		}
 
 		// api → Postgres. The ingress rule is created in this stack (on an imported view of the
 		// database security group) so the resources stack never depends on this one.
@@ -251,9 +267,7 @@ export class WebStack extends Stack {
 		new CfnOutput(this, 'SiteUrl', { value: site.url, exportName: 'site-url' })
 		new CfnOutput(this, 'PortalUrl', { value: portal.url, exportName: 'portal-url' })
 		new CfnOutput(this, 'ApiUrl', {
-			value: domain
-				? `https://${domain.apiDomainName}`
-				: `http://${api.loadBalancer.loadBalancerDnsName}`,
+			value: apiUrl ?? `http://${api.loadBalancer.loadBalancerDnsName}`,
 			exportName: 'api-url',
 		})
 	}

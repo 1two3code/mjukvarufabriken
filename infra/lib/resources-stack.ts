@@ -17,7 +17,9 @@ import {
 	StorageType,
 } from 'aws-cdk-lib/aws-rds'
 import { BlockPublicAccess, Bucket, BucketEncryption } from 'aws-cdk-lib/aws-s3'
+import { HostedZone } from 'aws-cdk-lib/aws-route53'
 import { Secret } from 'aws-cdk-lib/aws-secretsmanager'
+import { EmailIdentity, Identity } from 'aws-cdk-lib/aws-ses'
 
 import type { StackProps } from 'aws-cdk-lib'
 import type { ISecret } from 'aws-cdk-lib/aws-secretsmanager'
@@ -30,7 +32,11 @@ export interface ResourcesStackProps extends StackProps {
 
 /** Application secrets that are filled in manually (see README "Secrets") */
 export type ExternalSecretName =
-	'anthropic-api-key' | 'github-token' | 'stripe-secret-key' | 'stripe-webhook-secret'
+	| 'anthropic-api-key'
+	| 'auth-jwt-private-key'
+	| 'github-token'
+	| 'stripe-secret-key'
+	| 'stripe-webhook-secret'
 
 /**
  * Foundational, long-lived resources shared by the application stacks: networking,
@@ -52,6 +58,8 @@ export class ResourcesStack extends Stack {
 	readonly jobSecurityGroup: SecurityGroup
 	/** Postgres security group; consumers add their own ingress rule (see WebStack) */
 	readonly databaseSecurityGroup: SecurityGroup
+	/** SES sending identity for the hosted-zone domain (only with `domain` config) */
+	readonly emailIdentity?: EmailIdentity
 
 	constructor(scope: Construct, id: string, props: ResourcesStackProps) {
 		super(scope, id, props)
@@ -124,9 +132,24 @@ export class ResourcesStack extends Stack {
 			})
 		this.secrets = {
 			'anthropic-api-key': createSecret('anthropic-api-key'),
+			// Ed25519 private JWK the api signs tokens with: `node scripts/gen-auth-key.mjs`
+			'auth-jwt-private-key': createSecret('auth-jwt-private-key'),
 			'github-token': createSecret('github-token'),
 			'stripe-secret-key': createSecret('stripe-secret-key'),
 			'stripe-webhook-secret': createSecret('stripe-webhook-secret'),
+		}
+
+		// MARK: SES — verified sending domain with DKIM records in the hosted zone. Sending to
+		// arbitrary addresses still needs production access (TODO-EXTERNAL).
+		if (environment.domain) {
+			const hostedZone = HostedZone.fromHostedZoneAttributes(this, 'HostedZone', {
+				hostedZoneId: environment.domain.hostedZoneId,
+				zoneName: environment.domain.hostedZoneName,
+			})
+			this.emailIdentity = new EmailIdentity(this, 'EmailIdentity', {
+				identity: Identity.publicHostedZone(hostedZone),
+				mailFromDomain: `mail.${environment.domain.hostedZoneName}`,
+			})
 		}
 
 		// MARK: ECS — build jobs (M3). Tasks are started per job by the api (RunTask).

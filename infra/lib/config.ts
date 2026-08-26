@@ -26,7 +26,15 @@ export type EnvironmentConfig = {
 	 */
 	account?: string
 	region?: string
-	auth: { jwksUrl: string; issuer: string; audience: string }
+	/**
+	 * Token issuer settings for the api (it mints and verifies its own EdDSA tokens; the private
+	 * key lives in the `auth-jwt-private-key` secret). `issuer` defaults to the api URL.
+	 */
+	auth: { issuer?: string; audience: string }
+	/** Emails that sign in with the `admin` role (`AUTH_ADMIN_EMAILS`) */
+	adminEmails: string[]
+	/** Outgoing email: `ses` sends through SES, `log` only logs the message (magic link in the api log) */
+	email: { transport: 'ses' | 'log'; from: string }
 	/**
 	 * Optional custom domains. Without it the SPAs are served on CloudFront default domains
 	 * and the API on the load balancer DNS name over plain HTTP — fine for a first deploy.
@@ -52,12 +60,8 @@ type Config = {
 const account = process.env.CDK_DEFAULT_ACCOUNT
 const region = account ? (process.env.CDK_DEFAULT_REGION ?? 'eu-north-1') : undefined
 
-// Placeholder until the magic-link auth issuer exists (M6)
-const auth = {
-	jwksUrl: 'https://auth.mjukvaruhuset.se/.well-known/jwks.json',
-	issuer: 'https://auth.mjukvaruhuset.se',
-	audience: 'mjukvaruhuset',
-}
+const auth = { audience: 'mjukvaruhuset' }
+const emailFrom = 'noreply@mjukvaruhuset.se'
 
 export const config: Config = {
 	serviceName: 'mf',
@@ -66,7 +70,10 @@ export const config: Config = {
 			name: 'dev',
 			account,
 			region,
-			auth,
+			auth: { ...auth, issuer: 'https://api.dev.mjukvaruhuset.se' },
+			adminEmails: ['hasse.lofgren@outlook.com'],
+			// `log` until SES production access is granted (TODO-EXTERNAL): copy the link from the api log
+			email: { transport: 'log', from: emailFrom },
 			domain: {
 				siteDomainName: 'dev.mjukvaruhuset.se',
 				portalDomainName: 'portal.dev.mjukvaruhuset.se',
@@ -92,6 +99,8 @@ export const config: Config = {
 			account,
 			region,
 			auth,
+			adminEmails: ['hasse.lofgren@outlook.com'],
+			email: { transport: 'ses', from: emailFrom },
 			database: {
 				instanceType: InstanceType.of(InstanceClass.T4G, InstanceSize.SMALL),
 				allocatedStorageGb: 20,
