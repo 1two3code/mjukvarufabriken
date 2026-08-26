@@ -1,7 +1,7 @@
 import fp from 'fastify-plugin'
 
 import type { FastifyInstance, FastifyPluginAsync } from 'fastify'
-import type { CheckoutInput, PaymentEvent } from '#/plugins/stripe.ts'
+import type { CheckoutInput, PaymentEvent, UsageReportInput } from '#/plugins/stripe.ts'
 
 export const mockSessionId = 'cs_test_123'
 export const mockCheckoutUrl = 'https://checkout.stripe.com/c/pay/cs_test_123'
@@ -28,6 +28,9 @@ const mockPlugin: FastifyPluginAsync = async app => {
 			receiptUrl: 'https://pay.stripe.com/receipts/r_1',
 		}),
 		expireSession: vi.fn().mockResolvedValue(undefined),
+		reportUsage: vi.fn((input: UsageReportInput) =>
+			Promise.resolve({ reference: `mtr_${input.identifier}` })
+		),
 	}
 
 	app.decorate('paymentProvider', mock)

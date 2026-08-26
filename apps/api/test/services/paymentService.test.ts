@@ -1,11 +1,13 @@
 import { EntityNotFound } from '#/lib/entityError.ts'
 import { createMockJob } from '#/plugins/__mocks__/db.ts'
 import { createMockPaymentEvent, mockSessionId } from '#/plugins/__mocks__/stripe.ts'
+import { createMockResidentUsageRecord } from '#/services/__mocks__/residentService.ts'
 import { InvalidOrderTransition } from '#/services/orderService.ts'
 import { FakeProviderInactive, PaymentNotDue } from '#/services/paymentService.ts'
 
 import type { FastifyInstance } from 'fastify'
 import type { BackendSession, Order, OrderStatus } from '@mf/models'
+import type { FakePaymentProvider } from '#/plugins/stripe.ts'
 
 const user: BackendSession = { userId: 'user-1', role: 'user', orgId: 'org-1' }
 
@@ -401,6 +403,138 @@ describe('Payment Service', () => {
 			await expect(
 				app.paymentService.completeFakeSession(other.payment.sessionId, { ...user, orgId: 'org-2' })
 			).rejects.toThrow(/not found/)
+			vi.unstubAllEnvs()
+		})
+	})
+
+	describe('billResidentUsage', () => {
+		const month = '2026-09'
+		const record = (day: string, billableUsd: number, installationId = 'acme-shop') =>
+			createMockResidentUsageRecord({
+				installationId,
+				day,
+				month,
+				cost: { listPriceUsd: billableUsd / 1.5, billableUsd },
+			})
+
+		/**
+		 * The real resident service on top of the memory repositories. The outer `beforeEach`
+		 * already mocked it for this file, so it is unmocked explicitly (`skipMock` only skips).
+		 */
+		const createBillingApp = async (skipMock: string[] = []) => {
+			vi.doUnmock('#/services/residentService.ts')
+			vi.resetModules()
+			app = await createTestApp({
+				skipMock: ['#/services/paymentService.ts', '#/services/residentService.ts', ...skipMock],
+			})
+			await app.residentService.recordUsage(record('2026-09-01', 6.75))
+			await app.residentService.recordUsage(record('2026-09-02', 6.75))
+			await app.residentService.recordUsage(record('2026-09-03', 1, 'beta-crm'))
+			await app.residentService.upsertInstallation('acme-shop', { billingCustomerId: 'cus_acme' })
+		}
+
+		it('Reports each linked installation once and skips the ones without a customer', async () => {
+			await createBillingApp()
+
+			const run = await app.paymentService.billResidentUsage(month)
+
+			expect(run).toEqual({
+				month,
+				provider: 'stripe',
+				results: [
+					{
+						installationId: 'acme-shop',
+						outcome: 'reported',
+						usdCents: 1_350,
+						totalUsdCents: 1_350,
+					},
+					{
+						installationId: 'beta-crm',
+						outcome: 'no_customer',
+						usdCents: 0,
+						totalUsdCents: 0,
+						reason: expect.stringContaining('billing customer'),
+					},
+				],
+			})
+			expect(app.paymentProvider.reportUsage).toHaveBeenCalledTimes(1)
+			expect(app.paymentProvider.reportUsage).toHaveBeenCalledWith({
+				installationId: 'acme-shop',
+				month,
+				customerId: 'cus_acme',
+				usdCents: 1_350,
+				identifier: 'acme-shop/2026-09/1350',
+			})
+			await expect(app.db.resident.getUsageReport('acme-shop', month)).resolves.toMatchObject({
+				usdCents: 1_350,
+				provider: 'stripe',
+				reference: 'mtr_acme-shop/2026-09/1350',
+			})
+		})
+
+		it('Is idempotent: a re-run reports only what came in since, nothing when unchanged', async () => {
+			await createBillingApp()
+			await app.paymentService.billResidentUsage(month)
+
+			const unchanged = await app.paymentService.billResidentUsage(month)
+			await app.residentService.recordUsage(record('2026-09-04', 2))
+			const delta = await app.paymentService.billResidentUsage(month)
+
+			expect(unchanged.results[0]).toEqual({
+				installationId: 'acme-shop',
+				outcome: 'unchanged',
+				usdCents: 0,
+				totalUsdCents: 1_350,
+			})
+			expect(delta.results[0]).toEqual({
+				installationId: 'acme-shop',
+				outcome: 'reported',
+				usdCents: 200,
+				totalUsdCents: 1_550,
+			})
+			expect(app.paymentProvider.reportUsage).toHaveBeenLastCalledWith(
+				expect.objectContaining({ usdCents: 200, identifier: 'acme-shop/2026-09/1550' })
+			)
+			// The summary now carries the report
+			const [summary] = await app.residentService.summarizeUsage({ month })
+			expect(summary?.report).toMatchObject({ usdCents: 1_550 })
+		})
+
+		it('Keeps the reported amount unchanged when the provider rejects the report', async () => {
+			await createBillingApp()
+			vi.spyOn(app.paymentProvider, 'reportUsage').mockRejectedValueOnce(new Error('rate limited'))
+
+			const failed = await app.paymentService.billResidentUsage(month)
+
+			expect(failed.results[0]).toMatchObject({ outcome: 'failed', reason: 'rate limited' })
+			await expect(app.db.resident.getUsageReport('acme-shop', month)).resolves.toBeUndefined()
+			// The next run reports the full amount
+			const retry = await app.paymentService.billResidentUsage(month)
+			expect(retry.results[0]).toMatchObject({ outcome: 'reported', usdCents: 1_350 })
+		})
+
+		it('Records the report on the fake provider without needing a customer id', async () => {
+			vi.stubEnv('STRIPE_SECRET_KEY', '')
+			vi.stubEnv('STRIPE_SECRET_KEY_SECRET_ARN', '')
+			vi.doUnmock('#/plugins/stripe.ts')
+			vi.resetModules()
+			await createBillingApp(['#/plugins/stripe.ts'])
+
+			const run = await app.paymentService.billResidentUsage(month)
+
+			expect(run.provider).toBe('fake')
+			expect(run.results.map(result => [result.installationId, result.outcome])).toEqual([
+				['acme-shop', 'reported'],
+				['beta-crm', 'reported'],
+			])
+			expect((app.paymentProvider as FakePaymentProvider).usageReports).toMatchObject([
+				{ installationId: 'acme-shop', usdCents: 1_350 },
+				{ installationId: 'beta-crm', usdCents: 100 },
+			])
+			await expect(app.db.resident.getUsageReport('beta-crm', month)).resolves.toMatchObject({
+				provider: 'fake',
+				reference: 'fake_usage_beta-crm/2026-09/100',
+			})
 			vi.unstubAllEnvs()
 		})
 	})

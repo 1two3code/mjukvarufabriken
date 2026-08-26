@@ -41,5 +41,64 @@ describe('Resident Service', () => {
 			['2026-09-07', 1_100_000],
 		])
 		expect(await app.residentService.listUsage()).toHaveLength(3)
+		// The installation row exists from the first record, unlinked until an admin links it
+		expect(await app.residentService.listInstallations()).toMatchObject([
+			{ id: 'beta-crm' },
+			{ id: 'acme-shop' },
+		])
+	})
+
+	it('Summarises the month per installation with its org and provider report', async () => {
+		// Arrange
+		await app.residentService.recordUsage(createMockResidentUsageRecord({ day: '2026-09-01' }))
+		await app.residentService.recordUsage(createMockResidentUsageRecord({ day: '2026-09-02' }))
+		await app.residentService.recordUsage(
+			createMockResidentUsageRecord({ day: '2026-10-01', month: '2026-10' })
+		)
+		await app.residentService.upsertInstallation('acme-shop', {
+			orgId: 'org-1',
+			billingCustomerId: 'cus_1',
+		})
+		await app.db.resident.upsertUsageReport({
+			installationId: 'acme-shop',
+			month: '2026-09',
+			usdCents: 1_350,
+			provider: 'stripe',
+			reference: 'mtr_1',
+		})
+
+		// Act
+		const september = await app.residentService.summarizeUsage({ month: '2026-09' })
+		const all = await app.residentService.summarizeUsage()
+
+		// Assert
+		expect(september).toEqual([
+			expect.objectContaining({
+				installationId: 'acme-shop',
+				orgId: 'org-1',
+				month: '2026-09',
+				days: 2,
+				totalTokens: 2_200_000,
+				billableUsd: 13.5,
+				report: expect.objectContaining({ usdCents: 1_350, reference: 'mtr_1' }),
+			}),
+		])
+		expect(all.map(summary => [summary.month, summary.report?.usdCents])).toEqual([
+			['2026-10', undefined],
+			['2026-09', 1_350],
+		])
+	})
+
+	it('Keeps installation fields not mentioned and clears null ones', async () => {
+		await app.residentService.upsertInstallation('acme-shop', {
+			orgId: 'org-1',
+			billingCustomerId: 'cus_1',
+		})
+		const cleared = await app.residentService.upsertInstallation('acme-shop', {
+			billingCustomerId: null,
+		})
+
+		expect(cleared).toMatchObject({ id: 'acme-shop', orgId: 'org-1' })
+		expect(cleared.billingCustomerId).toBeUndefined()
 	})
 })

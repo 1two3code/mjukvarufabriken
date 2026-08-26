@@ -15,6 +15,7 @@ const mockPlugin: FastifyPluginAsync = async app => {
 		emailFrom: 'noreply@example.com',
 		anthropicApiKey: 'sk-ant-test',
 		residentInstallations: { 'acme-shop': 'installation-token' },
+		residentBilling: { meterEvent: 'resident_usage_usd_cents', priceId: 'price_resident' },
 		infra: { jobSubnetIds: [], jobApiUrl: 'https://api.example.com' },
 	})
 }

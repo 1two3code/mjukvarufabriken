@@ -52,9 +52,10 @@ POST /tasks {title, description} ┴─▶ queue ─▶ fresh clone ─▶ @mf/h
 - **Metering**: one record per UTC day (`usage/<day>.json` in the bucket, `ResidentUsageRecord`):
   tokens by model (all buckets + the budget-weighted total), task counts, and a cost estimate at
   Anthropic list price × 1.5. The same record is `POST`ed to the factory
-  (`FACTORY_API_URL` + `FACTORY_TOKEN`, `POST /internal/resident/usage`), where the api stores
-  it (`residentService`, in memory for now) for m6-orders' Stripe usage-based billing. A day is
-  re-sent on every flush (last write wins), so an outage loses nothing.
+  (`FACTORY_API_URL` + `FACTORY_TOKEN`, `POST /internal/resident/usage`), where the api persists
+  it (`resident_usage`, one row per installation and day) and aggregates it per month for Stripe
+  usage-based billing (see Cost model). A day is re-sent on every flush (last write wins), so an
+  outage loses nothing.
 
 ### Control api
 
@@ -160,7 +161,20 @@ re-queues it.
 
 ## Cost model
 
-Billed by the factory (records from the metering above; Stripe wiring is m6-orders):
+Billed by the factory from the daily records above (wave 4 `billing-and-tls`):
+
+- The api aggregates `resident_usage` per installation and month
+  (`GET /bff/admin/resident/usage?month=YYYY-MM`, admin). An admin links each installation to its
+  org and Stripe customer (`PUT /bff/admin/resident/installations/:id`
+  `{ orgId, billingCustomerId }`); until then the installation shows up unlinked and is skipped by
+  billing (`no_customer`).
+- `POST /bff/admin/resident/usage/:month/bill` (admin, run after month end and again for late
+  records) reports each installation's billable amount as **US cents** to a Stripe **billing
+  meter** (`stripe.billing.meterEvents.create`, `event_name` = `RESIDENT_USAGE_METER_EVENT`,
+  default `resident_usage_usd_cents`; the metered price on the customer's subscription is
+  `RESIDENT_USAGE_PRICE_ID`, informational). The cumulative cents reported per month are stored
+  (`resident_usage_reports`), so a re-run only sends the difference and an unchanged month sends
+  nothing. Without a Stripe key the fake provider records the report locally.
 
 - **Usage**: Anthropic list price of the tokens the resident used × **1.5**. The estimate in
   each daily record uses the per-model price table in `packages/resident/src/pricing.ts`

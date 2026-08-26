@@ -1,7 +1,13 @@
 import fp from 'fastify-plugin'
 
 import type { FastifyPluginAsync } from 'fastify'
-import type { ResidentUsageRecord } from '@mf/models'
+import type {
+	ResidentInstallation,
+	ResidentInstallationMutation,
+	ResidentUsageQuery,
+	ResidentUsageRecord,
+	ResidentUsageSummary,
+} from '@mf/models'
 
 export class ResidentUnauthorized extends Error {
 	constructor() {
@@ -25,10 +31,10 @@ export const usageRecordId = (record: Pick<ResidentUsageRecord, 'installationId'
 declare module 'fastify' {
 	interface FastifyInstance {
 		/**
-		 * M8 metering stub: resident installations in customers' accounts POST one usage record
-		 * per day (`/internal/resident/usage`); the records are kept here until m6-orders turns
-		 * them into Stripe usage-based billing. In-memory for now — a `resident_usage` table is
-		 * the next step, not part of this stream.
+		 * M8 metering: resident installations in customers' accounts POST one usage record per
+		 * day (`/internal/resident/usage`). The records are persisted (`resident_usage`) and
+		 * aggregated per installation and month; `paymentService.billResidentUsage` reports the
+		 * month's billable amount to the payment provider.
 		 */
 		residentService: {
 			/** Resolves the bearer to an installation id, or throws `ResidentUnauthorized` */
@@ -37,13 +43,24 @@ declare module 'fastify' {
 			recordUsage: (record: ResidentUsageRecord) => Promise<{ id: string; stored: true }>
 			/** Records of one installation (or all), newest day first */
 			listUsage: (installationId?: string) => Promise<ResidentUsageRecord[]>
+			/**
+			 * One summary per installation and month (newest month first), each with what has
+			 * been reported to the payment provider for it so far
+			 */
+			summarizeUsage: (query?: ResidentUsageQuery) => Promise<ResidentUsageSummary[]>
+			/** Every installation the factory has seen or an admin has registered, newest first */
+			listInstallations: () => Promise<ResidentInstallation[]>
+			/** Links an installation to an org / billing customer (`null` clears a field) */
+			upsertInstallation: (
+				id: string,
+				update: ResidentInstallationMutation['UpsertInstallation']
+			) => Promise<ResidentInstallation>
 		}
 	}
 }
 
 const plugin: FastifyPluginAsync = async app => {
-	const { secrets } = app
-	const records = new Map<string, ResidentUsageRecord>()
+	const { secrets, db } = app
 
 	app.decorate('residentService', {
 		authenticate: async token => {
@@ -52,8 +69,7 @@ const plugin: FastifyPluginAsync = async app => {
 			return installationId
 		},
 		recordUsage: async record => {
-			const id = usageRecordId(record)
-			records.set(id, structuredClone(record))
+			await db.resident.upsertUsage(record)
 			app.log.info(
 				{
 					installationId: record.installationId,
@@ -63,16 +79,28 @@ const plugin: FastifyPluginAsync = async app => {
 				},
 				'resident usage recorded'
 			)
-			return { id, stored: true }
+			return { id: usageRecordId(record), stored: true }
 		},
-		listUsage: async installationId =>
-			[...records.values()]
-				.filter(record => !installationId || record.installationId === installationId)
-				.toSorted((a, b) => b.day.localeCompare(a.day)),
+		listUsage: async installationId => db.resident.listUsage({ installationId }),
+		summarizeUsage: async (query = {}) => {
+			const [summaries, reports] = await Promise.all([
+				db.resident.summarizeUsage(query),
+				db.resident.listUsageReports(query.month),
+			])
+			const reportOf = new Map(
+				reports.map(report => [`${report.installationId}/${report.month}`, report])
+			)
+			return summaries.map(summary => ({
+				...summary,
+				report: reportOf.get(`${summary.installationId}/${summary.month}`),
+			}))
+		},
+		listInstallations: async () => db.resident.listInstallations(),
+		upsertInstallation: async (id, update) => db.resident.upsertInstallation({ id, ...update }),
 	})
 }
 
 export default fp(plugin, {
 	name: '#internal/residentService',
-	dependencies: ['#internal/secrets'],
+	dependencies: ['#internal/secrets', '#internal/db'],
 })

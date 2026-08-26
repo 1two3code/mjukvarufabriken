@@ -68,8 +68,8 @@ export async function createServer({ logLevel }: Options = {}): Promise<FastifyI
 		.register(authService)
 		.register(contactService)
 		.register(orderService)
-		.register(paymentService)
 		.register(residentService)
+		.register(paymentService)
 
 		// Request plugins
 		.register(errorHandlingPlugin)

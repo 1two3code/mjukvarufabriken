@@ -1,5 +1,5 @@
 import fp from 'fastify-plugin'
-import { canTransitionOrder, paymentAmounts } from '@mf/models'
+import { canTransitionOrder, paymentAmounts, usdCentsOf } from '@mf/models'
 
 import { EntityInvalid, EntityNotFound } from '#/lib/entityError.ts'
 import { InvalidWebhookSignature } from '#/plugins/stripe.ts'
@@ -12,6 +12,9 @@ import type {
 	Payment,
 	PaymentKind,
 	PaymentProvider,
+	ResidentBillingResult,
+	ResidentBillingRunResponse,
+	ResidentUsageSummary,
 } from '@mf/models'
 import type { PaymentEvent } from '#/plugins/stripe.ts'
 
@@ -40,6 +43,14 @@ declare module 'fastify' {
 			 * Org-scoped like the order; rejects unless the fake provider is active.
 			 */
 			completeFakeSession: (sessionId: string, session: BackendSession) => Promise<Payment>
+			/**
+			 * Resident usage-based billing (M8): reports each installation's billable cents for
+			 * the month to the provider's meter. Idempotent — the cumulative reported amount is
+			 * stored per installation and month, so a re-run only reports what came in since
+			 * (nothing when the month is unchanged). Installations without a billing customer
+			 * are skipped (`no_customer`) unless the fake provider is active.
+			 */
+			billResidentUsage: (month: string) => Promise<ResidentBillingRunResponse>
 			/** The provider in use, so the portal can label the fake one */
 			provider: PaymentProvider
 		}
@@ -97,7 +108,16 @@ const isUniqueViolation = (error: unknown) => (error as { code?: string })?.code
 type Applied = { payment: Payment; refundDue: boolean }
 
 const plugin: FastifyPluginAsync = async app => {
-	const { db, paymentProvider, orderService, jobService, userService, secrets, email } = app
+	const {
+		db,
+		paymentProvider,
+		orderService,
+		jobService,
+		userService,
+		residentService,
+		secrets,
+		email,
+	} = app
 
 	const orderPageUrl = (orderId: string) => `${secrets.portalUrl}/orders/${orderId}`
 
@@ -211,8 +231,66 @@ const plugin: FastifyPluginAsync = async app => {
 		}
 	}
 
+	// MARK: Resident usage billing (M8)
+
+	/** Reports the month's unbilled cents of one installation; never throws */
+	const billInstallation = async (
+		summary: ResidentUsageSummary
+	): Promise<ResidentBillingResult> => {
+		const { installationId, month } = summary
+		const totalUsdCents = usdCentsOf(summary.billableUsd)
+		const reportedUsdCents = summary.report?.usdCents ?? 0
+		const usdCents = totalUsdCents - reportedUsdCents
+		const unchanged = {
+			installationId,
+			outcome: 'unchanged',
+			usdCents: 0,
+			totalUsdCents: reportedUsdCents,
+		} as const
+		if (usdCents <= 0) return unchanged
+
+		const installation = await db.resident.getInstallation(installationId)
+		const customerId = installation?.billingCustomerId
+		if (!customerId && paymentProvider.kind !== 'fake') {
+			return {
+				...unchanged,
+				outcome: 'no_customer',
+				reason: 'No billing customer id on the installation',
+			}
+		}
+		try {
+			// The cumulative total in the identifier: a retry of the same delta dedupes at the provider
+			const { reference } = await paymentProvider.reportUsage({
+				installationId,
+				month,
+				customerId,
+				usdCents,
+				identifier: `${installationId}/${month}/${totalUsdCents}`,
+			})
+			await db.resident.upsertUsageReport({
+				installationId,
+				month,
+				usdCents: totalUsdCents,
+				provider: paymentProvider.kind,
+				reference,
+			})
+			app.log.info({ installationId, month, usdCents, reference }, 'resident usage reported')
+			return { installationId, outcome: 'reported', usdCents, totalUsdCents }
+		} catch (error) {
+			app.log.error({ err: error, installationId, month }, 'resident usage report failed')
+			return { ...unchanged, outcome: 'failed', reason: (error as Error).message }
+		}
+	}
+
 	app.decorate('paymentService', {
 		provider: paymentProvider.kind,
+		billResidentUsage: async month => {
+			const summaries = await residentService.summarizeUsage({ month })
+			const results: ResidentBillingResult[] = []
+			// Sequential: one meter event at a time keeps the provider's rate limit and the log readable
+			for (const summary of summaries) results.push(await billInstallation(summary))
+			return { month, provider: paymentProvider.kind, results }
+		},
 		checkout: async (orderId, kind, session) => {
 			// getDetail syncs the order with its latest job (building → delivered) before the gate
 			const { order, payments } = await orderService.getDetail(orderId, session)
@@ -282,5 +360,6 @@ export default fp(plugin, {
 		'#internal/orderService',
 		'#internal/jobService',
 		'#internal/userService',
+		'#internal/residentService',
 	],
 })
