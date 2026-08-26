@@ -5,12 +5,29 @@ import { join } from 'node:path'
 import {
 	exec,
 	execOrThrow,
+	killProcessGroup,
 	launch,
+	launchCommandLine,
 	redactUrlCredentials,
 	sandboxEnv,
 	sandboxUser,
 	workerEnv,
 } from '#job/exec.ts'
+
+const alive = (pid: number) => {
+	try {
+		process.kill(pid, 0)
+		return true
+	} catch {
+		return false
+	}
+}
+
+const waitUntil = async (condition: () => boolean, ms = 3000) => {
+	const deadline = Date.now() + ms
+	while (!condition() && Date.now() < deadline) await new Promise(r => setTimeout(r, 25))
+	return condition()
+}
 
 describe('exec', () => {
 	it('sandboxEnv strips credentials and cloud config but keeps what the tools need', () => {
@@ -48,13 +65,11 @@ describe('exec', () => {
 			GITHUB_ORG: 'mjukvaruhuset',
 			API_URL: 'https://api.example',
 			// git hooks (husky) are always off inside the job; the repo is shared between two uids
-			GIT_CONFIG_COUNT: '3',
+			GIT_CONFIG_COUNT: '2',
 			GIT_CONFIG_KEY_0: 'core.hooksPath',
 			GIT_CONFIG_VALUE_0: '/dev/null',
 			GIT_CONFIG_KEY_1: 'safe.directory',
 			GIT_CONFIG_VALUE_1: '*',
-			GIT_CONFIG_KEY_2: 'core.sharedRepository',
-			GIT_CONFIG_VALUE_2: 'group',
 			HUSKY: '0',
 		})
 	})
@@ -193,6 +208,15 @@ describe('launch', () => {
 		})
 	})
 
+	it('Renders a launch as one command line (git --upload-pack)', () => {
+		expect(launchCommandLine(launch('git', ['upload-pack'], { asWorker: true, user }))).toBe(
+			'setpriv --reuid=1001 --regid=1002 --init-groups --inh-caps=-all --ambient-caps=-all --no-new-privs -- git upload-pack'
+		)
+		expect(launchCommandLine(launch('git', ['upload-pack'], { user: undefined }))).toBe(
+			'git upload-pack'
+		)
+	})
+
 	it('Drops the job\'s ambient capabilities for its own children too', () => {
 		expect(launch('git', ['status'], { user })).toEqual({
 			command: 'setpriv',
@@ -217,6 +241,40 @@ describe('launch', () => {
 			process.umask(umask)
 			vi.unstubAllEnvs()
 		}
+	})
+})
+
+describe('process groups (worker commands)', () => {
+	it('A timed-out command resolves with a negative code and its whole group is killed', async () => {
+		// The background sleep would keep the pipe open (and the job waiting) without the group kill
+		const result = await exec(
+			'sh',
+			['-c', 'sleep 30 & echo $!; sleep 30'],
+			{ cwd: process.cwd(), timeoutMs: 200, processGroup: true }
+		)
+		expect(result.code).toBeLessThan(0)
+		const background = Number(result.stdout.trim())
+		expect(background).toBeGreaterThan(0)
+		expect(await waitUntil(() => !alive(background))).toBe(true)
+	})
+
+	it('Kills the group on abort and still resolves normally when the command ends by itself', async () => {
+		const controller = new AbortController()
+		const pending = exec('sh', ['-c', 'sleep 30 & echo $!; sleep 30'], {
+			cwd: process.cwd(),
+			signal: controller.signal,
+			processGroup: true,
+		})
+		setTimeout(() => controller.abort(), 100)
+		await expect(pending).rejects.toThrow()
+
+		const quick = await exec('sh', ['-c', 'echo done'], { cwd: process.cwd(), processGroup: true })
+		expect(quick).toEqual({ code: 0, stdout: 'done\n', stderr: '' })
+	})
+
+	it('killProcessGroup tolerates a missing pid or a group that is already gone', () => {
+		expect(killProcessGroup(undefined)).toBe(false)
+		expect(killProcessGroup(2 ** 22 - 1)).toBe(false)
 	})
 })
 

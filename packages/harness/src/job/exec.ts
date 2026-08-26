@@ -15,6 +15,11 @@ export type ExecOptions = {
 	 * own uid, for git and the file plumbing.
 	 */
 	asWorker?: boolean
+	/**
+	 * Run the command in its own process group, killed whole on timeout/abort/exit (default: on
+	 * for `asWorker` with a sandbox user — the worker's children must not outlive the command)
+	 */
+	processGroup?: boolean
 }
 
 /**
@@ -34,18 +39,17 @@ const secretEnvKey =
  *   meant for humans; a worker's `npm install` re-enables them via the `prepare` script and they
  *   then reject the orchestrator's merge commits (Fargate run 2026-08-26). The gates run lint +
  *   tests anyway. `HUSKY=0` covers hooks invoked some other way.
- * - `safe.directory=*` and `core.sharedRepository=group`: the job (uid `node`) and the worker
- *   sessions (uid `worker`, see `sandboxUser`) share `/work` through a common group, so git must
- *   accept a repo owned by the other uid and keep `.git` group-writable.
+ * - `safe.directory=*`: the job (uid `node`) and the worker sessions (uid `worker`, see
+ *   `sandboxUser`) share `/work` through a common group, so git must accept a repo whose files
+ *   the other uid owns. Nothing here makes `.git` group-writable: the main repo's `.git` is the
+ *   job's alone (`protectGitDir`), and a task clone belongs to the worker.
  */
 export const noHooksEnv: NodeJS.ProcessEnv = {
-	GIT_CONFIG_COUNT: '3',
+	GIT_CONFIG_COUNT: '2',
 	GIT_CONFIG_KEY_0: 'core.hooksPath',
 	GIT_CONFIG_VALUE_0: '/dev/null',
 	GIT_CONFIG_KEY_1: 'safe.directory',
 	GIT_CONFIG_VALUE_1: '*',
-	GIT_CONFIG_KEY_2: 'core.sharedRepository',
-	GIT_CONFIG_VALUE_2: 'group',
 	HUSKY: '0',
 }
 
@@ -70,9 +74,11 @@ const positiveInt = (value: string | undefined) => {
  * Unset, or equal to the job's own uid, means "no switch" — `npm run job:dev` and the tests run
  * everything as the current user. In the job image (`apps/job/Dockerfile`) the job starts as
  * root, `setpriv` drops it to `node` keeping only CAP_SETUID/CAP_SETGID as ambient
- * capabilities, and every worker launch (`launch`) uses `setpriv` again to switch to this uid
- * with an empty capability set and `no_new_privs` — a model-driven shell then cannot read the
- * job process's memory or `/proc/<pid>/environ`, and cannot get the capabilities back.
+ * capabilities (plus CAP_KILL, so the job can still signal the worker uid's processes: spawn
+ * timeouts, the budget/kill-switch abort, the Agent SDK's close sequence), and every worker
+ * launch (`launch`) uses `setpriv` again to switch to this uid with an empty capability set and
+ * `no_new_privs` — a model-driven shell then cannot read the job process's memory or
+ * `/proc/<pid>/environ`, and cannot get the capabilities back.
  */
 export const sandboxUser = (env: NodeJS.ProcessEnv = process.env): SandboxUser | undefined => {
 	const uid = positiveInt(env.WORKER_UID)
@@ -94,6 +100,9 @@ export const workerEnv = (user = sandboxUser()): NodeJS.ProcessEnv =>
 	user ? { HOME: user.home, CLAUDE_CONFIG_DIR: join(user.home, '.claude') } : {}
 
 export type Launch = { command: string; args: string[] }
+
+/** A `Launch` as one shell command line (for git's `--upload-pack`); the parts carry no quoting */
+export const launchCommandLine = ({ command, args }: Launch) => [command, ...args].join(' ')
 
 /**
  * Command line to spawn `command` with the sandbox privileges: with a sandbox user configured,
@@ -124,17 +133,52 @@ export const launch = (
 	}
 }
 
+// MARK: Process groups
+
+/**
+ * Kills a whole process group (`SIGKILL`), tolerating a group that is already gone. Worker
+ * processes run in their own group (`exec` with `asWorker`, `createWorkerSpawner`), so a timeout,
+ * an abort or the end of a session takes every child the model's shell left behind (`npm run dev
+ * &`, a stuck vitest) with it — except a process that started its own session (`setsid`); those
+ * are swept by uid at points where no worker runs. Needs CAP_KILL when the group is another uid's.
+ */
+export const killProcessGroup = (pid: number | undefined) => {
+	if (!pid) return false
+	try {
+		process.kill(-pid, 'SIGKILL')
+		return true
+	} catch {
+		return false
+	}
+}
+
+const isKillError = (error: unknown) =>
+	typeof error === 'object' && error !== null && (error as { syscall?: string }).syscall === 'kill'
+
 // MARK: Exec
 
-/** Runs a command without a shell and captures its output; never throws on a non-zero exit */
+/**
+ * Runs a command without a shell and captures its output; never throws on a non-zero exit. A
+ * timeout or an abort kills the process (its whole group with a sandbox user) — the result then
+ * has a negative code — and a refused kill (no CAP_KILL) resolves with the error in `stderr`
+ * instead of rejecting, so a gate never turns into an exception.
+ */
 export const exec = (
 	command: string,
 	args: string[],
-	{ cwd, signal, env, timeoutMs = 15 * 60_000, asWorker = false }: ExecOptions
+	{
+		cwd,
+		signal,
+		env,
+		timeoutMs = 15 * 60_000,
+		asWorker = false,
+		processGroup = asWorker && sandboxUser() !== undefined,
+	}: ExecOptions
 ): Promise<ExecResult> =>
 	new Promise((resolve, reject) => {
 		applySharedUmask()
 		const launched = launch(command, args, { asWorker })
+		const grouped = processGroup
 		const child = spawn(launched.command, launched.args, {
 			cwd,
 			env: { ...sandboxEnv(), ...(asWorker ? workerEnv() : {}), ...env },
@@ -142,13 +186,26 @@ export const exec = (
 			signal,
 			timeout: timeoutMs,
 			killSignal: 'SIGKILL',
+			detached: grouped,
 		})
+		const killGroup = () => grouped && killProcessGroup(child.pid)
+		const timer = setTimeout(killGroup, timeoutMs)
+		signal?.addEventListener('abort', killGroup, { once: true })
 		let stdout = ''
 		let stderr = ''
 		child.stdout.on('data', chunk => (stdout += String(chunk)))
 		child.stderr.on('data', chunk => (stderr += String(chunk)))
-		child.on('error', reject)
-		child.on('close', code => resolve({ code: code ?? -1, stdout, stderr }))
+		child.on('error', error => {
+			if (!isKillError(error)) return reject(error)
+			// kill(2) refused (EPERM): the process lives on, but the caller gets a result
+			resolve({ code: -1, stdout, stderr: `${stderr}\n${error.message}`.trim() })
+		})
+		child.on('close', code => {
+			clearTimeout(timer)
+			signal?.removeEventListener('abort', killGroup)
+			killGroup()
+			resolve({ code: code ?? -1, stdout, stderr })
+		})
 	})
 
 /**

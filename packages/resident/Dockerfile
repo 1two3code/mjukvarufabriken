@@ -27,8 +27,8 @@ ENV HOME=/home/node CLAUDE_CONFIG_DIR=/home/node/.claude WORK_DIR=/work PORT=517
 
 WORKDIR /usr/src/packages/resident
 EXPOSE 5176
-# Starts as root only so setpriv can hand the resident CAP_SETUID/CAP_SETGID as ambient
-# capabilities for the worker-uid switch (see apps/job/Dockerfile for the full rationale)
+# Starts as root only so setpriv can hand the resident CAP_SETUID/CAP_SETGID (worker-uid switch)
+# and CAP_KILL (signalling worker processes) as ambient capabilities (see apps/job/Dockerfile)
 CMD ["setpriv", "--reuid=node", "--regid=node", "--init-groups", \
-	"--bounding-set=-all,+setuid,+setgid", "--inh-caps=+setuid,+setgid", "--ambient-caps=+setuid,+setgid", \
+	"--bounding-set=-all,+setuid,+setgid,+kill", "--inh-caps=+setuid,+setgid,+kill", "--ambient-caps=+setuid,+setgid,+kill", \
 	"node", "src/index.ts"]
