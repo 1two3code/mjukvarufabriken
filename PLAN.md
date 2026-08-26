@@ -73,9 +73,9 @@ Everything that needs someone else's approval lives in TODO-EXTERNAL.md and is N
 - [ ] Metering → Stripe usage-based billing
 
 ### M9 — Ops
-- [ ] Logs + alerts: token burn per job, failed jobs, cost anomalies
-- [ ] Backups (RDS automated), incident runbook
-- [ ] Security baseline: secrets in Secrets Manager, least-privilege IAM, dependency scanning
+- [x] Logs + alerts: token burn per job, failed jobs, cost anomalies — 2026-08-26, `ops-<env>` stack (SNS `mf-alerts-<env>` → adminEmails, 9 alarms, monthly budget); synth-verified + `infra/test`, deploy pending (main session). E-mail subscription confirmation + cost-allocation tag in TODO-EXTERNAL.
+- [x] Backups (RDS automated), incident runbook — 2026-08-26, RDS 7 d dev / 30 d live + snapshot-on-delete, artifacts bucket versioned with 90 d noncurrent expiry, docs/RUNBOOK.md; synth-verified, deploy pending.
+- [x] Security baseline: secrets in Secrets Manager, least-privilege IAM, dependency scanning — 2026-08-26, synthesised task defs carry ARNs only (asserted in `infra/test/security-baseline.test.ts`), job role narrowed to `s3:PutObject*`, roles documented per action, `.github/dependabot.yml` + `npm audit` step (allow-fail), CloudFront headers incl. nosniff; deploy pending.
 - [ ] RDS TLS `verify-full` by default with the RDS CA bundle in the api/job images (`DATABASE_SSL`, docs/M3-REVIEW.md #12)
 
 ### M10 — Proof
