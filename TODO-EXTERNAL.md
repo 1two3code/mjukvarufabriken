@@ -15,7 +15,7 @@ Start these NOW; none of them block building the software.
 | AWS: service quota increases (Fargate vCPU, App Runner) | AWS | 1–3 days | parallel jobs |
 | AWS SES production access (leave sandbox) | AWS | ~1 day | customer email |
 | Domain mjukvaruhuset.se — check availability, buy | registrar | hours | site live |
-| GitHub OAuth App for "Sign in with GitHub" (client id + secret, callback `https://portal.<env>.mjukvaruhuset.se/auth/github/callback`) under the `mjukvaruhuset` org | you | minutes (needs the org first) | M6 GitHub sign-in |
+| GitHub OAuth App for "Sign in with GitHub" (one per env; callback `https://portal.<env>.mjukvaruhuset.se/auth/github/callback`, locally `http://localhost:5173/auth/github/callback`) under the `mjukvaruhuset` org. Then: client id → `infra/lib/config.ts` `githubOAuth.clientId` (locally `GITHUB_OAUTH_CLIENT_ID`), client secret → the `mf/<env>/github-oauth-client-secret` secret (locally `GITHUB_OAUTH_CLIENT_SECRET`), and `VITE_GITHUB_SIGNIN=1` in `apps/portal/.env.dev` (+ `.env` for live) so the button shows. Until then the api answers 404 on `/bff/auth/github` and the magic link is the only way in (code built + tested 2026-08-27, wave 4) | you | minutes (needs the org first) | M6 GitHub sign-in |
 | BankID integration (via a broker e.g. Criipto/Signicat) | broker | weeks | later, not v1 |
 | Trademark check on "Mjukvaruhuset" (PRV) | you | days | brand risk |
 | Hard network egress fence for build jobs: Fargate sidecars share the task ENI, so the tinyproxy allowlist is app-level (HTTPS_PROXY). A proxy in its own task/SG + VPC endpoints for Secrets Manager/S3 gives a real fence (~10 USD/month) — decide before pilots | you | hours | untrusted-code isolation |
