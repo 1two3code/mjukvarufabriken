@@ -1,4 +1,4 @@
-import postContact from '#/routes/bff/contact/postContact.ts'
+import postContact, { clientIp } from '#/routes/bff/contact/postContact.ts'
 import { createMockContactMessage } from '#/services/__mocks__/contactService.ts'
 
 import type { FastifyInstance } from 'fastify'
@@ -26,17 +26,37 @@ describe('POST /bff/contact route', () => {
 		expect(app.contactService.submit).toHaveBeenCalledWith(payload, '127.0.0.1')
 	})
 
-	it('Uses the first x-forwarded-for entry as the client ip behind the load balancer', async () => {
+	it('Ignores caller-supplied x-forwarded-for entries and uses the proxy-added client ip', async () => {
+		// Arrange: attacker puts "1.2.3.4" in the header, CloudFront appends the real client,
+		// the ALB appends the CloudFront edge
+		const spoofed = '1.2.3.4, 203.0.113.7, 130.176.0.1'
+
 		// Act
 		await app.inject({
 			method: 'POST',
 			url,
 			payload: createMockContactMessage(),
-			headers: { 'x-forwarded-for': '203.0.113.7, 10.0.0.1' },
+			headers: { 'x-forwarded-for': spoofed },
 		})
 
 		// Assert
 		expect(app.contactService.submit).toHaveBeenCalledWith(expect.any(Object), '203.0.113.7')
+	})
+
+	it.each([
+		['no header → socket ip', undefined, '10.0.0.9', 2, '10.0.0.9'],
+		['two hops, plain header', '203.0.113.7, 130.176.0.1', '10.0.0.9', 2, '203.0.113.7'],
+		['two hops, spoofed prefix', 'x, y, 203.0.113.7, 130.176.0.1', '10.0.0.9', 2, '203.0.113.7'],
+		['fewer entries than hops', '203.0.113.7', '10.0.0.9', 2, '203.0.113.7'],
+		['one hop', 'spoof, 203.0.113.7', '10.0.0.9', 1, '203.0.113.7'],
+		['array header', ['spoof', '203.0.113.7, 130.176.0.1'], '10.0.0.9', 2, '203.0.113.7'],
+		['empty header', ' , ', '10.0.0.9', 2, '10.0.0.9'],
+	])('clientIp: %s', (_label, header, fallback, hops, expected) => {
+		expect(clientIp(header, fallback, hops)).toBe(expected)
+	})
+
+	it('Caps the ip key length so the limiter cannot be fed arbitrary long strings', () => {
+		expect(clientIp('a'.repeat(500), '10.0.0.9', 1)).toHaveLength(64)
 	})
 
 	it('Omits the company when it is not given', async () => {

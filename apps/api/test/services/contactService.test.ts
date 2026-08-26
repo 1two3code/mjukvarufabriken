@@ -1,5 +1,10 @@
 import { createMockContactMessage } from '#/services/__mocks__/contactService.ts'
-import { contactEmail, contactRateLimit } from '#/services/contactService.ts'
+import {
+	contactEmail,
+	contactRateLimit,
+	contactRateLimitMaxKeys,
+	createRateLimiter,
+} from '#/services/contactService.ts'
 
 import type { FastifyInstance } from 'fastify'
 
@@ -92,5 +97,107 @@ describe('Contact Service', () => {
 		expect(otherIp).toBe('sent')
 		expect(afterWindow).toBe('sent')
 		expect(app.email.send).toHaveBeenCalledTimes(contactRateLimit.max + 2)
+	})
+
+	it('Does not consume a rate-limit slot when nothing was sent (unconfigured or failed)', async () => {
+		// Arrange
+		const message = createMockContactMessage()
+		app.secrets.authAdminEmails = []
+		for (let i = 0; i < contactRateLimit.max; i++) await app.contactService.submit(message, ip)
+		app.secrets.authAdminEmails = ['a@example.com']
+		vi.spyOn(app.email, 'send').mockRejectedValue(new Error('SES down'))
+		for (let i = 0; i < contactRateLimit.max; i++) {
+			await expect(app.contactService.submit(message, ip)).rejects.toThrow('SES down')
+		}
+		vi.spyOn(app.email, 'send').mockResolvedValue(undefined)
+
+		// Act
+		const result = await app.contactService.submit(message, ip)
+
+		// Assert
+		expect(result).toBe('sent')
+	})
+
+	it('Counts as sent when at least one admin got the email and logs the failed recipient', async () => {
+		// Arrange
+		app.secrets.authAdminEmails = ['a@example.com', 'b@example.com']
+		vi.spyOn(app.email, 'send').mockImplementation(async ({ to }) => {
+			if (to === 'b@example.com') throw new Error('bounced')
+		})
+		const logError = vi.spyOn(app.log, 'error')
+
+		// Act
+		const result = await app.contactService.submit(createMockContactMessage(), ip)
+
+		// Assert
+		expect(result).toBe('sent')
+		expect(logError).toHaveBeenCalledWith(
+			expect.objectContaining({ to: 'b@example.com' }),
+			expect.any(String)
+		)
+	})
+
+	it('Throws when every recipient fails', async () => {
+		// Arrange
+		app.secrets.authAdminEmails = ['a@example.com', 'b@example.com']
+		vi.spyOn(app.email, 'send').mockRejectedValue(new Error('SES down'))
+
+		// Act + Assert
+		await expect(app.contactService.submit(createMockContactMessage(), ip)).rejects.toThrow(
+			'SES down'
+		)
+	})
+
+	it('Logs only the sender address, never the message body, when dropping a message', async () => {
+		// Arrange
+		app.secrets.authAdminEmails = []
+		const logError = vi.spyOn(app.log, 'error')
+		const message = createMockContactMessage({ message: 'Hemligt projekt, ring mig på 070.' })
+
+		// Act
+		await app.contactService.submit(message, ip)
+
+		// Assert
+		expect(logError).toHaveBeenCalledTimes(1)
+		expect(JSON.stringify(logError.mock.calls[0])).not.toContain('Hemligt')
+		expect(logError).toHaveBeenCalledWith({ from: message.email }, expect.any(String))
+	})
+
+	describe('Rate limiter', () => {
+		const now = Date.parse('2026-08-26T10:00:00.000Z')
+		const later = now + (contactRateLimit.windowMinutes + 1) * 60 * 1000
+
+		it('Drops keys whose sends fell out of the window instead of keeping them forever', () => {
+			// Arrange
+			const limiter = createRateLimiter()
+			for (let i = 0; i < 100; i++) limiter.record(`10.0.0.${i}`, now)
+
+			// Act
+			limiter.isLimited('10.0.0.1', later)
+
+			// Assert
+			expect(limiter.size()).toBe(0)
+		})
+
+		it('Never tracks more than the max number of keys', () => {
+			// Arrange
+			const limiter = createRateLimiter()
+
+			// Act
+			for (let i = 0; i < contactRateLimitMaxKeys + 500; i++) limiter.record(`key-${i}`, now)
+
+			// Assert
+			expect(limiter.size()).toBe(contactRateLimitMaxKeys)
+		})
+
+		it('Applies a global ceiling regardless of ip', () => {
+			// Arrange
+			const limiter = createRateLimiter()
+			for (let i = 0; i < contactRateLimit.globalMax; i++) limiter.record(`10.1.${i}.1`, now)
+
+			// Act + Assert
+			expect(limiter.isLimited('198.51.100.1', now)).toBe(true)
+			expect(limiter.isLimited('198.51.100.1', later)).toBe(false)
+		})
 	})
 })

@@ -14,10 +14,29 @@ const schema = {
 	response: { 202: z.object({}) },
 }
 
-/** Behind the load balancer the client ip is the first `x-forwarded-for` entry */
-const clientIp = (forwardedFor: string | string[] | undefined, fallback: string) => {
-	const header = Array.isArray(forwardedFor) ? forwardedFor[0] : forwardedFor
-	return header?.split(',')[0]?.trim() || fallback
+/**
+ * Number of trusted proxies that append to `x-forwarded-for` in front of the api. In AWS it is
+ * CloudFront → ALB (2); override with `TRUSTED_PROXY_HOPS` (e.g. 1 when calling the ALB directly).
+ */
+export const trustedProxyHops = Math.max(1, Number(process.env.TRUSTED_PROXY_HOPS) || 2)
+
+/**
+ * The client ip behind the proxies: every proxy APPENDS the address it saw, so anything the
+ * caller put in the header itself sits to the left of the last `hops` entries and is ignored.
+ * With fewer entries than hops the leftmost one is still proxy-added. No header → socket ip.
+ */
+export const clientIp = (
+	forwardedFor: string | string[] | undefined,
+	fallback: string,
+	hops = trustedProxyHops
+) => {
+	const header = Array.isArray(forwardedFor) ? forwardedFor.join(',') : forwardedFor
+	const entries = (header ?? '')
+		.split(',')
+		.map(entry => entry.trim())
+		.filter(Boolean)
+	if (!entries.length) return fallback
+	return entries[Math.max(0, entries.length - hops)]!.slice(0, 64)
 }
 
 /**
