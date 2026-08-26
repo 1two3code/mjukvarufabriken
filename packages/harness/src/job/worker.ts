@@ -1,9 +1,10 @@
+import { spawn } from 'node:child_process'
 import { mkdir, readdir, rm, stat } from 'node:fs/promises'
 import { dirname, join, relative } from 'node:path'
 
 import { query } from '@anthropic-ai/claude-agent-sdk'
 
-import { exec, git, sandboxEnv, tail } from './exec.ts'
+import { exec, git, launch, sandboxEnv, sandboxUser, tail, workerEnv } from './exec.ts'
 import { renderSpecForPlanning } from './planner.ts'
 import { totalTokens } from './types.ts'
 import { createUsageAccumulator } from './usage.ts'
@@ -27,6 +28,7 @@ export const repoConventions = `Repository conventions (npm-workspaces TypeScrip
 - Zod 4 schemas live in packages/models; the api validates with fastify-type-provider-zod and every route needs a response schema.
 - React 19 with the React Compiler: no useMemo/useCallback/React.memo. CSS modules, design tokens as CSS custom properties. User-facing text goes through useTranslation(); add every key to public/locales/en.json AND sv.json.
 - Prettier: tabs, no semicolons, single quotes, 100 columns. Do not hand-format imports.
+- Network: only the npm registry, GitHub and the Anthropic API are reachable (egress allowlist); every other network call fails, so do not try other hosts or the cloud metadata/credential endpoints.
 - Read CLAUDE.md and the matching .claude/rules/*.instructions.md before editing an area.
 - Commit your work with git when done (\`git add -A && git commit -m "feat(<area>): <task title>"\`). Never push, never change branches, never touch files outside this working directory.`
 
@@ -61,6 +63,7 @@ export const taskConventions = `Repository conventions (npm-workspaces TypeScrip
 - Zod 4 schemas live in packages/models; every api route needs a response schema.
 - React 19 with the React Compiler: no useMemo/useCallback/React.memo. CSS modules. User-facing text goes through useTranslation(); add every key to public/locales/en.json AND sv.json.
 - Prettier: tabs, no semicolons, single quotes, 100 columns. Do not hand-format imports.
+- Network: only the npm registry, GitHub and the Anthropic API are reachable (egress allowlist); every other network call fails, so do not try other hosts or the cloud metadata/credential endpoints.
 - CLAUDE.md and .claude/rules/*.instructions.md hold the full conventions — read only the rule file that matches the area you edit, and only when the notes above are not enough.
 - Commit with git when done (\`git add -A && git commit -m "feat(<area>): <task title>"\`). Never push, never change branches, never touch files outside this working directory.`
 
@@ -220,6 +223,30 @@ export const shareNodeModules = async (repoDir: string, targetDir: string) => {
 	}
 }
 
+/**
+ * Makes a directory writable for the worker uid (`sandboxUser`): the job and the workers are
+ * different users in one group, `/work` carries the setgid bit so everything below it is
+ * group-owned, and this puts the group write bit on what was created with a stricter mode (the
+ * template copy, `cp -al` — which also re-applies the source group — and anything git checked
+ * out before `umask 002` took effect). Hard-linked `node_modules` files are shared inodes, so
+ * their mode changes for every worktree at once — same as before, when everything was one uid.
+ * A no-op without a sandbox user.
+ */
+export const shareWithWorker = async (dir: string) => {
+	if (!sandboxUser()) return
+	const { gid } = await stat(dir)
+	await exec('chgrp', ['-R', String(gid), dir], { cwd: dir })
+	await exec('chmod', ['-R', 'g+rwX', dir], { cwd: dir })
+	shared.add(dir)
+}
+
+const shared = new Set<string>()
+
+/** `shareWithWorker` once per directory and process — before the first worker runs in it */
+export const ensureShared = async (dir: string) => {
+	if (!shared.has(dir)) await shareWithWorker(dir)
+}
+
 /** `git worktree add -b task/<id>` from the current main, with node_modules shared */
 export const createWorktree = async (repoDir: string, task: Task, signal?: AbortSignal) => {
 	const dir = worktreeDir(repoDir, task.id)
@@ -229,6 +256,7 @@ export const createWorktree = async (repoDir: string, task: Task, signal?: Abort
 	await git(['worktree', 'prune'], { cwd: repoDir, signal })
 	await git(['worktree', 'add', '-b', branch, dir, 'main'], { cwd: repoDir, signal })
 	await shareNodeModules(repoDir, dir)
+	await shareWithWorker(dir)
 	return { dir, branch }
 }
 
@@ -277,8 +305,10 @@ export const verifyRepo = async (
 ): Promise<VerifyOutcome> => {
 	const scope: GateScope = areas ? gateScopeForChanges(areas, changed) : { full: true }
 	const outputs: string[] = []
+	await ensureShared(repoDir)
 	for (const step of gateCommands(scope)) {
-		const result = await exec(step.command, step.args, { cwd: repoDir, signal })
+		// The repo's own scripts are customer code: they run as the worker uid
+		const result = await exec(step.command, step.args, { cwd: repoDir, signal, asWorker: true })
 		const output = `${result.stdout}\n${result.stderr}`
 		if (result.code !== 0) {
 			return {
@@ -362,9 +392,11 @@ export const runAcceptanceTests = async (
 	signal?: AbortSignal
 ): Promise<VerifyOutcome> => {
 	if (!files.length) return { ok: false, output: 'no acceptance test files to run' }
+	await ensureShared(repoDir)
 	const result = await exec('npx', ['vitest', 'run', '--reporter=json', '--', ...files], {
 		cwd: repoDir,
 		signal,
+		asWorker: true,
 	})
 	const report = jsonFromOutput(result.stdout)
 	if (!report) {
@@ -423,16 +455,43 @@ export const resolveEffort = (
 
 /**
  * Environment of an agent session: the sandbox env with every `DISABLE_PROMPT_CACHING*` switch
- * removed. The Agent SDK marks the system prompt, tool definitions and conversation prefix with
+ * removed, plus the worker uid's HOME / Claude config dir when a sandbox user is configured
+ * (the Claude Code process runs as that uid and needs a writable state dir of its own). The
+ * Agent SDK marks the system prompt, tool definitions and conversation prefix with
  * `cache_control` by itself, so a stable system prompt is what makes turn N+1 read turn N from
  * cache at 10 % — an inherited kill switch would silently multiply the input cost by ten.
  */
-export const sessionEnv = (env: NodeJS.ProcessEnv = process.env): NodeJS.ProcessEnv => ({
+export const sessionEnv = (
+	env: NodeJS.ProcessEnv = process.env,
+	user = sandboxUser(env)
+): NodeJS.ProcessEnv => ({
 	...Object.fromEntries(
 		Object.entries(sandboxEnv(env)).filter(([key]) => !key.startsWith('DISABLE_PROMPT_CACHING'))
 	),
+	...workerEnv(user),
 	CLAUDE_AGENT_SDK_CLIENT_APP: 'mf-harness/0.1',
 })
+
+/**
+ * Spawns the Agent SDK's Claude Code process as the sandbox worker uid (`launch` → `setpriv`).
+ * The SDK's default spawner is a plain local `spawn`; this one only changes who the process
+ * runs as. stderr is inherited so the CLI's own diagnostics reach the job log.
+ */
+export const spawnWorkerProcess: NonNullable<Options['spawnClaudeCodeProcess']> = ({
+	command,
+	args,
+	cwd,
+	env,
+	signal,
+}) => {
+	const launched = launch(command, args, { asWorker: true })
+	return spawn(launched.command, launched.args, {
+		cwd,
+		env,
+		signal,
+		stdio: ['pipe', 'pipe', 'inherit'],
+	})
+}
 
 const messageUsage = (message: SDKMessage): TokenUsage | undefined => {
 	if (message.type !== 'assistant') return undefined
@@ -488,7 +547,9 @@ export const runSession = async ({
 		maxTurns,
 		abortController: controller,
 		env: sessionEnv(),
+		...(sandboxUser() ? { spawnClaudeCodeProcess: spawnWorkerProcess } : {}),
 	}
+	await ensureShared(cwd)
 
 	const usage = createUsageAccumulator(onUsage)
 	let ok = false

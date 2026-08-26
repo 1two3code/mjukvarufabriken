@@ -2,7 +2,7 @@ import { topologicalOrder } from './dag.ts'
 import { exec, git, tail } from './exec.ts'
 import { renderSpecForPlanning } from './planner.ts'
 import { totalTokens } from './types.ts'
-import { repoConventions, runSession } from './worker.ts'
+import { ensureShared, repoConventions, runSession } from './worker.ts'
 
 import type { Plan, Spec, Task } from '@mf/models'
 import type { MergeOutcome, TokenUsage } from './types.ts'
@@ -162,10 +162,13 @@ export const syncDependencies = async (
 	const changed = await exec('git', ['diff', '--name-only', 'HEAD~1', 'HEAD'], { cwd: repoDir, signal })
 	const manifests = changed.stdout.split('\n').filter(file => manifestPattern.test(file))
 	if (!manifests.length) return { ok: true, tokens }
+	// Installs whatever the workers added to the manifests: customer-chosen packages, so as the
+	// worker uid (scripts are off either way)
+	await ensureShared(repoDir)
 	const install = await exec(
 		'npm',
 		['install', '--no-audit', '--no-fund', '--ignore-scripts', '--silent'],
-		{ cwd: repoDir, signal }
+		{ cwd: repoDir, signal, asWorker: true }
 	)
 	if (install.code !== 0) {
 		return {

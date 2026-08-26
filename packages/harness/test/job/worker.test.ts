@@ -1,7 +1,8 @@
-import { mkdir, mkdtemp, rm, writeFile } from 'node:fs/promises'
+import { mkdir, mkdtemp, rm, stat, writeFile } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 
+import { exec } from '#job/exec.ts'
 import {
 	evaluateVitestReport,
 	gateCommands,
@@ -13,6 +14,8 @@ import {
 	repoConventions,
 	resolveEffort,
 	sessionEnv,
+	shareWithWorker,
+	taskConventions,
 	verifyRepo,
 	workerLimits,
 	workerSystemPrompt,
@@ -173,6 +176,14 @@ describe('workerSystemPrompt', () => {
 		expect(prompt).toContain('the whole repository: `npm run lint` and `npm run test`')
 	})
 
+	it('Tells the worker that only npm, GitHub and Anthropic are reachable', () => {
+		const prompt = workerSystemPrompt(spec, plan, task(['apps/app']))
+		expect(prompt).toContain('only the npm registry, GitHub and the Anthropic API are reachable')
+		expect(prompt).toContain('every other network call fails')
+		expect(repoConventions).toContain('every other network call fails')
+		expect(taskConventions).toContain('every other network call fails')
+	})
+
 	it('Points at CLAUDE.md instead of telling the worker to read it up front', () => {
 		const prompt = workerSystemPrompt(spec, plan, task(['apps/app']))
 		expect(prompt).toContain('do not read CLAUDE.md or the rules up front')
@@ -197,6 +208,57 @@ describe('sessionEnv', () => {
 		})
 		expect(Object.keys(env).filter(key => key.startsWith('DISABLE_PROMPT_CACHING'))).toEqual([])
 		expect(env.JOB_TOKEN).toBeUndefined()
+		expect(env.HOME).toBeUndefined()
+	})
+
+	it('Gives the session the worker uid\'s HOME and Claude config dir when one is configured', () => {
+		const env = sessionEnv({ PATH: '/usr/bin', HOME: '/home/node', WORKER_UID: '1001' })
+		expect(env).toMatchObject({
+			PATH: '/usr/bin',
+			HOME: '/home/worker',
+			CLAUDE_CONFIG_DIR: '/home/worker/.claude',
+			WORKER_UID: '1001',
+		})
+		expect(sessionEnv({ HOME: '/home/node' }).HOME).toBe('/home/node')
+	})
+})
+
+describe('shareWithWorker', () => {
+	const fakeTree = async () => {
+		const dir = await mkdtemp(join(tmpdir(), 'mf-share-'))
+		await mkdir(join(dir, 'src'), { mode: 0o755 })
+		await writeFile(join(dir, 'src/a.ts'), 'a', { mode: 0o644 })
+		await writeFile(join(dir, 'secret.sh'), 'x', { mode: 0o700 })
+		return dir
+	}
+
+	it('Is a no-op without a sandbox user', async () => {
+		const dir = await fakeTree()
+		try {
+			await shareWithWorker(dir)
+			expect((await stat(join(dir, 'src/a.ts'))).mode & 0o777).toBe(0o644)
+		} finally {
+			await rm(dir, { recursive: true, force: true })
+		}
+	})
+
+	it('Opens the tree to the group: rw on files, rwx on dirs, x kept where it was', async () => {
+		const probe = await exec('setpriv', ['--version'], { cwd: process.cwd() })
+		if (probe.code !== 0) return
+		const dir = await fakeTree()
+		const umask = process.umask()
+		vi.stubEnv('WORKER_UID', String((process.getuid?.() ?? 0) + 1))
+		try {
+			await shareWithWorker(dir)
+			expect((await stat(join(dir, 'src'))).mode & 0o777).toBe(0o775)
+			expect((await stat(join(dir, 'src/a.ts'))).mode & 0o777).toBe(0o664)
+			expect((await stat(join(dir, 'secret.sh'))).mode & 0o777).toBe(0o770)
+			expect((await stat(join(dir, 'src/a.ts'))).gid).toBe((await stat(dir)).gid)
+		} finally {
+			process.umask(umask)
+			vi.unstubAllEnvs()
+			await rm(dir, { recursive: true, force: true })
+		}
 	})
 })
 
