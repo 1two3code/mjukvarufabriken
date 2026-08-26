@@ -1,12 +1,13 @@
 import { gateName } from '@mf/models'
 
 import { tail } from './exec.ts'
+import { licenceGate } from './gates/licence.ts'
 import { totalTokens } from './types.ts'
 
 import type { GateName, GateReport, NewJobEvent, NotifyPayload } from '@mf/models'
 import type { GateInput, GateOutcome, OrchestratorPorts, TokenUsage } from './types.ts'
 
-/** Gate order after the last merge: verify(lint+test) → acceptance-tests → review → acceptance-check */
+/** Gate order after the last merge: verify(lint+test) → acceptance-tests → review → licence → acceptance-check */
 export const gateOrder: readonly GateName[] = gateName
 
 export type RunGatesInput = Omit<GateInput, 'onUsage'> & {
@@ -45,6 +46,8 @@ const gatePort = (
 			return ports.acceptanceTests
 		case 'review':
 			return ports.review
+		case 'licence':
+			return ports.licence ?? licenceGate
 		case 'acceptance-check':
 			return ports.acceptanceCheck
 	}

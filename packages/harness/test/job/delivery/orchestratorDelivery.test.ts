@@ -29,6 +29,7 @@ const createPorts = (deliver: OrchestratorPorts['deliver']): OrchestratorPorts =
 	verify: async () => ({ ok: true, output: 'green' }),
 	acceptanceTests: async () => ({ ok: true, tokens: 0, summary: 'ok' }),
 	review: async () => ({ ok: true, tokens: 0, summary: 'ok' }),
+	licence: async () => ({ ok: true, tokens: 0, summary: 'ok' }),
 	acceptanceCheck: async () => ({ ok: true, tokens: 0, summary: 'ok' }),
 	deliver,
 })

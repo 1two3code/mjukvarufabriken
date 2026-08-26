@@ -208,6 +208,7 @@ export const createResident = ({
 			verify: ports.verify,
 			acceptanceTests: input => ports.acceptanceTests({ ...input, onUsage: work(input.onUsage) }),
 			review: input => ports.review({ ...input, onUsage: work(input.onUsage) }),
+			licence: ports.licence,
 			acceptanceCheck: input => ports.acceptanceCheck({ ...input, onUsage: work(input.onUsage) }),
 			// No M5 delivery: the resident delivers as a pull request on the customer's repo
 			deliver: undefined,
