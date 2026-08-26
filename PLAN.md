@@ -81,6 +81,7 @@ Everything that needs someone else's approval lives in TODO-EXTERNAL.md and is N
 
 ### M10 — Proof
 - [ ] Dogfood: 3 internal apps built end-to-end from spec, results logged in TOKENS.md
+  - 2026-08-27 (wave 3, efficiency): worker loop tuned without live calls — scoped task gate, size-based turn caps (S 60 / M 100 / L 150), gate-at-most-twice prompt, trimmed conventions, caching guaranteed, `WORKER_EFFORT` knob; analysis + expected savings in docs/EFFICIENCY.md. The savings are estimates: the first dogfood job must re-measure turns / budget-tokens per turn / gate runs per task against the 2026-08-26 baseline (S demo: 42 + 119 turns, 190k + 1.25M) before any number is trusted.
 - [ ] Pilot-ready: contract drafts in `legal/` (unreviewed until TODO-EXTERNAL clears)
 
 ## Open questions (answer inline)

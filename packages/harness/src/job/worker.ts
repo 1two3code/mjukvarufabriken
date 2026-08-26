@@ -8,8 +8,10 @@ import { renderSpecForPlanning } from './planner.ts'
 import { totalTokens } from './types.ts'
 import { createUsageAccumulator } from './usage.ts'
 
+import { sizeClass } from '#spec/priceEstimator.ts'
+
 import type { Options, SDKMessage } from '@anthropic-ai/claude-agent-sdk'
-import type { Plan, Spec, Task } from '@mf/models'
+import type { Plan, SizeClass, Spec, Task } from '@mf/models'
 import type { TaskOutcome, TokenUsage, VerifyOutcome } from './types.ts'
 
 // MARK: Model + prompt
@@ -28,8 +30,107 @@ export const repoConventions = `Repository conventions (npm-workspaces TypeScrip
 - Read CLAUDE.md and the matching .claude/rules/*.instructions.md before editing an area.
 - Commit your work with git when done (\`git add -A && git commit -m "feat(<area>): <task title>"\`). Never push, never change branches, never touch files outside this working directory.`
 
-export const workerSystemPrompt = (spec: Spec, plan: Plan, task: Task) =>
-	`You are an autonomous software engineer at Mjukvaruhuset building a customer application from a frozen spec. You work in an isolated git worktree on branch task/${task.id}; other workers handle the other tasks in parallel and your branches are merged afterwards in dependency order.
+/**
+ * Efficiency knobs (docs/EFFICIENCY.md). Every one is a plain constant so a live job can be
+ * measured with a single edit; the numbers are estimates until the next dogfood run.
+ */
+export const workerLimits = {
+	/**
+	 * Gate a task on the workspaces it touches (`task.areas`) instead of the whole monorepo; the
+	 * full-repo gate still runs at merge/verify. Only `apps/*` areas are scoped — a change under
+	 * `packages/*` is consumed by every app, so those tasks keep the full gate.
+	 */
+	scopedTaskGate: true,
+	/** Turn cap of the implementation session per spec size class */
+	maxTurnsBySize: { S: 60, M: 100, L: 150 } satisfies Record<SizeClass, number>,
+	/** Turn cap of the one repair session — the safety valve when the cap above cut the worker off */
+	repairTurns: 60,
+	/** `verifyRepo` shows the worker at most this many lines of a failing gate */
+	gateOutputLines: 80,
+}
+
+/**
+ * The short form for workers: what a task needs to not break the repo. The long template
+ * CLAUDE.md is a "read if needed" pointer — every worker turn re-reads its whole context, so
+ * a 14 kB conventions dump costs ~4k tokens per turn for the whole session.
+ */
+export const taskConventions = `Repository conventions (npm-workspaces TypeScript monorepo, ESM):
+- Imports use the \`.ts\` extension and the workspace's \`#/*\` alias; no relative parent imports (\`../\`).
+- Named exports everywhere except Fastify plugins/routes/services (default export for autoload).
+- Zod 4 schemas live in packages/models; every api route needs a response schema.
+- React 19 with the React Compiler: no useMemo/useCallback/React.memo. CSS modules. User-facing text goes through useTranslation(); add every key to public/locales/en.json AND sv.json.
+- Prettier: tabs, no semicolons, single quotes, 100 columns. Do not hand-format imports.
+- CLAUDE.md and .claude/rules/*.instructions.md hold the full conventions — read only the rule file that matches the area you edit, and only when the notes above are not enough.
+- Commit with git when done (\`git add -A && git commit -m "feat(<area>): <task title>"\`). Never push, never change branches, never touch files outside this working directory.`
+
+/** Which workspaces a task's gate covers; `full` = the repo-root `npm run lint` + `npm test` */
+export type GateScope = { workspaces: string[] } | { full: true }
+
+const workspaceOf = (area: string) =>
+	area
+		.replace(/^\.?\//, '')
+		.split('/')
+		.slice(0, 2)
+		.join('/')
+
+/**
+ * Pure mapping from a task's `areas` to the gate scope: `apps/<x>` (or anything below it) →
+ * that workspace; anything else (packages, infra, root files, unknown) → full gate.
+ */
+export const gateScopeForAreas = (areas: string[]): GateScope => {
+	if (!workerLimits.scopedTaskGate || !areas.length) return { full: true }
+	const workspaces = new Set<string>()
+	for (const area of areas) {
+		const workspace = workspaceOf(area)
+		if (!/^apps\/[\w.-]+$/.test(workspace)) return { full: true }
+		workspaces.add(workspace)
+	}
+	return { workspaces: [...workspaces].sort() }
+}
+
+export type GateCommand = { script: 'lint' | 'test'; command: string; args: string[] }
+
+/** The commands the gate runs (and tells the worker to run) for a scope */
+export const gateCommands = (scope: GateScope): GateCommand[] =>
+	'full' in scope
+		? [
+				{ script: 'lint', command: 'npm', args: ['run', 'lint', '--silent'] },
+				{ script: 'test', command: 'npm', args: ['run', 'test', '--silent'] },
+			]
+		: [
+				{
+					script: 'lint',
+					command: 'npm',
+					args: [
+						'run',
+						'lint',
+						'--silent',
+						'--if-present',
+						...scope.workspaces.flatMap(ws => ['-w', ws]),
+					],
+				},
+				{
+					script: 'test',
+					command: 'npx',
+					args: ['vitest', 'run', '--passWithNoTests', ...scope.workspaces],
+				},
+			]
+
+export const renderCommand = ({ command, args }: Pick<GateCommand, 'command' | 'args'>) =>
+	[command, ...args.filter(arg => arg !== '--silent')].join(' ')
+
+export const workerSystemPrompt = (
+	spec: Spec,
+	plan: Plan,
+	task: Task,
+	scope: GateScope = gateScopeForAreas(task.areas)
+) => {
+	const [lint, test] = gateCommands(scope).map(renderCommand)
+	const scopeNote =
+		'full' in scope
+			? 'the whole repository'
+			: `the workspace(s) you touch (${scope.workspaces.join(', ')}); the full repository is checked again after merge`
+	return `You are an autonomous software engineer at Mjukvaruhuset building a customer application from a frozen spec. You work in an isolated git worktree on branch task/${task.id}; other workers handle the other tasks in parallel and your branches are merged afterwards in dependency order.
 
 # Your task: ${task.title}
 ${task.description}
@@ -40,9 +141,15 @@ Depends on (already merged into your branch): ${task.dependsOn.join(', ') || 'no
 
 # Definition of done
 1. The task description is implemented and the listed acceptance criteria are met.
-2. \`npm run lint\` and \`npm test\` pass from the repository root — run them yourself and fix everything they report before you finish.
+2. The gate is green for ${scopeNote}: \`${lint}\` and \`${test}\` from the repository root.
 3. The work is committed on the current branch.
 Stay within your task: do not implement the other tasks in the plan, but keep interfaces compatible with them.
+
+# Working efficiently (every turn re-reads your whole context; keep it small)
+- Read only the files you need; do not read CLAUDE.md or the rules up front.
+- While iterating, type-check with \`npx tsgo --noemit -p <workspace>\` (seconds) instead of the full lint.
+- Run the lint + test gate at most twice: once when the implementation is complete, once after fixing what it reported. Never run the full-repo \`npm run lint\`/\`npm test\` when the scoped commands above cover your change.
+- Batch independent shell commands and edits; do not re-run passing tests.
 
 # The whole plan (for context)
 ${plan.summary}
@@ -51,7 +158,14 @@ ${plan.tasks.map(item => `- ${item.id}: ${item.title}${item.id === task.id ? ' (
 # The spec
 ${renderSpecForPlanning(spec)}
 
-# ${repoConventions}`
+# ${taskConventions}`
+}
+
+/** Implementation-session turn cap for a spec (`sizeClass` from the price estimate when unset) */
+export const maxTurnsForSpec = (spec: Spec) => {
+	const size = spec.sizeClass ?? sizeClass(spec)
+	return { size, maxTurns: workerLimits.maxTurnsBySize[size] }
+}
 
 // MARK: Worktrees
 
@@ -106,19 +220,32 @@ export const removeWorktree = async (repoDir: string, taskId: string) => {
 
 // MARK: Verification
 
-/** Runs the customer repo's lint + tests; the gate every task and the final merge must pass */
-export const verifyRepo = async (repoDir: string, signal?: AbortSignal): Promise<VerifyOutcome> => {
+export type VerifyOptions = {
+	/** Task areas → scoped gate (see `gateScopeForAreas`); omitted → full-repo gate */
+	areas?: string[]
+}
+
+/**
+ * Runs the customer repo's lint + tests; the gate every task and the final merge must pass.
+ * With `areas` the gate is scoped to the task's workspaces (`workerLimits.scopedTaskGate`).
+ */
+export const verifyRepo = async (
+	repoDir: string,
+	signal?: AbortSignal,
+	{ areas }: VerifyOptions = {}
+): Promise<VerifyOutcome> => {
+	const scope: GateScope = areas ? gateScopeForAreas(areas) : { full: true }
 	const outputs: string[] = []
-	for (const script of ['lint', 'test']) {
-		const result = await exec('npm', ['run', script, '--silent'], { cwd: repoDir, signal })
+	for (const step of gateCommands(scope)) {
+		const result = await exec(step.command, step.args, { cwd: repoDir, signal })
 		const output = `${result.stdout}\n${result.stderr}`
 		if (result.code !== 0) {
 			return {
 				ok: false,
-				output: `npm run ${script} failed (${result.code}):\n${tail(output, 80)}`,
+				output: `${renderCommand(step)} failed (${result.code}):\n${tail(output, workerLimits.gateOutputLines)}`,
 			}
 		}
-		outputs.push(`npm run ${script}: ok`)
+		outputs.push(`${renderCommand(step)}: ok`)
 	}
 	return { ok: true, output: outputs.join('\n') }
 }
@@ -208,6 +335,8 @@ export type SessionInput = {
 	onUsage: (usage: TokenUsage) => void
 	model?: string
 	maxTurns?: number
+	/** Reasoning effort (default: the model's; `WORKER_EFFORT` env overrides, see docs/EFFICIENCY.md) */
+	effort?: Options['effort']
 	/** Tool allowlist (default: the full worker set) */
 	tools?: readonly string[]
 	/** JSON schema the session's final answer must match; parsed into `structuredOutput` */
@@ -218,9 +347,37 @@ export type SessionOutcome = {
 	ok: boolean
 	tokens: number
 	result: string
+	/** True when the session ended because it hit `maxTurns` (the `error_max_turns` result) */
+	maxTurnsReached?: boolean
 	/** The structured answer when `outputSchema` was given and the session produced one */
 	structuredOutput?: unknown
 }
+
+const effortLevels = ['low', 'medium', 'high', 'xhigh', 'max'] as const
+/** Session effort: explicit > `WORKER_EFFORT` env (one of the SDK levels) > model default */
+export const resolveEffort = (
+	override?: Options['effort'],
+	env: NodeJS.ProcessEnv = process.env
+): Options['effort'] => {
+	if (override) return override
+	const fromEnv = env.WORKER_EFFORT
+	return (effortLevels as readonly string[]).includes(fromEnv ?? '')
+		? (fromEnv as Options['effort'])
+		: undefined
+}
+
+/**
+ * Environment of an agent session: the sandbox env with every `DISABLE_PROMPT_CACHING*` switch
+ * removed. The Agent SDK marks the system prompt, tool definitions and conversation prefix with
+ * `cache_control` by itself, so a stable system prompt is what makes turn N+1 read turn N from
+ * cache at 10 % — an inherited kill switch would silently multiply the input cost by ten.
+ */
+export const sessionEnv = (env: NodeJS.ProcessEnv = process.env): NodeJS.ProcessEnv => ({
+	...Object.fromEntries(
+		Object.entries(sandboxEnv(env)).filter(([key]) => !key.startsWith('DISABLE_PROMPT_CACHING'))
+	),
+	CLAUDE_AGENT_SDK_CLIENT_APP: 'mf-harness/0.1',
+})
 
 const messageUsage = (message: SDKMessage): TokenUsage | undefined => {
 	if (message.type !== 'assistant') return undefined
@@ -249,6 +406,7 @@ export const runSession = async ({
 	onUsage,
 	model,
 	maxTurns = 200,
+	effort,
 	tools = workerTools,
 	outputSchema,
 }: SessionInput): Promise<SessionOutcome> => {
@@ -257,9 +415,11 @@ export const runSession = async ({
 	if (signal.aborted) onAbort()
 	else signal.addEventListener('abort', onAbort, { once: true })
 
+	const resolvedEffort = resolveEffort(effort)
 	const options: Options = {
 		cwd,
 		model: resolveWorkerModel(model),
+		...(resolvedEffort ? { effort: resolvedEffort } : {}),
 		systemPrompt,
 		tools: [...tools],
 		allowedTools: [...tools],
@@ -272,13 +432,14 @@ export const runSession = async ({
 		persistSession: false,
 		maxTurns,
 		abortController: controller,
-		env: { ...sandboxEnv(), CLAUDE_AGENT_SDK_CLIENT_APP: 'mf-harness/0.1' },
+		env: sessionEnv(),
 	}
 
 	const usage = createUsageAccumulator(onUsage)
 	let ok = false
 	let result = ''
 	let structuredOutput: unknown
+	let maxTurnsReached = false
 	let reported = 0
 	let turns = 0
 	try {
@@ -294,6 +455,7 @@ export const runSession = async ({
 					0
 				)
 				ok = message.subtype === 'success' && !message.is_error
+				maxTurnsReached = message.subtype === 'error_max_turns'
 				if (message.subtype === 'success') structuredOutput = message.structured_output
 				result =
 					message.subtype === 'success'
@@ -317,7 +479,7 @@ export const runSession = async ({
 	}
 	// Top up with anything the per-message stream missed (subagents, compaction)
 	usage.reconcile(reported)
-	return { ok, tokens: usage.total, result, structuredOutput }
+	return { ok, tokens: usage.total, result, maxTurnsReached, structuredOutput }
 }
 
 // MARK: Task runner
@@ -347,8 +509,9 @@ const commitLeftovers = async (dir: string, task: Task, signal: AbortSignal) => 
 }
 
 /**
- * One task = one worktree + one agent session, then lint + test. When verification fails the
- * agent gets exactly one repair session with the output; still red → the task fails.
+ * One task = one worktree + one agent session (turn cap by spec size), then the scoped lint +
+ * test gate. When verification fails the agent gets exactly one repair session with the output;
+ * still red → the task fails. A session cut off by its turn cap says so in the reason.
  */
 export const runTask = async ({
 	task,
@@ -365,43 +528,59 @@ export const runTask = async ({
 		tokens += totalTokens(usage)
 		onUsage(usage)
 	}
-	const systemPrompt = workerSystemPrompt(spec, plan, task)
+	const scope = gateScopeForAreas(task.areas)
+	const [lint, test] = gateCommands(scope).map(renderCommand)
+	const systemPrompt = workerSystemPrompt(spec, plan, task, scope)
+	const { size, maxTurns } = maxTurnsForSpec(spec)
+	const capNote = (session: SessionOutcome, label: string, cap: number) =>
+		session.maxTurnsReached ? ` (${label} hit its turn cap: ${cap} turns for size ${size})` : ''
 
 	const session = await runSession({
 		cwd: dir,
 		systemPrompt,
-		prompt: `Implement the task "${task.title}" as described in your instructions. Start by reading CLAUDE.md, then work through the task, run lint + tests, fix, and commit.`,
+		prompt: `Implement the task "${task.title}" as described in your instructions. Work through the task, run the gate (\`${lint}\`, \`${test}\`), fix, and commit.`,
 		signal,
 		onUsage: count,
 		model,
+		maxTurns,
 	})
 	if (signal.aborted) return { ok: false, tokens, branch, reason: 'aborted' }
-	if (!session.ok) {
+	if (!session.ok && !session.maxTurnsReached) {
 		return { ok: false, tokens, branch, reason: `agent session failed: ${session.result}` }
 	}
 
+	// A capped session is not a failure yet: whatever it left is committed and gated, and the
+	// repair session is the safety valve that finishes the last mile.
 	await commitLeftovers(dir, task, signal)
-	let verification = await verifyRepo(dir, signal)
+	let verification = await verifyRepo(dir, signal, { areas: task.areas })
 	if (!verification.ok) {
 		const repair = await runSession({
 			cwd: dir,
 			systemPrompt,
-			prompt: `Verification failed after your work. Fix it so that \`npm run lint\` and \`npm test\` pass, then commit.\n\n${verification.output}`,
+			prompt: `Verification failed after your work${capNote(session, 'your session', maxTurns)}. Fix it so that \`${lint}\` and \`${test}\` pass, then commit. Run the gate at most once more after your fixes.\n\n${verification.output}`,
 			signal,
 			onUsage: count,
 			model,
-			maxTurns: 80,
+			maxTurns: workerLimits.repairTurns,
 		})
 		if (signal.aborted) return { ok: false, tokens, branch, reason: 'aborted' }
-		if (!repair.ok) {
+		if (!repair.ok && !repair.maxTurnsReached) {
 			return { ok: false, tokens, branch, reason: `repair session failed: ${repair.result}` }
 		}
 		await commitLeftovers(dir, task, signal)
-		verification = await verifyRepo(dir, signal)
-		if (!verification.ok) return { ok: false, tokens, branch, reason: verification.output }
+		verification = await verifyRepo(dir, signal, { areas: task.areas })
+		if (!verification.ok) {
+			const caps = `${capNote(session, 'worker session', maxTurns)}${capNote(repair, 'repair session', workerLimits.repairTurns)}`
+			return { ok: false, tokens, branch, reason: `${verification.output}${caps}` }
+		}
 	}
 	if (!(await hasCommits(dir, branch, signal))) {
-		return { ok: false, tokens, branch, reason: 'worker produced no commits' }
+		return {
+			ok: false,
+			tokens,
+			branch,
+			reason: `worker produced no commits${capNote(session, 'worker session', maxTurns)}`,
+		}
 	}
 	return { ok: true, tokens, branch }
 }

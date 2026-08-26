@@ -45,3 +45,7 @@ The demo commits the docs on the repo's main — use a scratch clone. Without `-
 `runJob(spec, budget)` is a typed placeholder; `JobSpec`, `JobBudget`, `JobStatus` and `JobResult` are the contract the api and the job container will share. `JobSpec.spec` is the frozen `Spec` from `@mf/models`.
 
 M3 intent: a job runs as a container on ECS Fargate, receives a frozen spec + budget (never customer secrets), plans a task DAG, runs Claude Agent SDK workers in parallel git worktrees, merges, and streams progress events to `job_events` in `@mf/db`. Hard token budget, kill switch, egress allowlist (npm, github, anthropic). `@anthropic-ai/claude-agent-sdk` is added when M3 starts.
+
+## Worker efficiency (wave 3)
+
+`docs/EFFICIENCY.md` explains where a worker session's tokens go and the levers. The knobs live in `workerLimits` (`src/job/worker.ts`): the task gate is scoped to the `apps/*` workspaces in `task.areas` (`npm run lint -w <ws>`, `npx vitest run <ws>`; `packages/*` tasks and the merge/verify gate stay full-repo), the implementation session is capped by spec size (S 60 / M 100 / L 150 turns, repair 60 — a hit cap is named in the `task_failed` reason), the system prompt tells the worker to gate at most twice and to iterate with `tsgo --noemit`, and points at CLAUDE.md instead of having it read up front. Sessions never inherit a `DISABLE_PROMPT_CACHING*` switch; `WORKER_EFFORT=low|medium|high|xhigh|max` sets the SDK effort (default: the model's). All savings are estimates until the next live job.
