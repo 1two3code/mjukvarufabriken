@@ -21,7 +21,11 @@ Infra details: `infra/README.md`; alarms are defined in `infra/lib/ops-stack.ts`
 
 Every job event is written twice: to `job_events` (what the portal shows) and as a JSON log line
 `{"time":…,"message":"event <type>","jobId":"…",...payload}`. Terminal lines are
-`"event done"` / `"event failed"` followed by `"job finished"` with `status` and `tokensUsed`.
+`"event done"` / `"event failed"` followed by `"job finished"` with `status` and `tokensUsed` —
+or, when the task dies outside the orchestrator (SIGTERM from ECS, OOM, unhandled rejection,
+seed/DB errors), a single `"job crashed"` line with `reason` and no `job finished`. Note that the
+customer's own build scripts write to the same log stream, so nothing here is tamper-proof until
+the job reports through the api instead (PLAN.md, M3 hardening).
 
 ```shell
 # Everything one job logged, oldest first (CloudWatch Logs Insights)
@@ -81,10 +85,14 @@ All alarms e-mail `adminEmails` through `mf-alerts-<env>` (and again on OK). Thr
 
 ### jobs-failed
 
-A job logged `event failed` in the last 5 minutes.
-First: find the job (`filter message = "event failed"` in `/mf/<env>/jobs`) and read its `reason`.
-Common: budget exhausted (`tokensUsed` near the job limit), a gate that never went green, proxy
-403 on a domain the build needed, worker timeouts. The job row keeps `plan` + `error` for the portal.
+A job logged `event failed` (the orchestrator gave up) or `job crashed` (the task died: SIGTERM,
+OOM, unhandled rejection, seed/DB error) in the last 5 minutes.
+First: find the job (`filter message in ["event failed", "job crashed"]` in `/mf/<env>/jobs`)
+and read its `reason`.
+Common for `event failed`: budget exhausted (`tokensUsed` near the job limit), a gate that never
+went green, proxy 403 on a domain the build needed, worker timeouts. The job row keeps `plan` +
+`error` for the portal. Common for `job crashed`: OOM (`aws ecs describe-tasks` → `stoppedReason`),
+a kill from the api (SIGTERM), Secrets Manager / Postgres unreachable at start-up.
 
 ### job-token-burn
 
@@ -104,8 +112,11 @@ means the new task set is failing; ECS rolls it back (see rolling back).
 
 An api task has failed the `/health` check for 10 minutes.
 First: `aws ecs describe-services` → `events` (OOM, image pull, secret access denied), then the
-task's log stream. `/health` fails when Postgres is unreachable — check `rds-*` alarms and the
-security-group ingress (`api to postgres`).
+task's log stream. `/health` only reflects *boot-time* database failures (secret resolution or
+migrations failed → 503 `DEGRADED`); it does not probe Postgres afterwards, so a task that
+started fine and then lost the database stays "healthy" and shows up as `api-5xx` instead. For a
+task that never became healthy: check the `rds-*` alarms, the security-group ingress
+(`api to postgres`) and the `DATABASE_SECRET_ARN` grant.
 
 ### rds-cpu
 

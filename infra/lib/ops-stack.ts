@@ -11,7 +11,7 @@ import {
 } from 'aws-cdk-lib/aws-cloudwatch'
 import { SnsAction } from 'aws-cdk-lib/aws-cloudwatch-actions'
 import { HttpCodeElb, HttpCodeTarget } from 'aws-cdk-lib/aws-elasticloadbalancingv2'
-import { ServicePrincipal } from 'aws-cdk-lib/aws-iam'
+import { Effect, PolicyStatement, ServicePrincipal } from 'aws-cdk-lib/aws-iam'
 import { FilterPattern, MetricFilter } from 'aws-cdk-lib/aws-logs'
 import { Topic } from 'aws-cdk-lib/aws-sns'
 import { EmailSubscription } from 'aws-cdk-lib/aws-sns-subscriptions'
@@ -55,8 +55,23 @@ export class OpsStack extends Stack {
 		for (const email of environment.adminEmails) {
 			this.topic.addSubscription(new EmailSubscription(email))
 		}
-		// AWS Budgets publishes its notifications from the service principal, not from this account
-		this.topic.grantPublish(new ServicePrincipal('budgets.amazonaws.com'))
+		// AWS Budgets publishes its notifications from the service principal, not from this
+		// account. The source conditions keep a budget in someone else's account from using our
+		// (predictably named) topic to mail the admins (confused deputy).
+		this.topic.addToResourcePolicy(
+			new PolicyStatement({
+				sid: 'AllowBudgetsPublish',
+				effect: Effect.ALLOW,
+				principals: [new ServicePrincipal('budgets.amazonaws.com')],
+				actions: ['sns:Publish'],
+				resources: [this.topic.topicArn],
+				conditions: {
+					StringEquals: { 'aws:SourceAccount': this.account },
+					ArnLike: { 'aws:SourceArn': `arn:${this.partition}:budgets::${this.account}:budget/*` },
+				},
+			})
+		)
+		const topicPolicy = this.topic.node.findChild('Policy')
 
 		const notify = new SnsAction(this.topic)
 		const createAlarm = (alarm: Alarm) => {
@@ -66,10 +81,17 @@ export class OpsStack extends Stack {
 		}
 
 		// MARK: Build jobs — metric filters over the JSON log lines written by apps/job:
-		// `{"message":"event failed",...}` and `{"message":"job finished","tokensUsed":N,...}`
+		// `{"message":"event failed",...}` (the orchestrator gave up), `{"message":"job crashed",...}`
+		// (SIGTERM / unhandled rejection / thrown outside the orchestrator — that path bypasses
+		// `emit`, so no `event failed` line) and `{"message":"job finished","tokensUsed":N,...}`.
+		// Customer build scripts write to the same log stream, so these lines can be spoofed; the
+		// real fix is api-side job reporting (PLAN.md, M3 hardening).
 		const failedJobs = new MetricFilter(this, 'FailedJobsFilter', {
 			logGroup: resources.jobLogGroup,
-			filterPattern: FilterPattern.stringValue('$.message', '=', 'event failed'),
+			filterPattern: FilterPattern.any(
+				FilterPattern.stringValue('$.message', '=', 'event failed'),
+				FilterPattern.stringValue('$.message', '=', 'job crashed')
+			),
 			metricNamespace: namespace,
 			metricName: 'JobsFailed',
 			metricValue: '1',
@@ -77,7 +99,8 @@ export class OpsStack extends Stack {
 		createAlarm(
 			new Alarm(this, 'FailedJobsAlarm', {
 				alarmName: `mf-${environment.name}-jobs-failed`,
-				alarmDescription: 'A build job logged "event failed" (docs/RUNBOOK.md#jobs-failed)',
+				alarmDescription:
+					'A build job logged "event failed" or "job crashed" (docs/RUNBOOK.md#jobs-failed)',
 				metric: failedJobs.metric({ statistic: Stats.SUM, period }),
 				threshold: 1,
 				evaluationPeriods: 1,
@@ -217,8 +240,10 @@ export class OpsStack extends Stack {
 		// MARK: Budget — monthly cost of everything tagged Environment=<env> (the `Environment`
 		// cost-allocation tag must be activated once under Billing, TODO-EXTERNAL; until then the
 		// filtered spend reads 0). 80 % actual and 100 % forecasted both go to the topic.
+		// Budgets checks at create time that the topic lets budgets.amazonaws.com publish, so the
+		// budget must wait for the topic *policy* — CloudFormation only orders it after the topic.
 		const subscribers = [{ subscriptionType: 'SNS', address: this.topic.topicArn }]
-		new CfnBudget(this, 'MonthlyBudget', {
+		const budget = new CfnBudget(this, 'MonthlyBudget', {
 			budget: {
 				budgetName: `mf-${environment.name}-monthly`,
 				budgetType: 'COST',
@@ -247,5 +272,6 @@ export class OpsStack extends Stack {
 				},
 			],
 		})
+		budget.node.addDependency(topicPolicy)
 	}
 }

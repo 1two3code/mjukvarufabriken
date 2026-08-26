@@ -72,6 +72,7 @@ npm run build
 cd infra && npx cdk bootstrap && npx cdk deploy resources-dev   # 1. resources (RDS takes ~10 min)
 # 2. fill the secrets (above)
 npx cdk deploy mf-dev                                           # 3. site + portal + api
+npx cdk deploy ops-dev                                          # 4. alarms + budget (confirm the SNS e-mail)
 ```
 
 Then point `VITE_API_URL` in `apps/portal/.env.dev` (and `apps/site/.env.dev`) at the `ApiUrl` output and redeploy `mf-dev`. The GitHub Actions `deploy` workflow automates this (see `.github/workflows/deploy.yml`).
@@ -82,6 +83,6 @@ Then point `VITE_API_URL` in `apps/portal/.env.dev` (and `apps/site/.env.dev`) a
 |---|---|---|---|---|
 | dev | 2026-08-26 | https://dev.mjukvaruhuset.se | https://portal.dev.mjukvaruhuset.se | https://api.dev.mjukvaruhuset.se |
 
-Deploy with `infra/scripts/deploy.sh <env> [stacks]` (reads AWS creds from the root `.env`).
+Deploy with `infra/scripts/deploy.sh <env> [stacks]` (reads AWS creds from the root `.env`); with no stacks given it deploys `resources-<env>`, `mf-<env>` and `ops-<env>` in that order, the same as the `deploy` workflow.
 
 Both SPA distributions forward `/bff/*` to the api ALB, so the apps use `VITE_API_URL=/bff` in every mode (locally Vite proxies `/bff` to `:5174`). ACM certs for dev were requested with `aws acm request-certificate` (us-east-1 for CloudFront, eu-north-1 for the ALB) and DNS-validated in the `mjukvaruhuset.se` hosted zone; ARNs live in `lib/config.ts`. For `live`, repeat with `mjukvaruhuset.se` + `portal.mjukvaruhuset.se` and `api.mjukvaruhuset.se`.

@@ -46,3 +46,7 @@ jobs:
       - name: Deploy web stack
         working-directory: infra
         run: npx cdk deploy mf-${{ inputs.environment }} --require-approval never
+
+      - name: Deploy ops stack
+        working-directory: infra
+        run: npx cdk deploy ops-${{ inputs.environment }} --require-approval never

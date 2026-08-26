@@ -258,16 +258,20 @@ export class ResourcesStack extends Stack {
 			condition: ContainerDependencyCondition.HEALTHY,
 		})
 
-		// MARK: Job task role — least privilege (reviewed M9). The container runs customer-driven
-		// code, so it gets exactly what apps/job needs and nothing that could reach other
-		// customers' data or the platform's own keys:
+		// MARK: Job task role — reviewed M9. The container runs customer-driven code, so it gets
+		// exactly what apps/job needs today:
 		//   secretsmanager:GetSecretValue on the RDS secret   — DATABASE_SECRET_ARN: job row + events
 		//   secretsmanager:GetSecretValue on anthropic-api-key — the build itself (Agent SDK workers)
-		//   s3:PutObject*/Abort* on the artifacts bucket       — upload deliverables (never read/list/delete:
-		//                                                         one job must not see another's zips)
+		//   s3:PutObject*/Abort* on the artifacts bucket       — upload deliverables (never read/list/delete)
 		// Never: Stripe keys, the auth signing key, the GitHub token (M5 delivery mints a
 		// short-lived per-job token instead), ecs:* or logs:* (the execution role writes logs).
 		// Secrets reach the container as ARNs and are fetched at start-up; no plaintext env.
+		//
+		// KNOWN GAPS (PLAN.md, "M3 hardening" — not closed by M9): the RDS secret is the *master*
+		// credential, so code running in the job can read/write every customer's rows; and
+		// PutObject is bucket-wide, so a job can overwrite (not read) another job's deliverable —
+		// versioning keeps the previous copy. Both go away when the job reports status/events and
+		// uploads through an authenticated per-job api endpoint instead of holding credentials.
 		this.databaseSecret.grantRead(this.jobTaskDefinition.taskRole)
 		this.secrets['anthropic-api-key'].grantRead(this.jobTaskDefinition.taskRole)
 		this.artifactsBucket.grantPut(this.jobTaskDefinition.taskRole)

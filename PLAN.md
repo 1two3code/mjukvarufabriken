@@ -45,7 +45,7 @@ Everything that needs someone else's approval lives in TODO-EXTERNAL.md and is N
 - [x] Progress events streamed to DB (portal shows them live) — 2026-08-26 (`@mf/db` postgres driver + `migrate` + job repositories, `0002_jobs_task_arn`; api `db`/`ecs` plugins + `jobService` + 6 routes, 30 api tests; portal `/orders/:orderId/job` polls `events?after=` every 3 s, Start build on frozen spec, admin kill button)
 
 ### M4 — QA gates
-- [ ] M3 hardening: the job reports status/events/usage to the api over an authenticated per-job endpoint instead of holding the RDS master secret (remove `DATABASE_SECRET_ARN` grant + job↔DB SG rule; docs/M3-REVIEW.md #18)
+- [ ] M3 hardening: the job reports status/events/usage to the api over an authenticated per-job endpoint instead of holding the RDS master secret (remove `DATABASE_SECRET_ARN` grant + job↔DB SG rule; docs/M3-REVIEW.md #18). Same endpoint closes the M9-review gaps: per-job artifact uploads (today `s3:PutObject` is bucket-wide, a job can overwrite another's zip) and tamper-proof job events (today the `jobs-failed` / `job-token-burn` alarms read log lines the customer's build scripts can also print)
 - [ ] Tests generated from acceptance criteria and must pass
 - [ ] Independent review agent (correctness + security), findings must be fixed or waived
 - [ ] Acceptance-check agent: every criterion mapped to evidence
@@ -75,7 +75,7 @@ Everything that needs someone else's approval lives in TODO-EXTERNAL.md and is N
 ### M9 — Ops
 - [x] Logs + alerts: token burn per job, failed jobs, cost anomalies — 2026-08-26, `ops-<env>` stack (SNS `mf-alerts-<env>` → adminEmails, 9 alarms, monthly budget); synth-verified + `infra/test`, deploy pending (main session). E-mail subscription confirmation + cost-allocation tag in TODO-EXTERNAL.
 - [x] Backups (RDS automated), incident runbook — 2026-08-26, RDS 7 d dev / 30 d live + snapshot-on-delete, artifacts bucket versioned with 90 d noncurrent expiry, docs/RUNBOOK.md; synth-verified, deploy pending.
-- [x] Security baseline: secrets in Secrets Manager, least-privilege IAM, dependency scanning — 2026-08-26, synthesised task defs carry ARNs only (asserted in `infra/test/security-baseline.test.ts`), job role narrowed to `s3:PutObject*`, roles documented per action, `.github/dependabot.yml` + `npm audit` step (allow-fail), CloudFront headers incl. nosniff; deploy pending.
+- [x] Security baseline: secrets in Secrets Manager, least-privilege IAM, dependency scanning — 2026-08-26, synthesised task defs carry ARNs only and no credential-looking values (asserted in `infra/test/security-baseline.test.ts`), job role narrowed to `s3:PutObject*`, roles documented per action (remaining sandbox gaps — master DB secret, bucket-wide put — tracked under M3 hardening), `.github/dependabot.yml` + `npm audit` step (allow-fail), CloudFront headers incl. nosniff; deploy pending.
 - [ ] RDS TLS `verify-full` by default with the RDS CA bundle in the api/job images (`DATABASE_SSL`, docs/M3-REVIEW.md #12)
 
 ### M10 — Proof

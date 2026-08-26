@@ -18,8 +18,31 @@ const containersOf = (template: Template) =>
 		r => (r.Properties as { ContainerDefinitions: ContainerDefinition[] }).ContainerDefinitions
 	)
 
-/** Env var names that would carry a credential unless they only point at Secrets Manager */
-const looksSecret = /KEY|SECRET|TOKEN|PASSWORD|CREDENTIAL/i
+/**
+ * Env var names that would carry a credential unless they only point at Secrets Manager.
+ * `*_URL` is allowed by name (SITE_URL, AUTH_ISSUER…) — a credential-carrying URL is caught
+ * by value below.
+ */
+const looksSecret = /KEY|SECRET|TOKEN|PASSWORD|PASSWD|CREDENTIAL|_DSN$|_AUTH$/i
+
+/** Values that are a credential no matter what the variable is called */
+const secretValuePatterns = [
+	/sk-ant-/, // Anthropic
+	/\bsk_(live|test)_/, // Stripe secret key
+	/\bwhsec_/, // Stripe webhook secret
+	/\bgh[pousr]_[A-Za-z0-9]{20,}/, // GitHub tokens
+	/\bAKIA[0-9A-Z]{16}\b/, // AWS access key id
+	/^[a-z][a-z0-9+.-]*:\/\/[^/@\s]+:[^/@\s]+@/i, // URL with user:password@ (DATABASE_URL, SMTP_URL, DSNs)
+	/-----BEGIN [A-Z ]*PRIVATE KEY-----/,
+	/^[A-Za-z0-9+/]{40,}={0,2}$/, // long bare base64 blob
+]
+
+/** A `_SECRET_ARN` value must be a template reference or a literal Secrets Manager ARN */
+const isSecretArnValue = (value: unknown) => {
+	if (typeof value === 'string') return /^arn:aws[\w-]*:secretsmanager:/.test(value)
+	if (typeof value !== 'object' || value === null) return false
+	return Object.keys(value).some(key => key === 'Ref' || key.startsWith('Fn::'))
+}
 
 describe('security baseline', () => {
 	for (const env of ['dev', 'live'] as const) {
@@ -30,11 +53,18 @@ describe('security baseline', () => {
 				const containers = [...containersOf(resources), ...containersOf(web)]
 				assert.ok(containers.length >= 3, 'expected job, proxy and api containers')
 				for (const container of containers) {
-					for (const { Name } of container.Environment ?? []) {
-						assert.ok(
-							!looksSecret.test(Name) || Name.endsWith('_SECRET_ARN'),
-							`${container.Name}: ${Name} looks like a plaintext secret`
-						)
+					for (const { Name, Value } of container.Environment ?? []) {
+						const label = `${container.Name}: ${Name}`
+						if (Name.endsWith('_SECRET_ARN')) {
+							assert.ok(isSecretArnValue(Value), `${label} must reference a Secrets Manager ARN`)
+							continue
+						}
+						assert.ok(!looksSecret.test(Name), `${label} looks like a plaintext secret`)
+						// Whatever the name, the value itself must not look like a credential
+						const text = typeof Value === 'string' ? Value : JSON.stringify(Value)
+						for (const pattern of secretValuePatterns) {
+							assert.ok(!pattern.test(text), `${label} value matches ${pattern}`)
+						}
 					}
 					// The api and job read secrets themselves at start-up; nothing is injected
 					assert.equal(container.Secrets, undefined, `${container.Name}: unexpected Secrets`)

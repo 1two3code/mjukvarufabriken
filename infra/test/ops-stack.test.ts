@@ -15,22 +15,61 @@ describe('OpsStack', () => {
 			Protocol: 'email',
 			Endpoint: environment.adminEmails[0],
 		})
-		// AWS Budgets must be allowed to publish
+		// AWS Budgets must be allowed to publish — but only budgets in this account (confused deputy)
 		ops.hasResourceProperties('AWS::SNS::TopicPolicy', {
 			PolicyDocument: {
 				Statement: Match.arrayWith([
 					Match.objectLike({
 						Action: 'sns:Publish',
 						Principal: { Service: 'budgets.amazonaws.com' },
+						Condition: {
+							StringEquals: { 'aws:SourceAccount': { Ref: 'AWS::AccountId' } },
+							ArnLike: {
+								'aws:SourceArn': {
+									'Fn::Join': [
+										'',
+										Match.arrayWith([
+											Match.stringLikeRegexp('^arn:'),
+											{ Ref: 'AWS::Partition' },
+											Match.stringLikeRegexp('^:budgets::$'),
+											{ Ref: 'AWS::AccountId' },
+											':budget/*',
+										]),
+									],
+								},
+							},
+						},
 					}),
 				]),
 			},
 		})
+		// No unconditional publish grant for the service principal
+		for (const policy of Object.values(ops.findResources('AWS::SNS::TopicPolicy'))) {
+			const { Statement } = (policy.Properties as { PolicyDocument: { Statement: unknown[] } })
+				.PolicyDocument
+			for (const statement of Statement as { Principal?: unknown; Condition?: unknown }[]) {
+				if (JSON.stringify(statement.Principal).includes('budgets.amazonaws.com')) {
+					assert.ok(statement.Condition, 'budgets publish statement must carry a source condition')
+				}
+			}
+		}
+	})
+
+	it('creates the budget only after the topic policy exists', () => {
+		const [policyId] = Object.keys(ops.findResources('AWS::SNS::TopicPolicy'))
+		const [budget] = Object.values(ops.findResources('AWS::Budgets::Budget'))
+		assert.ok(policyId && budget)
+		assert.ok(
+			(budget.DependsOn as string[] | undefined)?.includes(policyId),
+			`budget must DependsOn the topic policy (${policyId}), got ${JSON.stringify(budget.DependsOn)}`
+		)
 	})
 
 	it('derives failed-job and token-burn metrics from the job log lines', () => {
+		// Both the orchestrator's `event failed` and the crash path's `job crashed` (SIGTERM,
+		// unhandled rejection) count as a failed job
 		ops.hasResourceProperties('AWS::Logs::MetricFilter', {
-			FilterPattern: '{ $.message = "event failed" }',
+			FilterPattern: '{ ($.message = "event failed") || ($.message = "job crashed") }',
 			MetricTransformations: [
 				Match.objectLike({ MetricName: 'JobsFailed', MetricNamespace: 'mf/dev', MetricValue: '1' }),
 			],
