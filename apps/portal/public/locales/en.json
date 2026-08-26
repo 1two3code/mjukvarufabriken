@@ -72,6 +72,7 @@
   "job.gates.failed": "Failed",
   "job.gates.meta": "{{duration}} s · {{tokens}} tokens",
   "job.gates.name.acceptance-check": "Acceptance check",
+  "job.gates.name.licence": "Licence check",
   "job.gates.name.acceptance-tests": "Acceptance tests",
   "job.gates.name.licence": "Third-party licences",
   "job.gates.name.review": "Independent review",

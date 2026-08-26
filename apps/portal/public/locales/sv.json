@@ -72,6 +72,7 @@
   "job.gates.failed": "Underkänd",
   "job.gates.meta": "{{duration}} s · {{tokens}} tokens",
   "job.gates.name.acceptance-check": "Acceptanskontroll",
+  "job.gates.name.licence": "Licenskontroll",
   "job.gates.name.acceptance-tests": "Acceptanstester",
   "job.gates.name.licence": "Tredjepartslicenser",
   "job.gates.name.review": "Oberoende granskning",
