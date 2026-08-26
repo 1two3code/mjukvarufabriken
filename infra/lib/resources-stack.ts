@@ -258,6 +258,9 @@ export class ResourcesStack extends Stack {
 				...(environment.appRunner
 					? { APPRUNNER_CONNECTION_ARN: environment.appRunner.connectionArn }
 					: {}),
+				// The preview api verifies tokens against our api (it publishes a JWKS); only known
+				// here with a custom domain — without it the deploy step is skipped (deployUrl null)
+				...(environment.auth.issuer ? { PREVIEW_AUTH_ISSUER: environment.auth.issuer } : {}),
 				HTTP_PROXY: `http://127.0.0.1:${proxyPort}`,
 				HTTPS_PROXY: `http://127.0.0.1:${proxyPort}`,
 				NO_PROXY: [
@@ -288,7 +291,11 @@ export class ResourcesStack extends Stack {
 		//     start-up and strips it from the environment the sandbox (workers, npm scripts) sees;
 		//     it is still reachable by code running in the job process — accepted until the App exists.
 		//   s3:PutObject*/Abort* on the artifacts bucket       — upload deliverables (never read/list/delete)
-		//   apprunner:Create/Describe/List/StartDeployment    — M5: preview service from the pushed repo
+		//   apprunner:Create/Describe/List/StartDeployment    — M5: preview service from the pushed repo.
+		//     Create/Tag only with the `Service=mf-delivery` request tag, Describe/StartDeployment only
+		//     on services carrying it: the job can touch preview services, never anything else in
+		//     the account. A job CAN still create a preview from any repo the org-wide App Runner
+		//     connection sees (every customer repo) — a connection per org / GitHub App is TODO-EXTERNAL.
 		//   iam:PassRole on the (empty) App Runner instance role — required by CreateService
 		// Never: Stripe keys, the auth signing key, ecs:* or logs:* (the execution role writes logs).
 		// Secrets reach the container as ARNs and are fetched at start-up; no plaintext env.
@@ -302,18 +309,31 @@ export class ResourcesStack extends Stack {
 		this.secrets['anthropic-api-key'].grantRead(this.jobTaskDefinition.taskRole)
 		this.secrets['github-token'].grantRead(this.jobTaskDefinition.taskRole)
 		this.artifactsBucket.grantPut(this.jobTaskDefinition.taskRole)
-		// App Runner has no grant* helpers; ListServices/CreateService are account-level actions
+		// App Runner has no grant* helpers. ListServices is account-level; the rest is fenced by the
+		// `Service=mf-delivery` tag the job sets on every service it creates.
+		const previewTag = { 'aws:RequestTag/Service': 'mf-delivery' }
+		const previewResourceTag = { 'aws:ResourceTag/Service': 'mf-delivery' }
 		this.jobTaskDefinition.taskRole.addToPrincipalPolicy(
 			new PolicyStatement({
-				sid: 'AppRunnerPreviewServices',
-				actions: [
-					'apprunner:CreateService',
-					'apprunner:DescribeService',
-					'apprunner:ListServices',
-					'apprunner:StartDeployment',
-					'apprunner:TagResource',
-				],
+				sid: 'AppRunnerListServices',
+				actions: ['apprunner:ListServices'],
 				resources: ['*'],
+			})
+		)
+		this.jobTaskDefinition.taskRole.addToPrincipalPolicy(
+			new PolicyStatement({
+				sid: 'AppRunnerCreatePreviewServices',
+				actions: ['apprunner:CreateService', 'apprunner:TagResource'],
+				resources: ['*'],
+				conditions: { StringEquals: previewTag },
+			})
+		)
+		this.jobTaskDefinition.taskRole.addToPrincipalPolicy(
+			new PolicyStatement({
+				sid: 'AppRunnerRedeployPreviewServices',
+				actions: ['apprunner:DescribeService', 'apprunner:StartDeployment'],
+				resources: ['*'],
+				conditions: { StringEquals: previewResourceTag },
 			})
 		)
 		this.jobTaskDefinition.taskRole.addToPrincipalPolicy(

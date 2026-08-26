@@ -112,6 +112,20 @@ describe('security baseline', () => {
 					!JSON.stringify(secretStatements).match(/stripe|authjwt/i),
 					'job role must not read Stripe or auth secrets'
 				)
+				// App Runner: only services tagged `Service=mf-delivery` (created by the job itself)
+				const byActions = (action: string) =>
+					statements.find(s => JSON.stringify(s.Action).includes(action)) as
+						| { Condition: unknown }
+						| undefined
+				assert.deepEqual(byActions('apprunner:CreateService')?.Condition, {
+					StringEquals: { 'aws:RequestTag/Service': 'mf-delivery' },
+				})
+				assert.deepEqual(byActions('apprunner:StartDeployment')?.Condition, {
+					StringEquals: { 'aws:ResourceTag/Service': 'mf-delivery' },
+				})
+				assert.deepEqual(byActions('apprunner:DescribeService')?.Condition, {
+					StringEquals: { 'aws:ResourceTag/Service': 'mf-delivery' },
+				})
 				// PassRole is limited to the empty App Runner instance role, and only to App Runner
 				const passRole = statements.find(
 					s => JSON.stringify(s.Action) === JSON.stringify('iam:PassRole')
