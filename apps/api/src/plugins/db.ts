@@ -8,6 +8,7 @@ import {
 	insertJob,
 	listEvents,
 	listJobs,
+	migrate,
 	updateJob,
 } from '@mf/db'
 
@@ -90,6 +91,14 @@ const plugin: FastifyPluginAsync = async app => {
 	}
 
 	const db = createDb(connectionString)
+	// RDS lives in isolated subnets, so the api applies pending migrations itself at boot
+	// (idempotent, tracked in schema_migrations). A failure here is logged, not fatal.
+	try {
+		const result = await migrate(db)
+		if (result.applied.length) app.log.info({ applied: result.applied }, 'Migrations applied')
+	} catch (error) {
+		app.log.warn({ err: error }, 'Could not run database migrations')
+	}
 	app.decorate('db', { available: true, jobs: createJobsRepository(db) })
 	app.addHook('onClose', () => db.close())
 }

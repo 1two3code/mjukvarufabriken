@@ -5,7 +5,7 @@
  * (`npm run job:dev -- <id>`) and on Fargate.
  */
 import Anthropic from '@anthropic-ai/sdk'
-import { appendEvent, createDb, getJob, updateJob } from '@mf/db'
+import { appendEvent, createDb, getJob, migrate, updateJob } from '@mf/db'
 import { createLivePorts, runJob } from '@mf/harness'
 import { isActiveJobStatus } from '@mf/models'
 
@@ -23,6 +23,7 @@ Object.assign(process.env, gitIdentity)
 
 const db = createDb(config.databaseUrl, { max: 3 })
 const { jobId } = config
+await migrate(db)
 
 const job = await getJob(db, jobId)
 if (!job) {
