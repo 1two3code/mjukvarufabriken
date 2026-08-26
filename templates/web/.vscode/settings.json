@@ -1,0 +1,37 @@
+{
+  /* MARK: Editor  */
+  "editor.defaultFormatter": "esbenp.prettier-vscode",
+  "editor.formatOnSave": false,
+  "explorer.fileNesting.enabled": true,
+  "explorer.fileNesting.expand": false,
+  "explorer.fileNesting.patterns": {
+    "*.ts": "${capture}.js, ${capture}.test.ts, ${capture}.types.ts, ${capture}.guards.ts, ${capture}.utils.ts,  ${capture}.api.ts",
+    "*.tsx": "${capture}.ts, ${capture}.module.css, ${capture}.module.scss",
+    "tsconfig.json": "tsconfig.*.json",
+    "package.json": "package-lock.json, yarn.lock, .*, eslint.config.*, tsconfig.json, vite*.config.ts, vitest.workspace.ts"
+  },
+  "editor.codeActionsOnSave": {
+    "source.fixAll.eslint": "always",
+    "source.fixAll.stylelint": "always"
+  },
+  "search.exclude": {
+    "**/node_modules": true
+  },
+  "js/ts.tsdk.path": "node_modules/@typescript/native-preview",
+  "js/ts.preferences.importModuleSpecifier": "non-relative",
+  "js/ts.experimental.useTsgo": true,
+  "[typescriptreact]": { "editor.formatOnSave": true },
+  "[typescript]": { "editor.formatOnSave": true },
+  "[javascript]": { "editor.formatOnSave": true },
+  "[json]": { "editor.formatOnSave": true },
+  "[css]": { "editor.formatOnSave": true },
+
+  /* MARK: AI assistants */
+  // Repository instructions live in CLAUDE.md, which Copilot and Claude Code both read.
+  "chat.useClaudeMdFile": true,
+  "chat.useAgentsMdFile": false,
+
+  /* MARK: Plugins */
+  "stylelint.validate": ["css"],
+  "vitest.configSearchPatternExclude": "{**/node_modules/**,**/vendor/**,**/.*/**,**/*.d.ts,**/cdk.out/**,**/dist/**}"
+}

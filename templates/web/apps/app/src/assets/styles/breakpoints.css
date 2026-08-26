@@ -1,0 +1,16 @@
+:root {
+	/* Breakpoints (use custom-media) */
+	--breakpoint-small: 64rem;
+	--breakpoint-medium: 102.4rem;
+	--breakpoint-large: 144rem;
+}
+
+/**
+ * @custom-media is enabled through lightningcss.
+ * lightningcss does not take the font size normalizer in global.css into account,
+ * so the rem values below are based on the default 16px:
+ *   40rem = 640px, 64rem = 1024px, 90rem = 1440px
+ */
+@custom-media --breakpoint-small (max-width: 40rem);
+@custom-media --breakpoint-medium (max-width: 64rem);
+@custom-media --breakpoint-large (max-width: 90rem);

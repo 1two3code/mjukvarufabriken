@@ -7,7 +7,7 @@ Everything that needs someone else's approval lives in TODO-EXTERNAL.md and is N
 - Cloud: AWS (CDK for IaC, eu-north-1 Stockholm)
 - Agent runtime: Claude Agent SDK (TypeScript), build jobs in Docker on ECS Fargate
 - Payment: Stripe Checkout (Klarna/cards come through Stripe). Test mode until live verification clears.
-- Stack: TypeScript monorepo (pnpm), Next.js for site + portal, Postgres (RDS), S3 for artifacts
+- Stack: `templates/web` — npm-workspaces TS monorepo extracted clean-room from uptool-pwa: React 19 + Vite + RTK Query SPA, Fastify 5 BFF (Zod 4), CDK. Used for the factory portal/site AND as the golden template every customer build starts from. Postgres (RDS), S3 for artifacts
 - Auth: email magic link (BankID = later)
 - Delivery target: GitHub repo (transferred to customer) + deploy to AWS App Runner with URL
 - Languages: sv + en on the public site; portal en first
@@ -24,7 +24,8 @@ Everything that needs someone else's approval lives in TODO-EXTERNAL.md and is N
 ## Milestones (checkbox = done and verified)
 
 ### M1 — Skeleton (day 1)
-- [ ] Monorepo: `apps/site`, `apps/portal`, `packages/harness`, `packages/db`, `infra/`
+- [x] `templates/web` extracted and green (lint + test) — 2026-08-26
+- [ ] Monorepo: `apps/site`, `apps/portal` (instantiated from templates/web), `packages/harness`, `packages/db`, `infra/`
 - [ ] CI (GitHub Actions): lint, test, build
 - [ ] CDK stack: VPC, RDS, S3, ECS cluster, App Runner, secrets
 - [ ] TOKENS.md ledger started
