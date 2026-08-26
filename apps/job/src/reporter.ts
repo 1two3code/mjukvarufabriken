@@ -64,11 +64,11 @@ export type ApiReporterOptions = {
 const sleep = (ms: number) => new Promise(resolve => setTimeout(resolve, ms))
 
 export class ApiReportError extends Error {
-	constructor(
-		readonly status: number,
-		message: string
-	) {
+	// No parameter properties: the job runs with Node type stripping only
+	readonly status: number
+	constructor(status: number, message: string) {
 		super(message)
+		this.status = status
 	}
 }
 

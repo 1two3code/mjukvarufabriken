@@ -40,12 +40,13 @@ declare module 'fastify' {
 
 /** The order's current status does not allow the requested transition */
 export class InvalidOrderTransition extends EntityInvalid {
-	constructor(
-		orderId: string,
-		public from: OrderStatus,
-		public to: OrderStatus
-	) {
+	// No parameter properties: Node runs the api with type stripping only (no transforms)
+	readonly from: OrderStatus
+	readonly to: OrderStatus
+	constructor(orderId: string, from: OrderStatus, to: OrderStatus) {
 		super('order', orderId)
+		this.from = from
+		this.to = to
 		this.message = `order (${orderId}) cannot go from ${from} to ${to}`
 	}
 }

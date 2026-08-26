@@ -6,7 +6,10 @@ vi.mock('@aws-sdk/client-sesv2', () => ({
 		destroy = vi.fn()
 	},
 	SendEmailCommand: class {
-		constructor(public input: unknown) {}
+		input: unknown
+		constructor(input: unknown) {
+			this.input = input
+		}
 	},
 }))
 

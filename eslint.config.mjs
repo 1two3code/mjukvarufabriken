@@ -21,6 +21,9 @@ export default defineConfig(
 				},
 			],
 			'@typescript-eslint/no-unused-vars': ['warn', { ignoreRestSiblings: true }],
+			// Node executes .ts with type stripping only: parameter properties (and enums, namespaces)
+			// are transforms it refuses at boot — vitest/esbuild would hide the crash until deploy
+			'@typescript-eslint/parameter-properties': ['error', { prefer: 'class-property' }],
 			'@typescript-eslint/consistent-type-imports': [
 				'error',
 				{ fixStyle: 'separate-type-imports' },

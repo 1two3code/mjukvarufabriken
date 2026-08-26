@@ -16,7 +16,10 @@ vi.mock('@aws-sdk/client-secrets-manager', () => ({
 		destroy = vi.fn()
 	},
 	GetSecretValueCommand: class {
-		constructor(public input: unknown) {}
+		input: unknown
+		constructor(input: unknown) {
+			this.input = input
+		}
 	},
 }))
 
