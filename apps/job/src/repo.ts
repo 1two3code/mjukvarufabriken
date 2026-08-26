@@ -1,4 +1,4 @@
-import { cp, mkdir, rm, stat, writeFile } from 'node:fs/promises'
+import { cp, mkdir, readdir, rm, stat, writeFile } from 'node:fs/promises'
 import { join } from 'node:path'
 
 import { exec, git } from '@mf/harness'
@@ -40,8 +40,12 @@ const exists = (path: string) =>
 export const seedRepo = async (templateDir: string, workDir: string, jobId: string) => {
 	const repoDir = join(workDir, 'repo')
 	const gitDir = join(templateDir, '.git')
-	await rm(workDir, { recursive: true, force: true })
+	// Clear the contents, not the dir itself: in the container `/work` is a node-owned dir whose
+	// parent is root-owned, so removing it would fail (EACCES) even though writing into it works.
 	await mkdir(workDir, { recursive: true })
+	for (const entry of await readdir(workDir)) {
+		await rm(join(workDir, entry), { recursive: true, force: true })
+	}
 	await cp(templateDir, repoDir, {
 		recursive: true,
 		// Keep workspace symlinks (node_modules/@template/* -> ../../packages/*) relative; the

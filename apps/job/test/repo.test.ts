@@ -1,4 +1,4 @@
-import { mkdir, mkdtemp, readlink, rm, symlink, writeFile } from 'node:fs/promises'
+import { mkdir, mkdtemp, readdir, readlink, rm, stat, symlink, writeFile } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 
@@ -42,5 +42,23 @@ describe('seedRepo', () => {
 		expect(tracked.stdout).toContain('packages/models/index.ts')
 		expect(tracked.stdout).not.toContain('node_modules')
 		expect(tracked.stdout).not.toMatch(/^\.git\//m)
+	})
+
+	it('Clears a stale work dir without removing the dir itself (container /work is a fixed mount)', async () => {
+		// Arrange: minimal template + a work dir with leftovers from a previous run
+		const template = join(root, 'template')
+		await mkdir(template, { recursive: true })
+		await writeFile(join(template, 'package.json'), '{"name":"t"}')
+		const workDir = join(root, 'work')
+		await mkdir(join(workDir, 'worktrees', 'old'), { recursive: true })
+		await writeFile(join(workDir, 'stale.txt'), 'x')
+		const before = (await stat(workDir)).ino
+
+		// Act
+		await seedRepo(template, workDir, 'job-2')
+
+		// Assert: same directory inode, leftovers gone, repo seeded
+		expect((await stat(workDir)).ino).toBe(before)
+		expect(await readdir(workDir)).toEqual(['repo'])
 	})
 })
