@@ -71,7 +71,7 @@ describe('security baseline', () => {
 				}
 			})
 
-			it('grants the job task role only the db secret, the Anthropic key and artifact writes', () => {
+			it('grants the job task role only the Anthropic key and artifact writes — no database', () => {
 				const policies = Object.values(resources.findResources('AWS::IAM::Policy'))
 				const jobPolicy = policies.find(p =>
 					JSON.stringify(p.Properties).includes('JobTaskDefinitionTaskRole')
@@ -95,11 +95,33 @@ describe('security baseline', () => {
 						's3:Abort*',
 					])
 				)
-				// Two secrets only — never Stripe, the auth key or the GitHub token
+				// One secret only — never the RDS master secret, Stripe, the auth key or the GitHub token
 				const secretStatements = statements.filter(s =>
 					JSON.stringify(s.Action).includes('secretsmanager')
 				)
-				assert.equal(secretStatements.length, 2)
+				assert.equal(secretStatements.length, 1)
+				assert.ok(
+					!JSON.stringify(jobPolicy.Properties).includes('DatabaseSecret'),
+					'job task role must not reference the database secret'
+				)
+			})
+
+			it('keeps the job task off the database: no DATABASE_* env, no 5432 rule, api url via the api', () => {
+				const job = containersOf(resources).find(c => c.Name === 'job')!
+				const names = (job.Environment ?? []).map(e => e.Name)
+				assert.ok(!names.some(n => n.startsWith('DATABASE_')), `job env: ${names.join(',')}`)
+				const rules = [
+					...Object.values(resources.findResources('AWS::EC2::SecurityGroupEgress')),
+					...Object.values(resources.findResources('AWS::EC2::SecurityGroupIngress')),
+				]
+				const postgresRules = rules.filter(
+					r => (r.Properties as { FromPort?: number }).FromPort === 5432
+				)
+				assert.equal(postgresRules.length, 0, 'no job <-> postgres security-group rule')
+				const apiEnv = containersOf(web)
+					.flatMap(c => c.Environment ?? [])
+					.map(e => e.Name)
+				assert.ok(apiEnv.includes('JOB_API_URL') && apiEnv.includes('JOB_NO_PROXY'))
 			})
 
 			it('sets the CloudFront security headers', () => {
