@@ -40,6 +40,12 @@ declare module 'fastify' {
 			anthropicApiKey?: string
 			/** Model id override for the spec engine (`SPEC_MODEL`) */
 			specModel?: string
+			/**
+			 * Resident installations (M8): installation id → bearer token the resident in the
+			 * customer's account reports usage with. `RESIDENT_INSTALLATIONS` = `id:token,id:token`
+			 * (or resolved from `RESIDENT_INSTALLATIONS_SECRET_ARN`); empty → no resident can report.
+			 */
+			residentInstallations: Record<string, string>
 			/** Infra handles (set by the CDK web stack) */
 			infra: {
 				databaseSecretArn?: string
@@ -92,6 +98,22 @@ const parseList = (value: string | undefined) =>
 		?.split(',')
 		.map(entry => entry.trim().toLowerCase())
 		.filter(Boolean) ?? []
+
+/** `id:token,id:token` → map; entries without both halves are skipped */
+export const parseInstallations = (value: string | undefined): Record<string, string> =>
+	Object.fromEntries(
+		(value ?? '')
+			.split(',')
+			.map(entry => entry.trim())
+			.filter(Boolean)
+			.map(entry => {
+				const separator = entry.indexOf(':')
+				return separator > 0
+					? [entry.slice(0, separator).trim(), entry.slice(separator + 1).trim()]
+					: ['', '']
+			})
+			.filter(([id, token]) => id && token)
+	)
 
 const isEmailTransport = (value: unknown): value is EmailTransport =>
 	typeof value === 'string' && (emailTransports as readonly string[]).includes(value)
@@ -150,6 +172,9 @@ const plugin: FastifyPluginAsync = async app => {
 		emailFrom: process.env.AUTH_EMAIL_FROM || 'noreply@mjukvaruhuset.se',
 		anthropicApiKey: await resolveSecret('ANTHROPIC_API_KEY', 'ANTHROPIC_API_KEY_SECRET_ARN'),
 		specModel: process.env.SPEC_MODEL || undefined,
+		residentInstallations: parseInstallations(
+			await resolveSecret('RESIDENT_INSTALLATIONS', 'RESIDENT_INSTALLATIONS_SECRET_ARN')
+		),
 		infra: {
 			databaseSecretArn: process.env.DATABASE_SECRET_ARN,
 			jobApiUrl: process.env.JOB_API_URL || authIssuer,

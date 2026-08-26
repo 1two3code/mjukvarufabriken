@@ -1,0 +1,14 @@
+{
+  "app": "npx tsx bin/app.ts",
+  "watch": {
+    "include": ["**"],
+    "exclude": ["README.md", "**/*.json", "node_modules", "cdk.out"]
+  },
+  "context": {
+    "repository": "",
+    "installationId": "",
+    "monthlyTokens": "50000000",
+    "factoryApiUrl": "https://api.mjukvaruhuset.se",
+    "exposeApi": "false"
+  }
+}

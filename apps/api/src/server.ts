@@ -19,6 +19,7 @@ import itemService from '#/services/itemService.ts'
 import jobService from '#/services/jobService.ts'
 import orderService from '#/services/orderService.ts'
 import paymentService from '#/services/paymentService.ts'
+import residentService from '#/services/residentService.ts'
 import specService from '#/services/specService.ts'
 import userService from '#/services/userService.ts'
 
@@ -68,6 +69,7 @@ export async function createServer({ logLevel }: Options = {}): Promise<FastifyI
 		.register(contactService)
 		.register(orderService)
 		.register(paymentService)
+		.register(residentService)
 
 		// Request plugins
 		.register(errorHandlingPlugin)

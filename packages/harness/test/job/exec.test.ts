@@ -19,6 +19,8 @@ describe('exec', () => {
 			APPRUNNER_CONNECTION_ARN: 'arn:apprunner:connection',
 			APPRUNNER_INSTANCE_ROLE_ARN: 'arn:iam:role',
 			GITHUB_TOKEN: 'ghp_x',
+			JOB_TOKEN: 'job-report-token',
+			JOB_ID: 'job-1',
 			GITHUB_ORG: 'mjukvaruhuset',
 		})
 
@@ -29,6 +31,7 @@ describe('exec', () => {
 			HTTPS_PROXY: 'http://127.0.0.1:8888',
 			NO_PROXY: 'localhost',
 			GIT_AUTHOR_NAME: 'build',
+			JOB_ID: 'job-1',
 			GITHUB_ORG: 'mjukvaruhuset',
 			// git hooks (husky) are always off inside the job
 			GIT_CONFIG_COUNT: '1',
