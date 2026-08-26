@@ -17,8 +17,8 @@ import {
 	PostgresEngineVersion,
 	StorageType,
 } from 'aws-cdk-lib/aws-rds'
-import { BlockPublicAccess, Bucket, BucketEncryption } from 'aws-cdk-lib/aws-s3'
 import { HostedZone } from 'aws-cdk-lib/aws-route53'
+import { BlockPublicAccess, Bucket, BucketEncryption } from 'aws-cdk-lib/aws-s3'
 import { Secret } from 'aws-cdk-lib/aws-secretsmanager'
 import { EmailIdentity, Identity } from 'aws-cdk-lib/aws-ses'
 
@@ -213,8 +213,11 @@ export class ResourcesStack extends Stack {
 		})
 
 		// The job container: apps/job/Dockerfile (harness + golden template). `JOB_ID` is set per
-		// run by the api's ecs:RunTask override. Only the AWS control plane and the database bypass
-		// the proxy (NO_PROXY); everything else must pass the allowlist.
+		// run by the api's ecs:RunTask override. Only the ECS credential/metadata endpoints, Secrets
+		// Manager and the artifacts bucket bypass the proxy (NO_PROXY, exact hosts — a wildcard
+		// `.amazonaws.com` would let any AWS-hosted endpoint skip the allowlist); everything else,
+		// including every other AWS service, must pass the allowlist. The database is reached by
+		// IP inside the VPC and is not affected by the proxy variables.
 		const job = this.jobTaskDefinition.addContainer('job', {
 			image: ContainerImage.fromAsset(repositoryRoot, { file: 'apps/job/Dockerfile' }),
 			essential: true,
@@ -224,10 +227,17 @@ export class ResourcesStack extends Stack {
 				ARTIFACTS_BUCKET: this.artifactsBucket.bucketName,
 				DATABASE_SECRET_ARN: this.databaseSecret.secretArn,
 				ANTHROPIC_API_KEY_SECRET_ARN: this.secrets['anthropic-api-key'].secretArn,
-				GITHUB_TOKEN_SECRET_ARN: this.secrets['github-token'].secretArn,
 				HTTP_PROXY: `http://127.0.0.1:${proxyPort}`,
 				HTTPS_PROXY: `http://127.0.0.1:${proxyPort}`,
-				NO_PROXY: '127.0.0.1,localhost,169.254.170.2,169.254.169.254,.amazonaws.com',
+				NO_PROXY: [
+					'127.0.0.1',
+					'localhost',
+					'169.254.170.2',
+					'169.254.169.254',
+					`secretsmanager.${this.region}.amazonaws.com`,
+					`${this.artifactsBucket.bucketName}.s3.${this.region}.amazonaws.com`,
+					`${this.artifactsBucket.bucketName}.s3.amazonaws.com`,
+				].join(','),
 				NODE_USE_ENV_PROXY: '1',
 			},
 		})
@@ -236,11 +246,11 @@ export class ResourcesStack extends Stack {
 			condition: ContainerDependencyCondition.HEALTHY,
 		})
 
-		// Job task role: the database (job row + events), the two build secrets, write artifacts.
-		// Never Stripe keys or the auth signing key — no customer secrets inside the sandbox.
+		// Job task role: the database (job row + events), the Anthropic build secret, write
+		// artifacts. Never Stripe keys, the auth signing key or the GitHub token (M5 delivery mints
+		// a short-lived per-job token instead) — no customer secrets inside the sandbox.
 		this.databaseSecret.grantRead(this.jobTaskDefinition.taskRole)
 		this.secrets['anthropic-api-key'].grantRead(this.jobTaskDefinition.taskRole)
-		this.secrets['github-token'].grantRead(this.jobTaskDefinition.taskRole)
 		this.artifactsBucket.grantWrite(this.jobTaskDefinition.taskRole)
 
 		// MARK: Outputs (export names never contain the environment — one account per environment)
