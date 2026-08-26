@@ -19,10 +19,22 @@ import type { JobUpdate, NewJob } from './jobs.ts'
 export type JobsRepository = {
 	insert: (job: NewJob) => Promise<Job>
 	get: (id: string) => Promise<Job | undefined>
+	/** The job whose report token hashes to `tokenHash` (build-container auth); never by id */
+	getByReportToken: (tokenHash: string) => Promise<Job | undefined>
 	list: (filter?: { orderId?: string; orgId?: string }) => Promise<Job[]>
 	/** Returns `undefined` for an unknown id — or when a status write hits a killed job */
 	update: (id: string, update: JobUpdate) => Promise<Job | undefined>
 	appendEvent: (jobId: string, event: NewJobEvent) => Promise<JobEvent>
+	/**
+	 * Stores the build container's event number `seq` once: a replay of an already stored
+	 * `(jobId, seq)` returns the original row with `duplicate: true` and writes nothing
+	 */
+	appendEventOnce: (
+		jobId: string,
+		seq: number,
+		event: NewJobEvent
+	) => Promise<{ event: JobEvent; duplicate: boolean }>
+	countEvents: (jobId: string, type: JobEvent['type']) => Promise<number>
 	listEvents: (jobId: string, afterId?: number) => Promise<JobEvent[]>
 }
 

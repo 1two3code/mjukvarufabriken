@@ -7,8 +7,12 @@ import { createMockSpec, createMockSpecDraft } from '#/services/__mocks__/specSe
 import {
 	budgetForSize,
 	deliverableFromEvents,
+	hashReportToken,
 	JobAlreadyActive,
+	MalformedGateReport,
+	ReportUnauthorized,
 	SpecNotFrozen,
+	StatusRegression,
 } from '#/services/jobService.ts'
 
 import type { FastifyInstance } from 'fastify'
@@ -89,8 +93,13 @@ describe('Job Service', () => {
 				orgId: 'org-1',
 				spec: { ...createMockSpec(), sizeClass: 'M' },
 				budget: budgetForSize.M,
+				reportTokenHash: expect.stringMatching(/^[0-9a-f]{64}$/),
 			})
-			expect(app.ecs.runJob).toHaveBeenCalledWith('job-1')
+			expect(app.ecs.runJob).toHaveBeenCalledWith('job-1', expect.stringMatching(/^[\w-]{43}$/))
+			// The task gets the token, the row only its hash
+			const [[, token]] = vi.mocked(app.ecs.runJob).mock.calls
+			const [[inserted]] = vi.mocked(app.db.jobs.insert).mock.calls
+			expect(hashReportToken(token)).toBe(inserted.reportTokenHash)
 			expect(app.db.jobs.update).toHaveBeenCalledWith('job-1', { taskArn: mockTaskArn })
 			expect(job.taskArn).toBe(mockTaskArn)
 		})
@@ -182,8 +191,240 @@ describe('Job Service', () => {
 		})
 	})
 
+	describe('report (build-container endpoint)', () => {
+		const job = () => createMockJob({ id: 'job-1', status: 'building' })
+
+		it('Resolves a token to its job by hash only', async () => {
+			vi.spyOn(app.db.jobs, 'getByReportToken').mockResolvedValue(job())
+
+			await expect(app.jobService.authenticateReport('job-1', 'tok')).resolves.toMatchObject({
+				id: 'job-1',
+			})
+			expect(app.db.jobs.getByReportToken).toHaveBeenCalledWith(hashReportToken('tok'))
+		})
+
+		it('Rejects a missing or unknown token as unauthorized', async () => {
+			vi.spyOn(app.db.jobs, 'getByReportToken').mockResolvedValue(undefined)
+
+			await expect(app.jobService.authenticateReport('job-1', undefined)).rejects.toBeInstanceOf(
+				ReportUnauthorized
+			)
+			await expect(app.jobService.authenticateReport('job-1', 'nope')).rejects.toBeInstanceOf(
+				ReportUnauthorized
+			)
+			expect(app.db.jobs.getByReportToken).toHaveBeenCalledTimes(1)
+		})
+
+		it("Treats a valid token on another job's url as not found", async () => {
+			vi.spyOn(app.db.jobs, 'getByReportToken').mockResolvedValue(createMockJob({ id: 'job-2' }))
+
+			await expect(app.jobService.authenticateReport('job-1', 'tok')).rejects.toBeInstanceOf(
+				EntityNotFound
+			)
+		})
+
+		it('Rejects the token of a finished job as unauthorized', async () => {
+			vi.spyOn(app.db.jobs, 'getByReportToken').mockResolvedValue(
+				createMockJob({ id: 'job-1', status: 'delivered' })
+			)
+
+			await expect(app.jobService.authenticateReport('job-1', 'tok')).rejects.toBeInstanceOf(
+				ReportUnauthorized
+			)
+		})
+
+		it('Rotates the token: a fresh secret out, only its hash on the row', async () => {
+			const token = await app.jobService.rotateReportToken(job())
+
+			expect(token).toMatch(/^[\w-]{43}$/)
+			expect(app.db.jobs.update).toHaveBeenCalledWith('job-1', {
+				reportTokenHash: hashReportToken(token),
+			})
+		})
+
+		it('Exposes only spec, budget, waivers and the kill flag', () => {
+			const view = app.jobService.reportView(
+				createMockJob({ status: 'killed', gateWaivers: ['a.ts:1'], taskArn: 'arn' })
+			)
+
+			expect(view).toEqual({
+				id: 'job-1',
+				status: 'killed',
+				spec: createMockJob().spec,
+				budget: createMockJob().budget,
+				gateWaivers: ['a.ts:1'],
+				killed: true,
+			})
+		})
+
+		it('Stores events in order, mails notify events to every admin and appends gate reports', async () => {
+			const gate = {
+				name: 'verify' as const,
+				ok: false,
+				startedAt: '2026-08-26T10:00:00.000Z',
+				durationMs: 5,
+				tokens: 1,
+				summary: 'lint failed',
+			}
+			const previous = { ...gate, name: 'review' as const, ok: true }
+			vi.spyOn(app.db.jobs, 'get').mockResolvedValue(createMockJob({ gates: [previous] }))
+			vi.spyOn(app.db.jobs, 'appendEvent')
+				.mockResolvedValueOnce(createMockJobEvent({ id: 7 }))
+				.mockResolvedValueOnce(createMockJobEvent({ id: 8 }))
+			app.secrets.authAdminEmails = ['a@example.com', 'b@example.com']
+
+			const result = await app.jobService.reportEvents(job(), [
+				{ type: 'gate', payload: gate },
+				{ type: 'notify', payload: { to: 'admins', subject: 'Job failed', text: 'details' } },
+			])
+
+			expect(result).toEqual({ lastEventId: 8 })
+			expect(app.db.jobs.appendEvent).toHaveBeenNthCalledWith(1, 'job-1', {
+				type: 'gate',
+				payload: gate,
+			})
+			expect(app.db.jobs.update).toHaveBeenCalledWith('job-1', { gates: [previous, gate] })
+			expect(app.email.send).toHaveBeenCalledTimes(2)
+			expect(app.email.send).toHaveBeenCalledWith({
+				to: 'b@example.com',
+				subject: '[mf test] Job failed',
+				text: 'details',
+			})
+		})
+
+		it('Skips a malformed notify payload and survives a mail failure', async () => {
+			vi.spyOn(app.email, 'send').mockRejectedValue(new Error('ses down'))
+
+			await expect(
+				app.jobService.reportEvents(job(), [
+					{ type: 'notify', payload: { nope: true } },
+					{ type: 'notify', payload: { to: 'admins', subject: 's', text: 't' } },
+				])
+			).resolves.toEqual({ lastEventId: 1 })
+			expect(app.email.send).toHaveBeenCalledTimes(1)
+		})
+
+		it('Truncates an over-long notify text instead of dropping the mail, and caps mails per job', async () => {
+			const text = 'x'.repeat(30_000)
+			await app.jobService.reportEvents(job(), [
+				{ type: 'notify', payload: { to: 'admins', subject: 's', text } },
+			])
+			expect(app.email.send).toHaveBeenCalledWith(
+				expect.objectContaining({ text: 'x'.repeat(20_000) })
+			)
+
+			vi.spyOn(app.db.jobs, 'countEvents').mockResolvedValue(11)
+			await app.jobService.reportEvents(job(), [
+				{ type: 'notify', payload: { to: 'admins', subject: 's', text: 't' } },
+			])
+			expect(app.db.jobs.countEvents).toHaveBeenCalledWith('job-1', 'notify')
+			expect(app.email.send).toHaveBeenCalledTimes(1)
+		})
+
+		it('Stores numbered events once: a replayed batch mails and appends nothing', async () => {
+			const gate = {
+				name: 'review' as const,
+				ok: true,
+				startedAt: '2026-08-26T10:00:00.000Z',
+				durationMs: 5,
+				tokens: 1,
+				summary: 'clean',
+			}
+			vi.spyOn(app.db.jobs, 'appendEventOnce').mockResolvedValue({
+				event: createMockJobEvent({ id: 4 }),
+				duplicate: true,
+			})
+
+			const result = await app.jobService.reportEvents(job(), [
+				{ type: 'gate', payload: gate, seq: 4 },
+				{ type: 'notify', payload: { to: 'admins', subject: 's', text: 't' }, seq: 5 },
+			])
+
+			expect(result).toEqual({ lastEventId: 4 })
+			expect(app.db.jobs.appendEventOnce).toHaveBeenNthCalledWith(1, 'job-1', 4, {
+				type: 'gate',
+				payload: gate,
+			})
+			expect(app.db.jobs.appendEvent).not.toHaveBeenCalled()
+			expect(app.db.jobs.update).not.toHaveBeenCalled()
+			expect(app.email.send).not.toHaveBeenCalled()
+		})
+
+		it('Rejects a malformed gate report before storing any of the batch', async () => {
+			await expect(
+				app.jobService.reportEvents(job(), [
+					{ type: 'log', payload: { message: 'first' } },
+					{ type: 'gate', payload: { name: 'verify' } },
+				])
+			).rejects.toBeInstanceOf(MalformedGateReport)
+			expect(app.db.jobs.appendEvent).not.toHaveBeenCalled()
+			expect(app.db.jobs.update).not.toHaveBeenCalled()
+		})
+
+		it('Writes the update with Date conversion and reports the stored status', async () => {
+			const result = await app.jobService.reportUpdate(job(), {
+				status: 'verifying',
+				tokensUsed: 10,
+				finishedAt: '2026-08-26T12:00:00.000Z',
+			})
+
+			expect(app.db.jobs.update).toHaveBeenCalledWith('job-1', {
+				status: 'verifying',
+				tokensUsed: 10,
+				startedAt: undefined,
+				finishedAt: new Date('2026-08-26T12:00:00.000Z'),
+			})
+			expect(result).toEqual({ status: 'verifying', killed: false })
+		})
+
+		it('Revokes the token with a terminal status', async () => {
+			await app.jobService.reportUpdate(job(), { status: 'delivered', tokensUsed: 10 })
+
+			expect(app.db.jobs.update).toHaveBeenCalledWith(
+				'job-1',
+				expect.objectContaining({ status: 'delivered', reportTokenHash: null })
+			)
+		})
+
+		it('Refuses a status that moves the job backwards, allows repeats', async () => {
+			const verifying = createMockJob({ id: 'job-1', status: 'verifying' })
+
+			await expect(
+				app.jobService.reportUpdate(verifying, { status: 'building' })
+			).rejects.toBeInstanceOf(StatusRegression)
+			expect(app.db.jobs.update).not.toHaveBeenCalled()
+			await expect(
+				app.jobService.reportUpdate(verifying, { status: 'verifying' })
+			).resolves.toEqual({ status: 'verifying', killed: false })
+		})
+
+		it("Reports killed when the status write is refused: usage, plan and gates land, the admin's reason stays", async () => {
+			vi.spyOn(app.db.jobs, 'update').mockResolvedValue(undefined)
+
+			const result = await app.jobService.reportUpdate(job(), {
+				status: 'failed',
+				tokensUsed: 99,
+				gates: [],
+				reason: 'SIGTERM received',
+				finishedAt: '2026-08-26T12:00:00.000Z',
+			})
+
+			expect(result).toEqual({ status: 'killed', killed: true })
+			expect(app.db.jobs.update).toHaveBeenCalledTimes(2)
+			expect(app.db.jobs.update).toHaveBeenLastCalledWith('job-1', { tokensUsed: 99, gates: [] })
+		})
+
+		it('Does not write again when a refused update carried only status and reason', async () => {
+			vi.spyOn(app.db.jobs, 'update').mockResolvedValue(undefined)
+
+			await app.jobService.reportUpdate(job(), { status: 'failed', reason: 'SIGTERM received' })
+
+			expect(app.db.jobs.update).toHaveBeenCalledTimes(1)
+		})
+	})
+
 	describe('kill', () => {
-		it('Marks an active job killed, appends the event and stops the task', async () => {
+		it('Marks an active job killed, revokes its token, appends the event and stops the task', async () => {
 			vi.spyOn(app.db.jobs, 'get').mockResolvedValue(
 				createMockJob({ status: 'building', taskArn: mockTaskArn })
 			)
@@ -193,7 +434,11 @@ describe('Job Service', () => {
 			expect(job.status).toBe('killed')
 			expect(app.db.jobs.update).toHaveBeenCalledWith(
 				'job-1',
-				expect.objectContaining({ status: 'killed', reason: 'killed by admin' })
+				expect.objectContaining({
+					status: 'killed',
+					reason: 'killed by admin',
+					reportTokenHash: null,
+				})
 			)
 			expect(app.db.jobs.appendEvent).toHaveBeenCalledWith('job-1', {
 				type: 'killed',

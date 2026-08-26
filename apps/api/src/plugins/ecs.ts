@@ -13,8 +13,15 @@ declare module 'fastify' {
 		 */
 		ecs: {
 			configured: boolean
-			/** Runs the job task definition with `JOB_ID` overridden; resolves to the task ARN */
-			runJob: (jobId: string) => Promise<string | undefined>
+			/**
+			 * Runs the job task definition with `JOB_ID`, the per-job `JOB_TOKEN`, `API_URL` (and
+			 * `NO_PROXY` when configured) overridden; resolves to the task ARN. The token is the
+			 * only credential the sandbox gets. The api never logs it, but a RunTask override is
+			 * visible to `ecs:DescribeTasks` and recorded by CloudTrail — which is why it is a
+			 * bootstrap token the job exchanges once (`POST /internal/jobs/:id/token`) before any
+			 * worker runs.
+			 */
+			runJob: (jobId: string, reportToken: string) => Promise<string | undefined>
 			stopTask: (taskArn: string, reason: string) => Promise<void>
 		}
 	}
@@ -24,8 +31,14 @@ declare module 'fastify' {
 export const jobContainerName = 'job'
 
 const plugin: FastifyPluginAsync = async app => {
-	const { jobsClusterArn, jobTaskDefinitionArn, jobSubnetIds, jobSecurityGroupId } =
-		app.secrets.infra
+	const {
+		jobsClusterArn,
+		jobTaskDefinitionArn,
+		jobSubnetIds,
+		jobSecurityGroupId,
+		jobApiUrl,
+		jobNoProxy,
+	} = app.secrets.infra
 	const configured = Boolean(
 		jobsClusterArn && jobTaskDefinitionArn && jobSubnetIds.length && jobSecurityGroupId
 	)
@@ -40,12 +53,25 @@ const plugin: FastifyPluginAsync = async app => {
 		return
 	}
 
+	// Without a custom domain the ALB has no certificate and JOB_API_URL is plain http: every
+	// report (bearer token, spec, events) would cross NAT → public ALB unencrypted. Loud, not
+	// fatal — the cert is a TODO-EXTERNAL item and the token is one-shot + per-job.
+	if (!jobApiUrl.startsWith('https://')) {
+		app.log.warn({ jobApiUrl }, 'JOB_API_URL is not https — build jobs report in cleartext')
+	}
+
 	const client = new ECSClient({})
 	app.addHook('onClose', async () => client.destroy())
 
 	app.decorate('ecs', {
 		configured: true,
-		runJob: async jobId => {
+		runJob: async (jobId, reportToken) => {
+			const environment = [
+				{ name: 'JOB_ID', value: jobId },
+				{ name: 'JOB_TOKEN', value: reportToken },
+				{ name: 'API_URL', value: jobApiUrl },
+				...(jobNoProxy ? [{ name: 'NO_PROXY', value: jobNoProxy }] : []),
+			]
 			const result = await client.send(
 				new RunTaskCommand({
 					cluster: jobsClusterArn,
@@ -61,9 +87,7 @@ const plugin: FastifyPluginAsync = async app => {
 						},
 					},
 					overrides: {
-						containerOverrides: [
-							{ name: jobContainerName, environment: [{ name: 'JOB_ID', value: jobId }] },
-						],
+						containerOverrides: [{ name: jobContainerName, environment }],
 					},
 				})
 			)

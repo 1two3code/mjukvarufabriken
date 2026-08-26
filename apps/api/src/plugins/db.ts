@@ -58,7 +58,17 @@ const unavailableRepositories = (error: () => Error): Repositories => {
 	const repository = <T extends object>(keys: (keyof T)[]) =>
 		Object.fromEntries(keys.map(key => [key, reject])) as T
 	return {
-		jobs: repository(['insert', 'get', 'list', 'update', 'appendEvent', 'listEvents']),
+		jobs: repository([
+			'insert',
+			'get',
+			'getByReportToken',
+			'list',
+			'update',
+			'appendEvent',
+			'appendEventOnce',
+			'countEvents',
+			'listEvents',
+		]),
 		orders: repository([
 			'get',
 			'list',
@@ -74,6 +84,7 @@ const unavailableRepositories = (error: () => Error): Repositories => {
 			'listPayments',
 			'markPaymentPaid',
 			'recordPaymentEvent',
+			'forgetPaymentEvent',
 		]),
 		users: repository([
 			'get',

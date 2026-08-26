@@ -1,17 +1,36 @@
+import { createHash, randomBytes } from 'node:crypto'
+
 import fp from 'fastify-plugin'
-import { DeliveryEventPayloadSchema, isActiveJobStatus, SpecSchema } from '@mf/models'
+import {
+	DeliveryEventPayloadSchema,
+	GateReportSchema,
+	isActiveJobStatus,
+	jobNotifyEventsMax,
+	NotifyPayloadSchema,
+	notifySubjectMaxLength,
+	notifyTextMaxLength,
+	SpecSchema,
+} from '@mf/models'
 
 import { EntityInvalid, EntityNotFound } from '#/lib/entityError.ts'
 import { defaultDownloadExpirySeconds } from '#/plugins/s3.ts'
 
 import type { FastifyInstance, FastifyPluginAsync } from 'fastify'
+import type { JobUpdate } from '@mf/db'
 import type {
 	BackendSession,
 	Deliverable,
 	DeliverablesResponse,
+	GateReport,
 	Job,
 	JobBudget,
 	JobEvent,
+	JobReport,
+	JobReportEvent,
+	JobReportEventsResponse,
+	JobReportUpdate,
+	JobReportUpdateResponse,
+	JobStatus,
 	SizeClass,
 } from '@mf/models'
 
@@ -24,7 +43,7 @@ declare module 'fastify' {
 			get: (jobId: string, session: BackendSession) => Promise<Job>
 			listForOrder: (orderId: string, session: BackendSession) => Promise<Job[]>
 			listEvents: (jobId: string, after: number, session: BackendSession) => Promise<JobEvent[]>
-			/** Admin kill switch: marks the row killed and stops the Fargate task */
+			/** Admin kill switch: marks the row killed, revokes the report token, stops the task */
 			kill: (jobId: string) => Promise<Job>
 			listAll: () => Promise<Job[]>
 			/**
@@ -32,17 +51,57 @@ declare module 'fastify' {
 			 * until the job's `bundle` delivery step has succeeded.
 			 */
 			getDeliverables: (jobId: string, session: BackendSession) => Promise<DeliverablesResponse>
+			/**
+			 * Build-container reporting (`/internal/jobs/:jobId`, M3 hardening). The container holds
+			 * only its per-job token; `authenticateReport` resolves it to the job or throws
+			 * `ReportUnauthorized` (unknown or revoked token, finished job) / `EntityNotFound` (valid
+			 * token, other job's url).
+			 */
+			authenticateReport: (jobId: string, token: string | undefined) => Promise<Job>
+			/**
+			 * One-shot exchange: mints a fresh token, stores its hash in place of the current one
+			 * and returns it. The bootstrap token from the RunTask override (readable through the
+			 * task environment, `ecs:DescribeTasks` and CloudTrail) is dead afterwards.
+			 */
+			rotateReportToken: (job: Job) => Promise<string>
+			/** What the container needs to run: spec, budget, waivers and the kill flag */
+			reportView: (job: Job) => JobReport
+			/**
+			 * Stores a batch of events in order; numbered events (`seq`) are stored once. `notify`
+			 * events are mailed to the admins here (capped per job), validated `gate` reports are
+			 * appended to `jobs.gates`. Throws `MalformedGateReport` before storing anything.
+			 */
+			reportEvents: (job: Job, events: JobReportEvent[]) => Promise<JobReportEventsResponse>
+			/**
+			 * Status/tokens/plan/gates/urls write. Status only moves forward (`StatusRegression`
+			 * otherwise); a terminal status revokes the token; the killed-guard of `db.jobs.update`
+			 * keeps usage, plan and gates of a killed job but never its reason
+			 */
+			reportUpdate: (job: Job, update: JobReportUpdate) => Promise<JobReportUpdateResponse>
 		}
 	}
 }
 
-/**
- * TODO(m3-hardening): when the job reports its events through the api's per-job endpoint instead
- * of writing to Postgres directly, forward every `notify` event (`NotifyPayload` from @mf/models:
- * `{ to: 'admins', subject, text }`) to the admins through the api's email transport
- * (`AUTH_ADMIN_EMAILS`), and persist `gate` event payloads onto `jobs.gates` (migration 0005).
- * The job container has no email access by design.
- */
+/** Bearer token on `/internal/jobs/*` is missing, revoked or matches no active job */
+export class ReportUnauthorized extends Error {
+	constructor() {
+		super('Invalid job token')
+	}
+}
+
+/** A `gate` event whose payload is not a `GateReport` — nothing of the batch is stored */
+export class MalformedGateReport extends EntityInvalid {
+	constructor(jobId: string) {
+		super('gate report', jobId)
+	}
+}
+
+/** A status write that would move the job backwards (e.g. `planning` after `verifying`) */
+export class StatusRegression extends EntityInvalid {
+	constructor(jobId: string) {
+		super('job status', jobId)
+	}
+}
 
 /** The spec must be frozen before a build starts */
 export class SpecNotFrozen extends EntityInvalid {
@@ -71,6 +130,24 @@ export const budgetForSize: Record<SizeClass, JobBudget> = {
 }
 
 const isAdmin = (session: BackendSession) => session.role === 'admin'
+
+// MARK: Report tokens
+/** 32 random bytes, url-safe; only its hash is stored (`jobs.report_token_hash`) */
+export const mintReportToken = () => randomBytes(32).toString('base64url')
+export const hashReportToken = (token: string) => createHash('sha256').update(token).digest('hex')
+
+const toDate = (value: string | undefined) => (value === undefined ? undefined : new Date(value))
+
+/** Phases in run order; a status PATCH may repeat or advance, never go back */
+const statusRank: Record<JobStatus, number> = {
+	queued: 0,
+	planning: 1,
+	building: 2,
+	verifying: 3,
+	delivered: 4,
+	failed: 4,
+	killed: 4,
+}
 
 /**
  * What a customer may see of the event log: `notify` events are addressed to the admins and
@@ -106,6 +183,24 @@ export const deliverableFromEvents = (events: JobEvent[]): Deliverable | undefin
 	return undefined
 }
 
+/** Notify text is built from raw worker output; cut it to the schema caps rather than drop the mail */
+const truncateNotifyPayload = (payload: Record<string, unknown>) => ({
+	...payload,
+	subject:
+		typeof payload.subject === 'string'
+			? payload.subject.slice(0, notifySubjectMaxLength)
+			: payload.subject,
+	text:
+		typeof payload.text === 'string' ? payload.text.slice(0, notifyTextMaxLength) : payload.text,
+})
+
+/** Fields of a refused (killed) update that may still land on the row */
+const keepOnKilledRow = ({ tokensUsed, plan, gates }: JobReportUpdate): JobUpdate => ({
+	...(tokensUsed !== undefined && { tokensUsed }),
+	...(plan !== undefined && { plan }),
+	...(gates !== undefined && { gates }),
+})
+
 const plugin: FastifyPluginAsync = async app => {
 	const { db, ecs, s3, specService } = app
 
@@ -118,6 +213,51 @@ const plugin: FastifyPluginAsync = async app => {
 
 	const get: FastifyInstance['jobService']['get'] = async (jobId, session) =>
 		scoped(await db.jobs.get(jobId), session, jobId)
+
+	/**
+	 * Forwards a `notify` event to every admin; a mail failure never fails the report. Capped
+	 * per job: the token lives in a container running customer-driven code.
+	 */
+	const notifyAdmins = async (job: Job, event: JobReportEvent) => {
+		const parsed = NotifyPayloadSchema.safeParse(truncateNotifyPayload(event.payload))
+		if (!parsed.success) {
+			app.log.warn({ jobId: job.id, issues: parsed.error.issues }, 'Malformed notify event')
+			return
+		}
+		const sent = await db.jobs.countEvents(job.id, 'notify')
+		if (sent > jobNotifyEventsMax) {
+			app.log.warn({ jobId: job.id, sent }, 'Notify cap reached — not mailing the admins')
+			return
+		}
+		const { subject, text } = parsed.data
+		for (const to of app.secrets.authAdminEmails) {
+			await app.email
+				.send({ to, subject: `[mf ${app.secrets.env}] ${subject}`, text })
+				.catch(error => {
+					app.log.error({ err: error, jobId: job.id, to }, 'Could not send the job notification')
+				})
+		}
+	}
+
+	/** Every `gate` payload must be a GateReport — `jobs.gates` is typed and serialised as such */
+	const parseGateReports = (job: Job, events: JobReportEvent[]) => {
+		const gates = new Map<JobReportEvent, GateReport>()
+		for (const event of events) {
+			if (event.type !== 'gate') continue
+			const parsed = GateReportSchema.safeParse(event.payload)
+			if (!parsed.success) {
+				app.log.warn({ jobId: job.id, issues: parsed.error.issues }, 'Malformed gate report')
+				throw new MalformedGateReport(job.id)
+			}
+			gates.set(event, parsed.data)
+		}
+		return gates
+	}
+
+	const storeEvent = async (jobId: string, { seq, ...event }: JobReportEvent) =>
+		seq === undefined
+			? { event: await db.jobs.appendEvent(jobId, event), duplicate: false }
+			: db.jobs.appendEventOnce(jobId, seq, event)
 
 	app.decorate('jobService', {
 		get,
@@ -133,8 +273,15 @@ const plugin: FastifyPluginAsync = async app => {
 			const existing = await db.jobs.list({ orderId })
 			if (existing.some(job => isActiveJobStatus(job.status))) throw new JobAlreadyActive(orderId)
 
+			const reportToken = mintReportToken()
 			const job = await db.jobs
-				.insert({ orderId, orgId, spec, budget: budgetForSize[sizeClass] })
+				.insert({
+					orderId,
+					orgId,
+					spec,
+					budget: budgetForSize[sizeClass],
+					reportTokenHash: hashReportToken(reportToken),
+				})
 				.catch((error: Error & { code?: string }) => {
 					if (error.code === '23505') throw new JobAlreadyActive(orderId)
 					throw error
@@ -145,15 +292,19 @@ const plugin: FastifyPluginAsync = async app => {
 				return job
 			}
 			try {
-				const taskArn = await ecs.runJob(job.id)
+				const taskArn = await ecs.runJob(job.id, reportToken)
 				return (await db.jobs.update(job.id, { taskArn })) ?? job
 			} catch (error) {
 				const reason = `ecs:RunTask failed: ${(error as Error).message}`
 				app.log.error({ err: error, jobId: job.id }, reason)
 				await db.jobs.appendEvent(job.id, { type: 'failed', payload: { reason } })
 				return (
-					(await db.jobs.update(job.id, { status: 'failed', reason, finishedAt: new Date() })) ??
-					job
+					(await db.jobs.update(job.id, {
+						status: 'failed',
+						reason,
+						finishedAt: new Date(),
+						reportTokenHash: null,
+					})) ?? job
 				)
 			}
 		},
@@ -171,9 +322,15 @@ const plugin: FastifyPluginAsync = async app => {
 			if (!job) throw new EntityNotFound('job', jobId)
 			if (!isActiveJobStatus(job.status)) return job
 
+			// The token dies with the job: whatever the container still sends is refused (401)
 			const reason = 'killed by admin'
 			const killed =
-				(await db.jobs.update(jobId, { status: 'killed', reason, finishedAt: new Date() })) ?? job
+				(await db.jobs.update(jobId, {
+					status: 'killed',
+					reason,
+					finishedAt: new Date(),
+					reportTokenHash: null,
+				})) ?? job
 			await db.jobs.appendEvent(jobId, { type: 'killed', payload: { reason } })
 			if (job.taskArn) {
 				await ecs.stopTask(job.taskArn, reason).catch(error => {
@@ -200,10 +357,73 @@ const plugin: FastifyPluginAsync = async app => {
 			)
 			return { ...deliverable, files }
 		},
+
+		authenticateReport: async (jobId, token) => {
+			const job = token ? await db.jobs.getByReportToken(hashReportToken(token)) : undefined
+			// A finished job's token is worthless even if a row still carries the hash
+			if (!job || !isActiveJobStatus(job.status)) throw new ReportUnauthorized()
+			if (job.id !== jobId) throw new EntityNotFound('job', jobId)
+			return job
+		},
+		rotateReportToken: async job => {
+			const token = mintReportToken()
+			await db.jobs.update(job.id, { reportTokenHash: hashReportToken(token) })
+			return token
+		},
+		reportView: job => ({
+			id: job.id,
+			status: job.status,
+			spec: job.spec,
+			budget: job.budget,
+			gateWaivers: job.gateWaivers,
+			killed: job.status === 'killed',
+		}),
+		reportEvents: async (job, events) => {
+			const gateReports = parseGateReports(job, events)
+			let lastEventId = 0
+			const gates: GateReport[] = []
+			for (const event of events) {
+				const { event: stored, duplicate } = await storeEvent(job.id, event)
+				lastEventId = stored.id
+				if (duplicate) continue
+				const gate = gateReports.get(event)
+				if (gate) gates.push(gate)
+				if (event.type === 'notify') await notifyAdmins(job, event)
+			}
+			if (gates.length) {
+				const current = (await db.jobs.get(job.id))?.gates ?? []
+				await db.jobs.update(job.id, { gates: [...current, ...gates] })
+			}
+			return { lastEventId }
+		},
+		reportUpdate: async (job, update) => {
+			const { status } = update
+			if (status && statusRank[status] < statusRank[job.status]) throw new StatusRegression(job.id)
+			const terminal = status !== undefined && !isActiveJobStatus(status)
+			const row = await db.jobs.update(job.id, {
+				...update,
+				startedAt: toDate(update.startedAt),
+				finishedAt: toDate(update.finishedAt),
+				// The last write of the job: nothing holding this token has anything left to say
+				...(terminal && { reportTokenHash: null }),
+			})
+			if (row) return { status: row.status, killed: row.status === 'killed' }
+			// Status write refused: the admin killed the job. Usage, plan and gates still land;
+			// the reason and the timestamps of the kill stay as the admin wrote them.
+			const rest = keepOnKilledRow(update)
+			if (Object.keys(rest).length) await db.jobs.update(job.id, rest)
+			return { status: 'killed', killed: true }
+		},
 	})
 }
 
 export default fp(plugin, {
 	name: '#internal/jobService',
-	dependencies: ['#internal/db', '#internal/ecs', '#internal/s3', '#internal/specService'],
+	dependencies: [
+		'#internal/db',
+		'#internal/ecs',
+		'#internal/email',
+		'#internal/s3',
+		'#internal/specService',
+	],
 })

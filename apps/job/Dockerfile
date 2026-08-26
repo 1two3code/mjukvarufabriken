@@ -26,4 +26,6 @@ COPY --chown=node:node templates/web ./templates/web/
 RUN cd templates/web && npm ci --ignore-scripts --no-audit --no-fund
 
 WORKDIR /usr/src/apps/job
-CMD ["npm", "start", "--silent"]
+# node directly as PID 1 (no npm wrapper keeping a second copy of the task environment, and
+# SIGTERM from ecs:StopTask reaches the job without a relay)
+CMD ["node", "src/index.ts"]

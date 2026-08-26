@@ -35,6 +35,10 @@ export class UniqueViolation extends Error {
 export const createMemoryRepositories = (): Repositories => {
 	const jobs = new Map<string, Job>()
 	const events: JobEvent[] = []
+	/** report token hash → job id (the hash is never part of the `Job` model) */
+	const reportTokens = new Map<string, string>()
+	/** `${jobId}:${seq}` → the event stored for that number (idempotent container events) */
+	const numberedEvents = new Map<string, JobEvent>()
 	const orders = new Map<string, OrderEntry>()
 	const payments = new Map<string, Payment>()
 	const paymentEvents = new Set<string>()
@@ -115,9 +119,14 @@ export const createMemoryRepositories = (): Repositories => {
 					createdAt: now(),
 				}
 				jobs.set(created.id, created)
+				if (job.reportTokenHash) reportTokens.set(job.reportTokenHash, created.id)
 				return clone(created)
 			},
 			get: async id => clone(jobs.get(id)),
+			getByReportToken: async tokenHash => {
+				const id = reportTokens.get(tokenHash)
+				return id === undefined ? undefined : clone(jobs.get(id))
+			},
 			list: async (filter = {}) =>
 				byCreatedDesc(
 					[...jobs.values()]
@@ -129,12 +138,18 @@ export const createMemoryRepositories = (): Repositories => {
 				const job = jobs.get(id)
 				if (!job) return undefined
 				if (update.status !== undefined && job.status === 'killed') return undefined
+				if (update.reportTokenHash !== undefined) {
+					for (const [hash, jobId] of reportTokens) if (jobId === id) reportTokens.delete(hash)
+					if (update.reportTokenHash !== null) reportTokens.set(update.reportTokenHash, id)
+				}
 				const next: Job = {
 					...job,
 					status: update.status ?? job.status,
 					tokensUsed: update.tokensUsed ?? job.tokensUsed,
 					plan: update.plan ?? job.plan,
 					reason: update.reason ?? job.reason,
+					gates: update.gates ?? job.gates,
+					gateWaivers: update.gateWaivers ?? job.gateWaivers,
 					taskArn: update.taskArn ?? job.taskArn,
 					repositoryUrl: update.repositoryUrl ?? job.repositoryUrl,
 					startedAt: update.startedAt?.toISOString() ?? job.startedAt,
@@ -154,6 +169,23 @@ export const createMemoryRepositories = (): Repositories => {
 				events.push(created)
 				return clone(created)
 			},
+			appendEventOnce: async (jobId, seq, event) => {
+				const key = `${jobId}:${seq}`
+				const existing = numberedEvents.get(key)
+				if (existing) return { event: clone(existing), duplicate: true }
+				const created: JobEvent = {
+					id: events.length + 1,
+					jobId,
+					type: event.type,
+					payload: clone(event.payload),
+					createdAt: now(),
+				}
+				events.push(created)
+				numberedEvents.set(key, created)
+				return { event: clone(created), duplicate: false }
+			},
+			countEvents: async (jobId, type) =>
+				events.filter(event => event.jobId === jobId && event.type === type).length,
 			listEvents: async (jobId, afterId = 0) =>
 				events
 					.filter(event => event.jobId === jobId && event.id > afterId)

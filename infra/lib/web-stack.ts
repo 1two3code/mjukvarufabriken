@@ -1,4 +1,4 @@
-import { CfnOutput, Duration, RemovalPolicy, Stack } from 'aws-cdk-lib'
+import { Annotations, CfnOutput, Duration, RemovalPolicy, Stack } from 'aws-cdk-lib'
 import { Certificate } from 'aws-cdk-lib/aws-certificatemanager'
 import {
 	AllowedMethods,
@@ -198,9 +198,29 @@ export class WebStack extends Stack {
 		api.targetGroup.configureHealthCheck({ path: '/health', interval: Duration.seconds(30) })
 		this.api = api
 		// The issuer is the api's own URL; without a custom domain it is only known after synth
+		const albUrl = `http://${api.loadBalancer.loadBalancerDnsName}`
 		api.taskDefinition.defaultContainer!.addEnvironment(
 			'AUTH_ISSUER',
-			environment.auth.issuer ?? apiUrl ?? `http://${api.loadBalancer.loadBalancerDnsName}`
+			environment.auth.issuer ?? apiUrl ?? albUrl
+		)
+		// Build jobs report to the api (M3 hardening): the url plus the host the job's NO_PROXY
+		// must bypass the egress proxy for. Both go to the job task through the api's RunTask
+		// override — the task definition lives in the resources stack, which cannot reference this
+		// ALB. The job security group allows 443/80 egress anywhere and the public ALB accepts
+		// 80/443 from anywhere, so the reports arrive through the NAT gateway with no extra rule.
+		const jobApiHost = domain ? domain.apiDomainName : api.loadBalancer.loadBalancerDnsName
+		if (!apiUrl) {
+			// The ALB only terminates TLS with the domain's certificate; until then the per-job
+			// bearer token crosses NAT → public ALB in cleartext (certificate: TODO-EXTERNAL.md)
+			Annotations.of(this).addWarningV2(
+				'mf:job-api-url-http',
+				`JOB_API_URL is plain http (${albUrl}) — configure \`domain\` so build jobs report over TLS`
+			)
+		}
+		api.taskDefinition.defaultContainer!.addEnvironment('JOB_API_URL', apiUrl ?? albUrl)
+		api.taskDefinition.defaultContainer!.addEnvironment(
+			'JOB_NO_PROXY',
+			[...resources.jobNoProxyHosts, jobApiHost].join(',')
 		)
 
 		// MARK: Api task role — least privilege (reviewed M9). What each grant is for:

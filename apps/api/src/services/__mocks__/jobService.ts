@@ -6,7 +6,7 @@ import { mockPresignedUrl } from '#/plugins/__mocks__/s3.ts'
 
 import type { FastifyInstance, FastifyPluginAsync } from 'fastify'
 import type { PartialDeep } from 'type-fest'
-import type { Deliverable, DeliverablesResponse } from '@mf/models'
+import type { Deliverable, DeliverablesResponse, Job } from '@mf/models'
 
 const defaultDeliverable: Deliverable = {
 	jobId: 'job-1',
@@ -50,6 +50,18 @@ const mockPlugin: FastifyPluginAsync = async app => {
 		),
 		listAll: vi.fn().mockResolvedValue([createMockJob()]),
 		getDeliverables: vi.fn((jobId: string) => Promise.resolve(createMockDeliverables({ jobId }))),
+		authenticateReport: vi.fn((id: string) => Promise.resolve(createMockJob({ id }))),
+		rotateReportToken: vi.fn().mockResolvedValue('fresh-token'),
+		reportView: vi.fn((job: Job) => ({
+			id: job.id,
+			status: job.status,
+			spec: job.spec,
+			budget: job.budget,
+			gateWaivers: job.gateWaivers,
+			killed: job.status === 'killed',
+		})),
+		reportEvents: vi.fn().mockResolvedValue({ lastEventId: 1 }),
+		reportUpdate: vi.fn().mockResolvedValue({ status: 'building', killed: false }),
 	}
 
 	app.decorate('jobService', mock)

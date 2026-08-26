@@ -64,6 +64,8 @@ export class ResourcesStack extends Stack {
 	readonly jobSecurityGroup: SecurityGroup
 	/** Instance role of the App Runner services the job creates per delivery (M5) */
 	readonly appRunnerInstanceRole: Role
+	/** Hosts the job container reaches without the egress proxy; WebStack appends the api host */
+	readonly jobNoProxyHosts: string[]
 	/** `/mf/<env>/jobs` — JSON lines from the job + proxy containers (see docs/RUNBOOK.md) */
 	readonly jobLogGroup: LogGroup
 	/** Postgres security group; consumers add their own ingress rule (see WebStack) */
@@ -175,7 +177,9 @@ export class ResourcesStack extends Stack {
 			clusterName: `mf-jobs-${environment.name}`,
 		})
 
-		// Job security group. Egress: 443/80 to anywhere (the proxy sidecar + AWS APIs) and Postgres.
+		// Job security group. Egress: 443/80 to anywhere — the proxy sidecar, AWS APIs and the api's
+		// ALB (the job reports through `/internal/jobs/:id` with a per-job token; M3 hardening).
+		// No Postgres: the container never holds a database credential (docs/M3-REVIEW.md #18).
 		// Fargate sidecars share the task ENI, so this SG cannot tell proxy traffic from a process
 		// that ignores HTTPS_PROXY — the domain allowlist is enforced by the sidecar (see
 		// apps/job/proxy); a hard fence needs a proxy in its own task/SG (TODO-EXTERNAL.md).
@@ -186,12 +190,10 @@ export class ResourcesStack extends Stack {
 			allowAllOutbound: false,
 		})
 		this.jobSecurityGroup.addEgressRule(Peer.anyIpv4(), Port.tcp(443), 'https (proxy + AWS APIs)')
-		this.jobSecurityGroup.addEgressRule(Peer.anyIpv4(), Port.tcp(80), 'http (registry redirects)')
-		this.jobSecurityGroup.addEgressRule(this.databaseSecurityGroup, Port.tcp(5432), 'postgres')
-		this.databaseSecurityGroup.addIngressRule(
-			this.jobSecurityGroup,
-			Port.tcp(5432),
-			'build jobs to postgres'
+		this.jobSecurityGroup.addEgressRule(
+			Peer.anyIpv4(),
+			Port.tcp(80),
+			'http (registry redirects, api ALB without a domain)'
 		)
 
 		const jobLogGroup = new LogGroup(this, 'JobLogGroup', {
@@ -237,12 +239,23 @@ export class ResourcesStack extends Stack {
 			description: 'Instance role of customer preview services created by build jobs (M5)',
 		})
 
-		// The job container: apps/job/Dockerfile (harness + golden template). `JOB_ID` is set per
-		// run by the api's ecs:RunTask override. Only the ECS credential/metadata endpoints, Secrets
-		// Manager, the artifacts bucket and App Runner bypass the proxy (NO_PROXY, exact hosts — a
-		// wildcard `.amazonaws.com` would let any AWS-hosted endpoint skip the allowlist); everything
-		// else, including every other AWS service, must pass the allowlist. The database is reached
-		// by IP inside the VPC and is not affected by the proxy variables.
+		// The job container: apps/job/Dockerfile (harness + golden template). `JOB_ID`, the per-job
+		// `JOB_TOKEN`, `API_URL` and the final `NO_PROXY` (this list + the api host, `JOB_NO_PROXY`
+		// on the api — the ALB lives in mf-<env>, which depends on this stack) are set per run by
+		// the api's ecs:RunTask override. Only the ECS credential/metadata endpoints, Secrets
+		// Manager, the artifacts bucket, App Runner (M5) and the api bypass the proxy (NO_PROXY,
+		// exact hosts — a wildcard `.amazonaws.com` would let any AWS-hosted endpoint skip the
+		// allowlist); everything else, including every other AWS service, must pass the allowlist.
+		this.jobNoProxyHosts = [
+			'127.0.0.1',
+			'localhost',
+			'169.254.170.2',
+			'169.254.169.254',
+			`secretsmanager.${this.region}.amazonaws.com`,
+			`${this.artifactsBucket.bucketName}.s3.${this.region}.amazonaws.com`,
+			`${this.artifactsBucket.bucketName}.s3.amazonaws.com`,
+			`apprunner.${this.region}.amazonaws.com`,
+		]
 		const job = this.jobTaskDefinition.addContainer('job', {
 			image: ContainerImage.fromAsset(repositoryRoot, { file: 'apps/job/Dockerfile' }),
 			essential: true,
@@ -250,7 +263,6 @@ export class ResourcesStack extends Stack {
 			environment: {
 				ENV: environment.name,
 				ARTIFACTS_BUCKET: this.artifactsBucket.bucketName,
-				DATABASE_SECRET_ARN: this.databaseSecret.secretArn,
 				ANTHROPIC_API_KEY_SECRET_ARN: this.secrets['anthropic-api-key'].secretArn,
 				// M5 delivery: GitHub push + App Runner preview + bundle upload
 				GITHUB_TOKEN_SECRET_ARN: this.secrets['github-token'].secretArn,
@@ -263,16 +275,7 @@ export class ResourcesStack extends Stack {
 				...(environment.auth.issuer ? { PREVIEW_AUTH_ISSUER: environment.auth.issuer } : {}),
 				HTTP_PROXY: `http://127.0.0.1:${proxyPort}`,
 				HTTPS_PROXY: `http://127.0.0.1:${proxyPort}`,
-				NO_PROXY: [
-					'127.0.0.1',
-					'localhost',
-					'169.254.170.2',
-					'169.254.169.254',
-					`secretsmanager.${this.region}.amazonaws.com`,
-					`${this.artifactsBucket.bucketName}.s3.${this.region}.amazonaws.com`,
-					`${this.artifactsBucket.bucketName}.s3.amazonaws.com`,
-					`apprunner.${this.region}.amazonaws.com`,
-				].join(','),
+				NO_PROXY: this.jobNoProxyHosts.join(','),
 				NODE_USE_ENV_PROXY: '1',
 			},
 		})
@@ -281,9 +284,8 @@ export class ResourcesStack extends Stack {
 			condition: ContainerDependencyCondition.HEALTHY,
 		})
 
-		// MARK: Job task role — reviewed M9, extended M5. The container runs customer-driven code,
-		// so it gets exactly what apps/job needs today:
-		//   secretsmanager:GetSecretValue on the RDS secret   — DATABASE_SECRET_ARN: job row + events
+		// MARK: Job task role — reviewed M9, narrowed by M3 hardening, extended M5. The container
+		// runs customer-driven code, so it gets exactly what apps/job needs today:
 		//   secretsmanager:GetSecretValue on anthropic-api-key — the build itself (Agent SDK workers)
 		//   secretsmanager:GetSecretValue on github-token      — M5: create + push the customer repo.
 		//     The M9 review removed this grant expecting a short-lived per-job token; that needs a
@@ -297,15 +299,14 @@ export class ResourcesStack extends Stack {
 		//     the account. A job CAN still create a preview from any repo the org-wide App Runner
 		//     connection sees (every customer repo) — a connection per org / GitHub App is TODO-EXTERNAL.
 		//   iam:PassRole on the (empty) App Runner instance role — required by CreateService
-		// Never: Stripe keys, the auth signing key, ecs:* or logs:* (the execution role writes logs).
-		// Secrets reach the container as ARNs and are fetched at start-up; no plaintext env.
+		// The job row + events go through the api's `/internal/jobs/:id` endpoint with a per-job
+		// token (RunTask override), so there is no database grant and no 5432 rule any more
+		// (docs/M3-REVIEW.md #18). Never: Stripe keys, the auth signing key, ecs:* or logs:* (the
+		// execution role writes logs). Secrets reach the container as ARNs and are fetched at start-up.
 		//
-		// KNOWN GAPS (PLAN.md, "M3 hardening" — not closed by M9): the RDS secret is the *master*
-		// credential, so code running in the job can read/write every customer's rows; and
-		// PutObject is bucket-wide, so a job can overwrite (not read) another job's deliverable —
-		// versioning keeps the previous copy. Both go away when the job reports status/events and
-		// uploads through an authenticated per-job api endpoint instead of holding credentials.
-		this.databaseSecret.grantRead(this.jobTaskDefinition.taskRole)
+		// KNOWN GAP (PLAN.md, "M3 hardening"): PutObject is bucket-wide, so a job can overwrite
+		// (not read) another job's deliverable — versioning keeps the previous copy. Goes away
+		// when uploads move behind the same per-job endpoint (M5 delivery).
 		this.secrets['anthropic-api-key'].grantRead(this.jobTaskDefinition.taskRole)
 		this.secrets['github-token'].grantRead(this.jobTaskDefinition.taskRole)
 		this.artifactsBucket.grantPut(this.jobTaskDefinition.taskRole)

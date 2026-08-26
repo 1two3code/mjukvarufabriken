@@ -71,7 +71,7 @@ describe('security baseline', () => {
 				}
 			})
 
-			it('grants the job task role only the db/Anthropic/GitHub secrets, artifact writes and App Runner previews', () => {
+			it('grants the job task role only the Anthropic/GitHub secrets, artifact writes and App Runner previews — no database', () => {
 				const policies = Object.values(resources.findResources('AWS::IAM::Policy'))
 				const jobPolicy = policies.find(p =>
 					JSON.stringify(p.Properties).includes('JobTaskDefinitionTaskRole')
@@ -102,21 +102,24 @@ describe('security baseline', () => {
 						'iam:PassRole',
 					])
 				)
-				// Three secrets only — the RDS secret, the Anthropic key and (M5) the GitHub token;
-				// never Stripe or the auth signing key
+				// Two secrets only — the Anthropic key and (M5) the GitHub token; never the RDS master
+				// secret, Stripe or the auth signing key
 				const secretStatements = statements.filter(s =>
 					JSON.stringify(s.Action).includes('secretsmanager')
 				)
-				assert.equal(secretStatements.length, 3)
+				assert.equal(secretStatements.length, 2)
 				assert.ok(
 					!JSON.stringify(secretStatements).match(/stripe|authjwt/i),
 					'job role must not read Stripe or auth secrets'
 				)
+				assert.ok(
+					!JSON.stringify(jobPolicy.Properties).includes('DatabaseSecret'),
+					'job task role must not reference the database secret'
+				)
 				// App Runner: only services tagged `Service=mf-delivery` (created by the job itself)
 				const byActions = (action: string) =>
 					statements.find(s => JSON.stringify(s.Action).includes(action)) as
-						| { Condition: unknown }
-						| undefined
+						{ Condition: unknown } | undefined
 				assert.deepEqual(byActions('apprunner:CreateService')?.Condition, {
 					StringEquals: { 'aws:RequestTag/Service': 'mf-delivery' },
 				})
@@ -153,6 +156,24 @@ describe('security baseline', () => {
 					!policies.some(p => JSON.stringify(p.Properties.Roles).includes('AppRunnerInstanceRole')),
 					'no inline policy attached to the App Runner instance role'
 				)
+			})
+
+			it('keeps the job task off the database: no DATABASE_* env, no 5432 rule, api url via the api', () => {
+				const job = containersOf(resources).find(c => c.Name === 'job')!
+				const names = (job.Environment ?? []).map(e => e.Name)
+				assert.ok(!names.some(n => n.startsWith('DATABASE_')), `job env: ${names.join(',')}`)
+				const rules = [
+					...Object.values(resources.findResources('AWS::EC2::SecurityGroupEgress')),
+					...Object.values(resources.findResources('AWS::EC2::SecurityGroupIngress')),
+				]
+				const postgresRules = rules.filter(
+					r => (r.Properties as { FromPort?: number }).FromPort === 5432
+				)
+				assert.equal(postgresRules.length, 0, 'no job <-> postgres security-group rule')
+				const apiEnv = containersOf(web)
+					.flatMap(c => c.Environment ?? [])
+					.map(e => e.Name)
+				assert.ok(apiEnv.includes('JOB_API_URL') && apiEnv.includes('JOB_NO_PROXY'))
 			})
 
 			it('sets the CloudFront security headers', () => {

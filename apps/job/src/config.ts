@@ -1,11 +1,16 @@
 import { GetSecretValueCommand, SecretsManagerClient } from '@aws-sdk/client-secrets-manager'
-import { connectionStringFromSecret } from '@mf/db'
 
-import type { DatabaseSecret } from '@mf/db'
+/**
+ * Where the job reports to. `api`: the per-job endpoint (`API_URL` + `JOB_TOKEN`, what the
+ * api's RunTask override sets — Fargate). `db`: Postgres directly (`DATABASE_URL`, local
+ * `npm run job:dev`). The api mode wins when both are present.
+ */
+export type ReportTarget =
+	{ mode: 'api'; apiUrl: string; token: string } | { mode: 'db'; databaseUrl: string }
 
 export type JobConfig = {
 	jobId: string
-	databaseUrl: string
+	report: ReportTarget
 	anthropicApiKey: string
 	/** Where the customer repo is seeded (`WORK_DIR`, default /work) */
 	workDir: string
@@ -50,11 +55,14 @@ const parseSecretString = (value: string) => {
 	return values.length === 1 && typeof values[0] === 'string' ? values[0] : trimmed
 }
 
-const resolveDatabaseUrl = async () => {
-	if (process.env.DATABASE_URL) return process.env.DATABASE_URL
-	const arn = process.env.DATABASE_SECRET_ARN
-	if (!arn) throw new Error('DATABASE_URL or DATABASE_SECRET_ARN is required')
-	return connectionStringFromSecret(JSON.parse(await readSecret(arn)) as DatabaseSecret)
+export const resolveReportTarget = (env: NodeJS.ProcessEnv = process.env): ReportTarget => {
+	const apiUrl = env.API_URL?.trim()
+	const token = env.JOB_TOKEN?.trim()
+	if (apiUrl && token) return { mode: 'api', apiUrl, token }
+	if (apiUrl || token) throw new Error('API_URL and JOB_TOKEN must be set together')
+	const databaseUrl = env.DATABASE_URL?.trim()
+	if (databaseUrl) return { mode: 'db', databaseUrl }
+	throw new Error('API_URL + JOB_TOKEN (Fargate) or DATABASE_URL (local) is required')
 }
 
 const resolveAnthropicKey = async () => {
@@ -90,8 +98,9 @@ const resolveOptionalSecret = async (envName: string, arnEnvName: string) => {
 }
 
 /**
- * Only the job id, the database and the Anthropic key are needed — no customer secrets are
- * ever passed into the container. `JOB_ID` comes from the api's `ecs:RunTask` override or the
+ * Only the job id, the report target and the Anthropic key are needed — no customer secrets
+ * and no database credential are ever passed into the container on Fargate. `JOB_ID`,
+ * `JOB_TOKEN` and `API_URL` come from the api's `ecs:RunTask` override; locally the id is the
  * `npm run job:dev -- <id>` argument.
  */
 export const loadConfig = async (argv: string[]): Promise<JobConfig> => {
@@ -99,7 +108,7 @@ export const loadConfig = async (argv: string[]): Promise<JobConfig> => {
 	if (!jobId) throw new Error('JOB_ID env or a job id argument is required')
 	return {
 		jobId,
-		databaseUrl: await resolveDatabaseUrl(),
+		report: resolveReportTarget(),
 		anthropicApiKey: await resolveAnthropicKey(),
 		workDir: process.env.WORK_DIR || '/work',
 		templateDir: process.env.TEMPLATE_DIR || '/usr/src/templates/web',

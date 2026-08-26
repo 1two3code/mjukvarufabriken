@@ -14,7 +14,7 @@ const mockPlugin: FastifyPluginAsync = async app => {
 		emailTransport: 'log',
 		emailFrom: 'noreply@example.com',
 		anthropicApiKey: 'sk-ant-test',
-		infra: { jobSubnetIds: [] },
+		infra: { jobSubnetIds: [], jobApiUrl: 'https://api.example.com' },
 	})
 }
 

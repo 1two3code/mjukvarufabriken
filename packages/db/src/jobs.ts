@@ -29,6 +29,7 @@ type JobRow = {
 	gate_waivers: string[] | null
 	task_arn: string | null
 	repository_url: string | null
+	report_token_hash: string | null
 	started_at: Date | null
 	finished_at: Date | null
 	created_at: Date
@@ -87,6 +88,8 @@ export type NewJob = {
 	orgId: string
 	spec: Spec
 	budget: JobBudget
+	/** sha256 (hex) of the per-job report token the api hands to the build container */
+	reportTokenHash?: string
 }
 
 export type JobUpdate = Partial<{
@@ -100,15 +103,20 @@ export type JobUpdate = Partial<{
 	repositoryUrl: string
 	startedAt: Date
 	finishedAt: Date
+	/** Rotated on the job's first report (one-shot bootstrap token); `null` revokes it */
+	reportTokenHash: string | null
 }>
 
 export const insertJob = async (db: Db, job: NewJob): Promise<Job> => {
 	const { sql } = db
 	const [row] = await sql<JobRow[]>`
-		insert into jobs (order_id, org_id, spec, budget_tokens, max_workers, max_duration_minutes)
+		insert into jobs (
+			order_id, org_id, spec, budget_tokens, max_workers, max_duration_minutes, report_token_hash
+		)
 		values (
 			${job.orderId}, ${job.orgId}, ${sql.json(job.spec as never)},
-			${job.budget.maxTokens}, ${job.budget.maxWorkers}, ${job.budget.maxDurationMinutes}
+			${job.budget.maxTokens}, ${job.budget.maxWorkers}, ${job.budget.maxDurationMinutes},
+			${job.reportTokenHash ?? null}
 		)
 		returning *`
 	return toJob(row!)
@@ -117,6 +125,18 @@ export const insertJob = async (db: Db, job: NewJob): Promise<Job> => {
 export const getJob = async (db: Db, id: string): Promise<Job | undefined> => {
 	if (!isUuid(id)) return undefined
 	const [row] = await db.sql<JobRow[]>`select * from jobs where id = ${id}`
+	return row && toJob(row)
+}
+
+/**
+ * The job a report token belongs to (`/internal/jobs/:id` auth). Looks up by the hash alone so
+ * the route can tell a wrong token (401) from a valid token used on another job's url (404).
+ * The hash is never mapped onto `Job`, so it cannot leak through a response schema.
+ */
+export const getJobByReportToken = async (db: Db, tokenHash: string): Promise<Job | undefined> => {
+	if (!tokenHash) return undefined
+	const [row] = await db.sql<JobRow[]>`
+		select * from jobs where report_token_hash = ${tokenHash} limit 1`
 	return row && toJob(row)
 }
 
@@ -153,6 +173,7 @@ export const updateJob = async (
 		repository_url: update.repositoryUrl,
 		started_at: update.startedAt,
 		finished_at: update.finishedAt,
+		report_token_hash: update.reportTokenHash,
 	}
 	const set = Object.fromEntries(
 		Object.entries(columns).filter(([, value]) => value !== undefined)
@@ -178,6 +199,41 @@ export const appendEvent = async (db: Db, jobId: string, event: NewJobEvent): Pr
 	return toJobEvent(row!)
 }
 
+/**
+ * Idempotent append for the build container's numbered events: the `(job_id, seq)` unique
+ * index makes a replayed batch a no-op, and the caller gets the row that was stored the first
+ * time with `duplicate: true` so it can skip the side effects.
+ */
+export const appendEventOnce = async (
+	db: Db,
+	jobId: string,
+	seq: number,
+	event: NewJobEvent
+): Promise<{ event: JobEvent; duplicate: boolean }> => {
+	const { sql } = db
+	const [inserted] = await sql<JobEventRow[]>`
+		insert into job_events (job_id, seq, type, payload)
+		values (${jobId}, ${seq}, ${event.type}, ${sql.json(event.payload as never)})
+		on conflict (job_id, seq) where seq is not null do nothing
+		returning *`
+	if (inserted) return { event: toJobEvent(inserted), duplicate: false }
+	const [existing] = await sql<JobEventRow[]>`
+		select * from job_events where job_id = ${jobId} and seq = ${seq}`
+	if (!existing) throw new Error(`job_events (${jobId}, ${seq}) neither inserted nor found`)
+	return { event: toJobEvent(existing), duplicate: true }
+}
+
+export const countEvents = async (
+	db: Db,
+	jobId: string,
+	type: JobEvent['type']
+): Promise<number> => {
+	if (!isUuid(jobId)) return 0
+	const [row] = await db.sql<{ count: string }[]>`
+		select count(*)::text as count from job_events where job_id = ${jobId} and type = ${type}`
+	return Number(row?.count ?? 0)
+}
+
 export const listEvents = async (db: Db, jobId: string, afterId = 0): Promise<JobEvent[]> => {
 	if (!isUuid(jobId)) return []
 	const rows = await db.sql<JobEventRow[]>`
@@ -189,8 +245,11 @@ export const listEvents = async (db: Db, jobId: string, afterId = 0): Promise<Jo
 export const createJobsRepository = (db: Db): JobsRepository => ({
 	insert: job => insertJob(db, job),
 	get: id => getJob(db, id),
+	getByReportToken: tokenHash => getJobByReportToken(db, tokenHash),
 	list: filter => listJobs(db, filter),
 	update: (id, update) => updateJob(db, id, update),
 	appendEvent: (jobId, event) => appendEvent(db, jobId, event),
+	appendEventOnce: (jobId, seq, event) => appendEventOnce(db, jobId, seq, event),
+	countEvents: (jobId, type) => countEvents(db, jobId, type),
 	listEvents: (jobId, afterId) => listEvents(db, jobId, afterId),
 })
