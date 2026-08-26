@@ -64,8 +64,8 @@ Everything that needs someone else's approval lives in TODO-EXTERNAL.md and is N
 - [ ] Admin view: all jobs, budgets, kill switch
 
 ### M7 — Public site
-- [ ] Landing, how it works, pricing, contact — sv/en
-- [ ] Built THROUGH the harness (first case study)
+- [x] Landing, how it works, pricing, contact — sv/en (2026-08-26: built by hand in apps/site + `POST /bff/contact`; lint/test/build/smoke green)
+- [ ] Built THROUGH the harness (first case study) — 2026-08-26: the site was built by hand tonight; it will be rebuilt through the factory as the M10 dogfood case
 
 ### M8 — Resident agent mode
 - [ ] Deploy agent into customer's AWS account (CDK template) with scoped IAM + customer's own Anthropic key or metered via ours
