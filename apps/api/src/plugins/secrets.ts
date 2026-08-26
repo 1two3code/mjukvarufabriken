@@ -40,9 +40,19 @@ declare module 'fastify' {
 			anthropicApiKey?: string
 			/** Model id override for the spec engine (`SPEC_MODEL`) */
 			specModel?: string
-			/** Infra handles (set by the CDK web stack; unused until M3/M5) */
+			/** Infra handles (set by the CDK web stack) */
 			infra: {
 				databaseSecretArn?: string
+				/**
+				 * Url the build container reports to (`JOB_API_URL`: the ALB, http without a custom
+				 * domain). Defaults to the issuer url, which is the api's own url everywhere.
+				 */
+				jobApiUrl: string
+				/**
+				 * `NO_PROXY` for the job container (`JOB_NO_PROXY`): the task definition's list plus
+				 * the api host, so reports bypass the egress-proxy sidecar. Undefined → not overridden.
+				 */
+				jobNoProxy?: string
 				artifactsBucket?: string
 				jobsClusterArn?: string
 				jobTaskDefinitionArn?: string
@@ -123,12 +133,13 @@ const plugin: FastifyPluginAsync = async app => {
 	const env = process.env.ENV || 'local'
 	const appUrl = process.env.APP_URL || 'http://localhost:5173'
 	const port = process.env.PORT || '5174'
+	const authIssuer = process.env.AUTH_ISSUER || `http://localhost:${port}`
 
 	app.decorate('secrets', {
 		env,
 		appUrl,
 		portalUrl: process.env.PORTAL_URL || appUrl,
-		authIssuer: process.env.AUTH_ISSUER || `http://localhost:${port}`,
+		authIssuer,
 		authAudience: process.env.AUTH_AUDIENCE!,
 		authJwtPrivateKey: await resolveSecret(
 			'AUTH_JWT_PRIVATE_KEY',
@@ -141,6 +152,8 @@ const plugin: FastifyPluginAsync = async app => {
 		specModel: process.env.SPEC_MODEL || undefined,
 		infra: {
 			databaseSecretArn: process.env.DATABASE_SECRET_ARN,
+			jobApiUrl: process.env.JOB_API_URL || authIssuer,
+			jobNoProxy: process.env.JOB_NO_PROXY || undefined,
 			artifactsBucket: process.env.ARTIFACTS_BUCKET,
 			jobsClusterArn: process.env.JOBS_CLUSTER_ARN,
 			jobTaskDefinitionArn: process.env.JOB_TASK_DEFINITION_ARN,

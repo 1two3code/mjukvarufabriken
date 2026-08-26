@@ -1,10 +1,24 @@
+import { createHash, randomBytes } from 'node:crypto'
+
 import fp from 'fastify-plugin'
-import { isActiveJobStatus, SpecSchema } from '@mf/models'
+import { isActiveJobStatus, NotifyPayloadSchema, SpecSchema } from '@mf/models'
 
 import { EntityInvalid, EntityNotFound } from '#/lib/entityError.ts'
 
 import type { FastifyInstance, FastifyPluginAsync } from 'fastify'
-import type { BackendSession, Job, JobBudget, JobEvent, SizeClass } from '@mf/models'
+import type {
+	BackendSession,
+	GateReport,
+	Job,
+	JobBudget,
+	JobEvent,
+	JobReport,
+	JobReportEventsResponse,
+	JobReportUpdate,
+	JobReportUpdateResponse,
+	NewJobEvent,
+	SizeClass,
+} from '@mf/models'
 
 declare module 'fastify' {
 	interface FastifyInstance {
@@ -18,17 +32,31 @@ declare module 'fastify' {
 			/** Admin kill switch: marks the row killed and stops the Fargate task */
 			kill: (jobId: string) => Promise<Job>
 			listAll: () => Promise<Job[]>
+			/**
+			 * Build-container reporting (`/internal/jobs/:jobId`, M3 hardening). The container holds
+			 * only its per-job token; `authenticateReport` resolves it to the job or throws
+			 * `ReportUnauthorized` (unknown token) / `EntityNotFound` (valid token, other job's url).
+			 */
+			authenticateReport: (jobId: string, token: string | undefined) => Promise<Job>
+			/** What the container needs to run: spec, budget, waivers and the kill flag */
+			reportView: (job: Job) => JobReport
+			/**
+			 * Stores a batch of events in order. `notify` events are mailed to the admins here (the
+			 * container has no email access), `gate` reports are appended to `jobs.gates`.
+			 */
+			reportEvents: (job: Job, events: NewJobEvent[]) => Promise<JobReportEventsResponse>
+			/** Status/tokens/plan/gates/urls write with the killed-guard of `db.jobs.update` */
+			reportUpdate: (job: Job, update: JobReportUpdate) => Promise<JobReportUpdateResponse>
 		}
 	}
 }
 
-/**
- * TODO(m3-hardening): when the job reports its events through the api's per-job endpoint instead
- * of writing to Postgres directly, forward every `notify` event (`NotifyPayload` from @mf/models:
- * `{ to: 'admins', subject, text }`) to the admins through the api's email transport
- * (`AUTH_ADMIN_EMAILS`), and persist `gate` event payloads onto `jobs.gates` (migration 0005).
- * The job container has no email access by design.
- */
+/** Bearer token on `/internal/jobs/*` is missing or matches no job */
+export class ReportUnauthorized extends Error {
+	constructor() {
+		super('Invalid job token')
+	}
+}
 
 /** The spec must be frozen before a build starts */
 export class SpecNotFrozen extends EntityInvalid {
@@ -58,6 +86,13 @@ export const budgetForSize: Record<SizeClass, JobBudget> = {
 
 const isAdmin = (session: BackendSession) => session.role === 'admin'
 
+// MARK: Report tokens
+/** 32 random bytes, url-safe; only its hash is stored (`jobs.report_token_hash`) */
+export const mintReportToken = () => randomBytes(32).toString('base64url')
+export const hashReportToken = (token: string) => createHash('sha256').update(token).digest('hex')
+
+const toDate = (value: string | undefined) => (value === undefined ? undefined : new Date(value))
+
 /**
  * What a customer may see of the event log: `notify` events are addressed to the admins and
  * `gate` details carry the full review findings / test output of the delivered code — both stay
@@ -85,6 +120,23 @@ const plugin: FastifyPluginAsync = async app => {
 	const get: FastifyInstance['jobService']['get'] = async (jobId, session) =>
 		scoped(await db.jobs.get(jobId), session, jobId)
 
+	/** Forwards a `notify` event to every admin; a mail failure never fails the report */
+	const notifyAdmins = async (job: Job, event: NewJobEvent) => {
+		const parsed = NotifyPayloadSchema.safeParse(event.payload)
+		if (!parsed.success) {
+			app.log.warn({ jobId: job.id, issues: parsed.error.issues }, 'Malformed notify event')
+			return
+		}
+		const { subject, text } = parsed.data
+		for (const to of app.secrets.authAdminEmails) {
+			await app.email
+				.send({ to, subject: `[mf ${app.secrets.env}] ${subject}`, text })
+				.catch(error => {
+					app.log.error({ err: error, jobId: job.id, to }, 'Could not send the job notification')
+				})
+		}
+	}
+
 	app.decorate('jobService', {
 		get,
 		start: async (orderId, session) => {
@@ -99,8 +151,15 @@ const plugin: FastifyPluginAsync = async app => {
 			const existing = await db.jobs.list({ orderId })
 			if (existing.some(job => isActiveJobStatus(job.status))) throw new JobAlreadyActive(orderId)
 
+			const reportToken = mintReportToken()
 			const job = await db.jobs
-				.insert({ orderId, orgId, spec, budget: budgetForSize[sizeClass] })
+				.insert({
+					orderId,
+					orgId,
+					spec,
+					budget: budgetForSize[sizeClass],
+					reportTokenHash: hashReportToken(reportToken),
+				})
 				.catch((error: Error & { code?: string }) => {
 					if (error.code === '23505') throw new JobAlreadyActive(orderId)
 					throw error
@@ -111,7 +170,7 @@ const plugin: FastifyPluginAsync = async app => {
 				return job
 			}
 			try {
-				const taskArn = await ecs.runJob(job.id)
+				const taskArn = await ecs.runJob(job.id, reportToken)
 				return (await db.jobs.update(job.id, { taskArn })) ?? job
 			} catch (error) {
 				const reason = `ecs:RunTask failed: ${(error as Error).message}`
@@ -152,10 +211,58 @@ const plugin: FastifyPluginAsync = async app => {
 			return killed
 		},
 		listAll: () => db.jobs.list(),
+
+		authenticateReport: async (jobId, token) => {
+			const job = token ? await db.jobs.getByReportToken(hashReportToken(token)) : undefined
+			if (!job) throw new ReportUnauthorized()
+			if (job.id !== jobId) throw new EntityNotFound('job', jobId)
+			return job
+		},
+		reportView: job => ({
+			id: job.id,
+			status: job.status,
+			spec: job.spec,
+			budget: job.budget,
+			gateWaivers: job.gateWaivers,
+			killed: job.status === 'killed',
+		}),
+		reportEvents: async (job, events) => {
+			let lastEventId = 0
+			const gates: GateReport[] = []
+			for (const event of events) {
+				const stored = await db.jobs.appendEvent(job.id, event)
+				lastEventId = stored.id
+				if (event.type === 'gate') gates.push(event.payload as GateReport)
+				if (event.type === 'notify') await notifyAdmins(job, event)
+			}
+			if (gates.length) {
+				const current = (await db.jobs.get(job.id))?.gates ?? []
+				await db.jobs.update(job.id, { gates: [...current, ...gates] })
+			}
+			return { lastEventId }
+		},
+		reportUpdate: async (job, update) => {
+			const row = await db.jobs.update(job.id, {
+				...update,
+				startedAt: toDate(update.startedAt),
+				finishedAt: toDate(update.finishedAt),
+			})
+			if (row) return { status: row.status, killed: row.status === 'killed' }
+			// Status write refused: the admin killed the job. Usage, plan and gates still land.
+			const { status: _status, ...rest } = update
+			if (Object.keys(rest).length) {
+				await db.jobs.update(job.id, {
+					...rest,
+					startedAt: toDate(rest.startedAt),
+					finishedAt: toDate(rest.finishedAt),
+				})
+			}
+			return { status: 'killed', killed: true }
+		},
 	})
 }
 
 export default fp(plugin, {
 	name: '#internal/jobService',
-	dependencies: ['#internal/db', '#internal/ecs', '#internal/specService'],
+	dependencies: ['#internal/db', '#internal/ecs', '#internal/email', '#internal/specService'],
 })

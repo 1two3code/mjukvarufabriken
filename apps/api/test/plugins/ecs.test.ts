@@ -28,6 +28,8 @@ const createApp = async (configured: boolean) => {
 	vi.stubEnv('JOB_TASK_DEFINITION_ARN', configured ? taskDefinition : '')
 	vi.stubEnv('JOB_SUBNET_IDS', configured ? 'subnet-a,subnet-b' : '')
 	vi.stubEnv('JOB_SECURITY_GROUP_ID', configured ? 'sg-1' : '')
+	vi.stubEnv('JOB_API_URL', 'http://alb.internal')
+	vi.stubEnv('JOB_NO_PROXY', 'localhost,alb.internal')
 	vi.doUnmock('#/plugins/secrets.ts')
 	vi.resetModules()
 	return createTestApp({ skipMock: ['#/plugins/ecs.ts', '#/plugins/secrets.ts'] })
@@ -42,7 +44,7 @@ describe('ECS plugin (ecs)', () => {
 		const app = await createApp(false)
 
 		// Act
-		const taskArn = await app.ecs.runJob('job-1')
+		const taskArn = await app.ecs.runJob('job-1', 'token')
 
 		// Assert
 		expect(app.ecs.configured).toBe(false)
@@ -50,13 +52,13 @@ describe('ECS plugin (ecs)', () => {
 		expect(sendMock).not.toHaveBeenCalled()
 	})
 
-	it('Runs the job task with the JOB_ID override in the private subnets', async () => {
+	it('Runs the job task with JOB_ID, JOB_TOKEN, API_URL and NO_PROXY overrides in the private subnets', async () => {
 		// Arrange
 		const app = await createApp(true)
 		sendMock.mockResolvedValue({ tasks: [{ taskArn: 'arn:task/1' }], failures: [] })
 
 		// Act
-		const taskArn = await app.ecs.runJob('job-1')
+		const taskArn = await app.ecs.runJob('job-1', 'secret-token')
 
 		// Assert
 		expect(app.ecs.configured).toBe(true)
@@ -75,7 +77,15 @@ describe('ECS plugin (ecs)', () => {
 			},
 			overrides: {
 				containerOverrides: [
-					{ name: jobContainerName, environment: [{ name: 'JOB_ID', value: 'job-1' }] },
+					{
+						name: jobContainerName,
+						environment: [
+							{ name: 'JOB_ID', value: 'job-1' },
+							{ name: 'JOB_TOKEN', value: 'secret-token' },
+							{ name: 'API_URL', value: 'http://alb.internal' },
+							{ name: 'NO_PROXY', value: 'localhost,alb.internal' },
+						],
+					},
 				],
 			},
 		})
@@ -90,7 +100,7 @@ describe('ECS plugin (ecs)', () => {
 		})
 
 		// Act / Assert
-		await expect(app.ecs.runJob('job-1')).rejects.toThrow(/RESOURCE:CPU/)
+		await expect(app.ecs.runJob('job-1', 'token')).rejects.toThrow(/RESOURCE:CPU/)
 	})
 
 	it('Throws when RunTask returns neither a task nor a failure', async () => {
@@ -99,7 +109,7 @@ describe('ECS plugin (ecs)', () => {
 		sendMock.mockResolvedValue({ tasks: [], failures: [] })
 
 		// Act / Assert
-		await expect(app.ecs.runJob('job-1')).rejects.toThrow(/no task and no failure/)
+		await expect(app.ecs.runJob('job-1', 'token')).rejects.toThrow(/no task and no failure/)
 	})
 
 	it('Stops a task on the cluster', async () => {

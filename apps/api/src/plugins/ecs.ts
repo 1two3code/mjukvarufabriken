@@ -13,8 +13,12 @@ declare module 'fastify' {
 		 */
 		ecs: {
 			configured: boolean
-			/** Runs the job task definition with `JOB_ID` overridden; resolves to the task ARN */
-			runJob: (jobId: string) => Promise<string | undefined>
+			/**
+			 * Runs the job task definition with `JOB_ID`, the per-job `JOB_TOKEN`, `API_URL` (and
+			 * `NO_PROXY` when configured) overridden; resolves to the task ARN. The token is the
+			 * only credential the sandbox gets and it is never logged.
+			 */
+			runJob: (jobId: string, reportToken: string) => Promise<string | undefined>
 			stopTask: (taskArn: string, reason: string) => Promise<void>
 		}
 	}
@@ -24,8 +28,14 @@ declare module 'fastify' {
 export const jobContainerName = 'job'
 
 const plugin: FastifyPluginAsync = async app => {
-	const { jobsClusterArn, jobTaskDefinitionArn, jobSubnetIds, jobSecurityGroupId } =
-		app.secrets.infra
+	const {
+		jobsClusterArn,
+		jobTaskDefinitionArn,
+		jobSubnetIds,
+		jobSecurityGroupId,
+		jobApiUrl,
+		jobNoProxy,
+	} = app.secrets.infra
 	const configured = Boolean(
 		jobsClusterArn && jobTaskDefinitionArn && jobSubnetIds.length && jobSecurityGroupId
 	)
@@ -45,7 +55,13 @@ const plugin: FastifyPluginAsync = async app => {
 
 	app.decorate('ecs', {
 		configured: true,
-		runJob: async jobId => {
+		runJob: async (jobId, reportToken) => {
+			const environment = [
+				{ name: 'JOB_ID', value: jobId },
+				{ name: 'JOB_TOKEN', value: reportToken },
+				{ name: 'API_URL', value: jobApiUrl },
+				...(jobNoProxy ? [{ name: 'NO_PROXY', value: jobNoProxy }] : []),
+			]
 			const result = await client.send(
 				new RunTaskCommand({
 					cluster: jobsClusterArn,
@@ -61,9 +77,7 @@ const plugin: FastifyPluginAsync = async app => {
 						},
 					},
 					overrides: {
-						containerOverrides: [
-							{ name: jobContainerName, environment: [{ name: 'JOB_ID', value: jobId }] },
-						],
+						containerOverrides: [{ name: jobContainerName, environment }],
 					},
 				})
 			)
