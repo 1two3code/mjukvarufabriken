@@ -58,6 +58,20 @@ export const budgetForSize: Record<SizeClass, JobBudget> = {
 
 const isAdmin = (session: BackendSession) => session.role === 'admin'
 
+/**
+ * What a customer may see of the event log: `notify` events are addressed to the admins and
+ * `gate` details carry the full review findings / test output of the delivered code — both stay
+ * admin-only. Customers get the gate's name, verdict, timing, tokens and one-line summary.
+ */
+export const redactEventsForCustomer = (events: JobEvent[]): JobEvent[] =>
+	events
+		.filter(event => event.type !== 'notify')
+		.map(event => {
+			if (event.type !== 'gate') return event
+			const { details: _details, ...payload } = event.payload
+			return { ...event, payload }
+		})
+
 const plugin: FastifyPluginAsync = async app => {
 	const { db, ecs, specService } = app
 
@@ -115,7 +129,8 @@ const plugin: FastifyPluginAsync = async app => {
 		},
 		listEvents: async (jobId, after, session) => {
 			await get(jobId, session)
-			return db.jobs.listEvents(jobId, after)
+			const events = await db.jobs.listEvents(jobId, after)
+			return isAdmin(session) ? events : redactEventsForCustomer(events)
 		},
 		kill: async jobId => {
 			const job = await db.jobs.get(jobId)
