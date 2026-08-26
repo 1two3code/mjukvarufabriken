@@ -126,6 +126,8 @@ export const verifyRepo = async (repoDir: string, signal?: AbortSignal): Promise
 // MARK: Agent session
 
 export const workerTools = ['Read', 'Edit', 'Write', 'Bash', 'Glob', 'Grep'] as const
+/** Tools of a session that must not change the repo (review, acceptance check) */
+export const readOnlyTools = ['Read', 'Glob', 'Grep', 'Bash'] as const
 
 export type SessionInput = {
 	cwd: string
@@ -135,9 +137,19 @@ export type SessionInput = {
 	onUsage: (usage: TokenUsage) => void
 	model?: string
 	maxTurns?: number
+	/** Tool allowlist (default: the full worker set) */
+	tools?: readonly string[]
+	/** JSON schema the session's final answer must match; parsed into `structuredOutput` */
+	outputSchema?: Record<string, unknown>
 }
 
-export type SessionOutcome = { ok: boolean; tokens: number; result: string }
+export type SessionOutcome = {
+	ok: boolean
+	tokens: number
+	result: string
+	/** The structured answer when `outputSchema` was given and the session produced one */
+	structuredOutput?: unknown
+}
 
 const messageUsage = (message: SDKMessage): TokenUsage | undefined => {
 	if (message.type !== 'assistant') return undefined
@@ -166,6 +178,8 @@ export const runSession = async ({
 	onUsage,
 	model,
 	maxTurns = 200,
+	tools = workerTools,
+	outputSchema,
 }: SessionInput): Promise<SessionOutcome> => {
 	const controller = new AbortController()
 	const onAbort = () => controller.abort(signal.reason)
@@ -176,8 +190,11 @@ export const runSession = async ({
 		cwd,
 		model: resolveWorkerModel(model),
 		systemPrompt,
-		tools: [...workerTools],
-		allowedTools: [...workerTools],
+		tools: [...tools],
+		allowedTools: [...tools],
+		...(outputSchema
+			? { outputFormat: { type: 'json_schema' as const, schema: outputSchema } }
+			: {}),
 		permissionMode: 'bypassPermissions',
 		allowDangerouslySkipPermissions: true,
 		settingSources: [],
@@ -190,6 +207,7 @@ export const runSession = async ({
 	const usage = createUsageAccumulator(onUsage)
 	let ok = false
 	let result = ''
+	let structuredOutput: unknown
 	let reported = 0
 	let turns = 0
 	try {
@@ -205,6 +223,7 @@ export const runSession = async ({
 					0
 				)
 				ok = message.subtype === 'success' && !message.is_error
+				if (message.subtype === 'success') structuredOutput = message.structured_output
 				result =
 					message.subtype === 'success'
 						? message.result
@@ -227,7 +246,7 @@ export const runSession = async ({
 	}
 	// Top up with anything the per-message stream missed (subagents, compaction)
 	usage.reconcile(reported)
-	return { ok, tokens: usage.total, result }
+	return { ok, tokens: usage.total, result, structuredOutput }
 }
 
 // MARK: Task runner

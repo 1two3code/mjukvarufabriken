@@ -1,14 +1,17 @@
 import { BudgetTracker } from './budget.ts'
 import { blockedBy, readyTasks } from './dag.ts'
+import { failureNotification, gatesFailedReason, runGates } from './gates.ts'
 
-import type { Plan, Task } from '@mf/models'
+import type { GateReport, Plan, Task } from '@mf/models'
 import type { JobInput, JobOutcome, RunJobOptions, TokenUsage } from './types.ts'
 
 /**
  * Drives one job: plan → schedule ready tasks up to `maxWorkers` in parallel → merge each finished
  * branch into main in dependency order (a task only becomes ready once its dependencies are
- * merged) → final lint + test on main. Every model call reports usage to one `BudgetTracker`; the
- * first breach of tokens, wall clock or the kill switch aborts everything in flight.
+ * merged) → the QA gates on main (verify → acceptance-tests → review → acceptance-check, see
+ * `gates.ts`). Every model call reports usage to one `BudgetTracker`; the first breach of tokens,
+ * wall clock or the kill switch aborts everything in flight. Anything but green gates ends in
+ * `failed`/`killed` plus a `notify` event for the admins.
  */
 export const runJob = async (
 	job: JobInput,
@@ -27,16 +30,22 @@ export const runJob = async (
 		if (hooks.isKilled && (await hooks.isKilled().catch(() => false))) budget.abort('killed')
 	}, hooks.pollIntervalMs ?? 10_000)
 
-	const finish = async (outcome: Omit<JobOutcome, 'tokensUsed'>): Promise<JobOutcome> => {
+	const gates: GateReport[] = []
+
+	const finish = async (outcome: Omit<JobOutcome, 'tokensUsed' | 'gates'>): Promise<JobOutcome> => {
 		clearInterval(poll)
 		await persistTokens()
-		const result = { ...outcome, tokensUsed: budget.used }
+		const result = { ...outcome, tokensUsed: budget.used, gates }
 		if (result.status === 'delivered') {
 			await emit({ type: 'done', payload: { tokensUsed: result.tokensUsed } })
 		} else {
 			await emit({
 				type: result.status,
 				payload: { reason: result.reason, tokensUsed: result.tokensUsed },
+			})
+			await emit({
+				type: 'notify',
+				payload: failureNotification(job.id, result.status, result.reason, gates),
 			})
 		}
 		return result
@@ -185,23 +194,24 @@ export const runJob = async (
 		})
 	}
 
-	// MARK: Verify
-	let verification
-	try {
-		verification = await ports.verify({ repoDir: job.repoDir, signal })
-	} catch (error) {
-		if (budget.aborted) return abortedOutcome(plan)
-		verification = { ok: false, output: (error as Error).message }
-	}
-	await emit({ type: 'verify', payload: { ok: verification.ok, output: verification.output } })
+	// MARK: Gates — verify → acceptance-tests → review → acceptance-check, fail closed
+	const gateRun = await runGates({
+		spec: job.spec,
+		plan,
+		repoDir: job.repoDir,
+		seedCommit: job.seedCommit,
+		waivers: job.gateWaivers ?? [],
+		signal,
+		onUsage,
+		ports,
+		emit: hooks.emit,
+		isAborted: () => budget.aborted,
+		now,
+	})
+	gates.push(...gateRun.reports)
+	await persistTokens()
 	if (budget.aborted) return abortedOutcome(plan)
-	if (!verification.ok) {
-		return finish({
-			status: 'failed',
-			plan,
-			reason: `final verification failed:\n${verification.output}`,
-		})
-	}
+	if (!gateRun.ok) return finish({ status: 'failed', plan, reason: gatesFailedReason(gates) })
 
 	return finish({ status: 'delivered', plan })
 }

@@ -1,9 +1,11 @@
-import type { Job, JobBudget, NewJobEvent, Plan, Spec, Task } from '@mf/models'
+import type { GateReport, Job, JobBudget, NewJobEvent, Plan, Spec, Task } from '@mf/models'
 
 /** Input the orchestrator needs — a subset of the stored `Job` row */
-export type JobInput = Pick<Job, 'id' | 'spec' | 'budget'> & {
+export type JobInput = Pick<Job, 'id' | 'spec' | 'budget' | 'gateWaivers'> & {
 	/** Path of the (already initialised) customer git repository the job works in */
 	repoDir: string
+	/** Commit the repo was seeded from; the review gate diffs `seedCommit..main` (default: root) */
+	seedCommit?: string
 }
 
 export type JobOutcome = {
@@ -11,6 +13,8 @@ export type JobOutcome = {
 	tokensUsed: number
 	plan?: Plan
 	reason?: string
+	/** Reports of the gates that ran, in order (empty when the build never reached them) */
+	gates: GateReport[]
 }
 
 /** Token usage of one model message, all buckets counted against the budget */
@@ -56,6 +60,27 @@ export type VerifyOutcome = {
 	output: string
 }
 
+/** What every model-driven gate gets; `plan` is absent when gates run stand-alone (gates-demo) */
+export type GateInput = {
+	spec: Spec
+	plan?: Plan
+	repoDir: string
+	seedCommit?: string
+	/** Review finding ids waived by an admin (`Job.gateWaivers`) */
+	waivers: string[]
+	signal: AbortSignal
+	onUsage: (usage: TokenUsage) => void
+}
+
+export type GateOutcome = {
+	ok: boolean
+	tokens: number
+	summary: string
+	details?: Record<string, unknown>
+}
+
+export type GatePort = (input: GateInput) => Promise<GateOutcome>
+
 /** Everything the orchestrator calls out to — swapped for fakes in tests */
 export type OrchestratorPorts = {
 	plan: (input: {
@@ -80,6 +105,10 @@ export type OrchestratorPorts = {
 		onUsage: (usage: TokenUsage) => void
 	}) => Promise<MergeOutcome>
 	verify: (input: { repoDir: string; signal: AbortSignal }) => Promise<VerifyOutcome>
+	/** M4 gates, run after `verify` in this order; each one fails closed */
+	acceptanceTests: GatePort
+	review: GatePort
+	acceptanceCheck: GatePort
 }
 
 export type OrchestratorHooks = {
