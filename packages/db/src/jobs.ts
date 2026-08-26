@@ -63,6 +63,11 @@ export const toJobEvent = (row: JobEventRow): JobEvent => ({
 
 // MARK: Repository
 
+const uuidPattern = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i
+
+/** `jobs.id` is a uuid column: a malformed id is "not found", not a Postgres 22P02 error */
+export const isUuid = (value: string) => uuidPattern.test(value)
+
 export type NewJob = {
 	orderId: string
 	orgId: string
@@ -94,6 +99,7 @@ export const insertJob = async (db: Db, job: NewJob): Promise<Job> => {
 }
 
 export const getJob = async (db: Db, id: string): Promise<Job | undefined> => {
+	if (!isUuid(id)) return undefined
 	const [row] = await db.sql<JobRow[]>`select * from jobs where id = ${id}`
 	return row && toJob(row)
 }
@@ -133,9 +139,14 @@ export const updateJob = async (
 		Object.entries(columns).filter(([, value]) => value !== undefined)
 	) as Record<string, never>
 	if (!Object.keys(set).length) return getJob(db, id)
+	if (!isUuid(id)) return undefined
 
+	// `killed` is terminal: a status write from the (possibly still running) job never overrides
+	// the admin kill switch. Callers get `undefined` back and must treat that as killed.
 	const [row] = await sql<JobRow[]>`
-		update jobs set ${sql(set)}, updated_at = now() where id = ${id} returning *`
+		update jobs set ${sql(set)}, updated_at = now()
+		where id = ${id} ${update.status === undefined ? sql`` : sql`and status <> 'killed'`}
+		returning *`
 	return row && toJob(row)
 }
 
@@ -149,6 +160,7 @@ export const appendEvent = async (db: Db, jobId: string, event: NewJobEvent): Pr
 }
 
 export const listEvents = async (db: Db, jobId: string, afterId = 0): Promise<JobEvent[]> => {
+	if (!isUuid(jobId)) return []
 	const rows = await db.sql<JobEventRow[]>`
 		select * from job_events where job_id = ${jobId} and id > ${afterId}
 		order by id asc limit 500`

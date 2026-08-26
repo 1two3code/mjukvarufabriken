@@ -8,7 +8,8 @@
   "scripts": {
     "lint": "eslint; tsgo --noemit",
     "db:migrate": "node scripts/migrate.ts",
-    "db:seed": "node scripts/seed-demo.ts"
+    "db:seed": "node scripts/seed-demo.ts",
+    "test": "vitest run"
   },
   "exports": {
     ".": "./src/index.ts"
