@@ -1,0 +1,60 @@
+# Local Postgres for the api / job (`npm run db:migrate`, `npm run job:dev`), plus the
+# egress-proxy + job pair used to verify the allowlist locally (`--profile job`).
+#
+#   docker compose up -d                       # postgres only
+#   docker compose --profile job build         # build job + proxy images
+#   JOB_ID=<id> docker compose --profile job run --rm job
+services:
+  postgres:
+    image: postgres:17-alpine
+    ports:
+      - '5432:5432'
+    environment:
+      POSTGRES_USER: mf
+      POSTGRES_PASSWORD: mf
+      POSTGRES_DB: mf
+    volumes:
+      - postgres:/var/lib/postgresql/data
+    healthcheck:
+      test: ['CMD-SHELL', 'pg_isready -U mf']
+      interval: 5s
+      timeout: 3s
+      retries: 10
+
+  # Same image as the Fargate sidecar: tinyproxy with a domain allowlist (apps/job/proxy)
+  egress-proxy:
+    build: apps/job/proxy
+    profiles: [job]
+    networks: [egress, internal]
+
+  # Same image as the Fargate task. Only the proxy can reach the internet; the job network is
+  # internal, so any request that bypasses HTTP_PROXY fails outright.
+  job:
+    build:
+      context: .
+      dockerfile: apps/job/Dockerfile
+    profiles: [job]
+    depends_on:
+      egress-proxy:
+        condition: service_started
+      postgres:
+        condition: service_healthy
+    networks: [internal]
+    environment:
+      JOB_ID: ${JOB_ID:-}
+      DATABASE_URL: postgres://mf:mf@postgres:5432/mf
+      ANTHROPIC_API_KEY: ${ANTHROPIC_API_KEY:-}
+      PLAN_MODEL: ${PLAN_MODEL:-}
+      WORKER_MODEL: ${WORKER_MODEL:-}
+      HTTP_PROXY: http://egress-proxy:8888
+      HTTPS_PROXY: http://egress-proxy:8888
+      NO_PROXY: localhost,127.0.0.1,postgres
+      NODE_USE_ENV_PROXY: '1'
+
+networks:
+  egress:
+  internal:
+    internal: true
+
+volumes:
+  postgres:

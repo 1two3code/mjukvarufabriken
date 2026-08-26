@@ -16,7 +16,10 @@
     "clean:output": "rm -rf apps/site/dist apps/portal/dist; find . -maxdepth 3 -name 'coverage' -prune -exec rm -rf {} \\;; find . -maxdepth 3 -name 'cdk.out' -prune -exec rm -rf {} \\;",
     "upgrade": "npx npm-check-updates --workspaces --target semver -u; npm i",
     "prepare": "husky",
-    "spec:demo": "node --env-file-if-exists=.env packages/harness/scripts/spec-demo.ts"
+    "spec:demo": "node --env-file-if-exists=.env packages/harness/scripts/spec-demo.ts",
+    "db:migrate": "node --env-file-if-exists=.env packages/db/scripts/migrate.ts",
+    "db:seed": "node --env-file-if-exists=.env packages/db/scripts/seed-demo.ts",
+    "job:dev": "node --env-file-if-exists=.env apps/job/src/index.ts"
   },
   "workspaces": [
     "apps/*",
