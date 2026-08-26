@@ -13,6 +13,17 @@ declare module 'fastify' {
 			authIssuer: string
 			/** Expected `aud` claim */
 			authAudience: string
+			/** Infra handles (set by the CDK web stack; unused until M3/M5) */
+			infra: {
+				databaseSecretArn?: string
+				artifactsBucket?: string
+				jobsClusterArn?: string
+				jobTaskDefinitionArn?: string
+				jobSubnetIds: string[]
+				jobSecurityGroupId?: string
+				stripeSecretKeySecretArn?: string
+				stripeWebhookSecretSecretArn?: string
+			}
 		}
 	}
 }
@@ -35,6 +46,16 @@ const plugin: FastifyPluginAsync = async app => {
 		authJwksUrl: process.env.AUTH_JWKS_URL!,
 		authIssuer: process.env.AUTH_ISSUER!,
 		authAudience: process.env.AUTH_AUDIENCE!,
+		infra: {
+			databaseSecretArn: process.env.DATABASE_SECRET_ARN,
+			artifactsBucket: process.env.ARTIFACTS_BUCKET,
+			jobsClusterArn: process.env.JOBS_CLUSTER_ARN,
+			jobTaskDefinitionArn: process.env.JOB_TASK_DEFINITION_ARN,
+			jobSubnetIds: process.env.JOB_SUBNET_IDS?.split(',').filter(Boolean) ?? [],
+			jobSecurityGroupId: process.env.JOB_SECURITY_GROUP_ID,
+			stripeSecretKeySecretArn: process.env.STRIPE_SECRET_KEY_SECRET_ARN,
+			stripeWebhookSecretSecretArn: process.env.STRIPE_WEBHOOK_SECRET_SECRET_ARN,
+		},
 	})
 }
 

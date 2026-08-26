@@ -1,3 +1,5 @@
+import { InstanceClass, InstanceSize, InstanceType } from 'aws-cdk-lib/aws-ec2'
+
 export type EnvironmentName = 'dev' | 'live'
 
 export type DomainConfig = {
@@ -30,8 +32,14 @@ export type EnvironmentConfig = {
 	 * and the API on the load balancer DNS name over plain HTTP — fine for a first deploy.
 	 */
 	domain?: DomainConfig
-	/** Provision an OpenSearch domain in the resources stack (costs money even when idle) */
-	enableOpenSearch?: boolean
+	/** RDS Postgres sizing */
+	database: {
+		instanceType: InstanceType
+		allocatedStorageGb: number
+		backupRetentionDays: number
+	}
+	/** Fargate sizing for build-job tasks (M3) */
+	jobs: { cpu: number; memoryMiB: number }
 }
 
 type Config = {
@@ -54,7 +62,30 @@ const auth = {
 export const config: Config = {
 	serviceName: 'mf',
 	environments: [
-		{ name: 'dev', account, region, auth },
-		{ name: 'live', account, region, auth },
+		{
+			name: 'dev',
+			account,
+			region,
+			auth,
+			// db.t4g.micro ≈ 15 USD/month; smallest burstable Postgres instance
+			database: {
+				instanceType: InstanceType.of(InstanceClass.T4G, InstanceSize.MICRO),
+				allocatedStorageGb: 20,
+				backupRetentionDays: 1,
+			},
+			jobs: { cpu: 2048, memoryMiB: 4096 },
+		},
+		{
+			name: 'live',
+			account,
+			region,
+			auth,
+			database: {
+				instanceType: InstanceType.of(InstanceClass.T4G, InstanceSize.SMALL),
+				allocatedStorageGb: 20,
+				backupRetentionDays: 7,
+			},
+			jobs: { cpu: 2048, memoryMiB: 4096 },
+		},
 	],
 }

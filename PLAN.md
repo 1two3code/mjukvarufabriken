@@ -29,7 +29,7 @@ Everything that needs someone else's approval lives in TODO-EXTERNAL.md and is N
 - [x] `templates/web` extracted and green (lint + test) — 2026-08-26
 - [x] Monorepo: `apps/site`, `apps/portal` (instantiated from templates/web), `packages/harness`, `packages/db`, `infra/` — 2026-08-26 (8 workspaces, lint + 68 tests + build green)
 - [x] CI (GitHub Actions): lint, test, build — 2026-08-26 (`ci.yml` lint/coverage/build/synth, `deploy.yml` OIDC dev→live; runs on first push to GitHub)
-- [ ] CDK stack: VPC, RDS, S3, ECS cluster, App Runner, secrets — partial 2026-08-26: VPC, S3, ECS cluster (api), CloudFront×2 synth offline (4 stacks); RDS, ECS-for-jobs, App Runner and Secrets Manager not yet in the stack
+- [x] CDK stack: VPC, RDS, S3, ECS cluster, App Runner, secrets — 2026-08-26 (VPC 1 NAT, RDS Postgres 17 t4g.micro/small, artifacts bucket, 4 Secrets Manager placeholders, ECS cluster `mf-jobs-<env>` + Fargate job task def, api wired with env + IAM + SG to RDS; 4 stacks synth offline. App Runner deferred to M5: created per customer job at runtime, not in our stack)
 - [x] TOKENS.md ledger started — 2026-08-26
 
 ### M2 — Spec engine

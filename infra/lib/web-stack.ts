@@ -9,9 +9,11 @@ import {
 	ViewerProtocolPolicy,
 } from 'aws-cdk-lib/aws-cloudfront'
 import { S3BucketOrigin } from 'aws-cdk-lib/aws-cloudfront-origins'
+import { Port, SecurityGroup, SubnetType } from 'aws-cdk-lib/aws-ec2'
 import { Cluster, ContainerImage } from 'aws-cdk-lib/aws-ecs'
 import { ApplicationLoadBalancedFargateService } from 'aws-cdk-lib/aws-ecs-patterns'
 import { ApplicationProtocol } from 'aws-cdk-lib/aws-elasticloadbalancingv2'
+import { PolicyStatement } from 'aws-cdk-lib/aws-iam'
 import { ARecord, HostedZone, RecordTarget } from 'aws-cdk-lib/aws-route53'
 import { CloudFrontTarget, LoadBalancerTarget } from 'aws-cdk-lib/aws-route53-targets'
 import { BlockPublicAccess, Bucket } from 'aws-cdk-lib/aws-s3'
@@ -120,6 +122,8 @@ export class WebStack extends Stack {
 
 		// MARK: API — ECS Fargate behind an ALB
 		const cluster = new Cluster(this, 'Cluster', { vpc: resources.vpc })
+		// Build jobs run in the private (NAT) subnets; the api passes these to ecs:RunTask
+		const jobSubnets = resources.vpc.selectSubnets({ subnetType: SubnetType.PRIVATE_WITH_EGRESS })
 
 		const api = new ApplicationLoadBalancedFargateService(this, 'Api', {
 			cluster,
@@ -149,19 +153,60 @@ export class WebStack extends Stack {
 					AUTH_JWKS_URL: environment.auth.jwksUrl,
 					AUTH_ISSUER: environment.auth.issuer,
 					AUTH_AUDIENCE: environment.auth.audience,
-					ITEMS_TABLE: resources.itemsTable.tableName,
-					ATTACHMENTS_BUCKET: resources.attachmentsBucket.bucketName,
-					...(resources.openSearch && { OPENSEARCH_ENDPOINT: resources.openSearch.domainEndpoint }),
+					DATABASE_SECRET_ARN: resources.databaseSecret.secretArn,
+					ARTIFACTS_BUCKET: resources.artifactsBucket.bucketName,
+					JOBS_CLUSTER_ARN: resources.jobsCluster.clusterArn,
+					JOB_TASK_DEFINITION_ARN: resources.jobTaskDefinition.taskDefinitionArn,
+					JOB_SUBNET_IDS: jobSubnets.subnetIds.join(','),
+					JOB_SECURITY_GROUP_ID: resources.jobSecurityGroup.securityGroupId,
+					STRIPE_SECRET_KEY_SECRET_ARN: resources.secrets['stripe-secret-key'].secretArn,
+					STRIPE_WEBHOOK_SECRET_SECRET_ARN: resources.secrets['stripe-webhook-secret'].secretArn,
 				},
 			},
+			// Private subnets with NAT: can reach RDS (isolated subnets in the same VPC) and the internet
+			taskSubnets: { subnetType: SubnetType.PRIVATE_WITH_EGRESS },
 		})
 		api.targetGroup.configureHealthCheck({ path: '/health', interval: Duration.seconds(30) })
 
 		// Least-privilege access to the shared resources
 		const taskRole = api.taskDefinition.taskRole
-		resources.itemsTable.grantReadWriteData(taskRole)
-		resources.attachmentsBucket.grantReadWrite(taskRole)
-		resources.openSearch?.grantReadWrite(taskRole)
+		resources.databaseSecret.grantRead(taskRole)
+		resources.secrets['stripe-secret-key'].grantRead(taskRole)
+		resources.secrets['stripe-webhook-secret'].grantRead(taskRole)
+		resources.artifactsBucket.grantReadWrite(taskRole)
+
+		// api → Postgres. The ingress rule is created in this stack (on an imported view of the
+		// database security group) so the resources stack never depends on this one.
+		const databaseSecurityGroup = SecurityGroup.fromSecurityGroupId(
+			this,
+			'DatabaseSecurityGroup',
+			resources.databaseSecurityGroup.securityGroupId,
+			{ mutable: true }
+		)
+		databaseSecurityGroup.addIngressRule(
+			api.service.connections.securityGroups[0]!,
+			Port.tcp(5432),
+			'api to postgres'
+		)
+
+		// Start/inspect/stop build jobs on the jobs cluster (M3)
+		const { jobTaskDefinition, jobsCluster } = resources
+		taskRole.addToPrincipalPolicy(
+			new PolicyStatement({
+				actions: ['ecs:RunTask'],
+				resources: [jobTaskDefinition.taskDefinitionArn],
+				conditions: { ArnEquals: { 'ecs:cluster': jobsCluster.clusterArn } },
+			})
+		)
+		taskRole.addToPrincipalPolicy(
+			new PolicyStatement({
+				actions: ['ecs:DescribeTasks', 'ecs:StopTask', 'ecs:ListTasks'],
+				resources: ['*'],
+				conditions: { ArnEquals: { 'ecs:cluster': jobsCluster.clusterArn } },
+			})
+		)
+		jobTaskDefinition.taskRole.grantPassRole(taskRole)
+		jobTaskDefinition.obtainExecutionRole().grantPassRole(taskRole)
 
 		// MARK: DNS
 		if (domain && hostedZone) {

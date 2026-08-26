@@ -9,6 +9,8 @@ describe('Secrets plugin (secrets)', () => {
 		vi.stubEnv('AUTH_JWKS_URL', 'https://auth.example.com/jwks')
 		vi.stubEnv('AUTH_ISSUER', 'https://auth.example.com')
 		vi.stubEnv('AUTH_AUDIENCE', 'audience')
+		vi.stubEnv('ARTIFACTS_BUCKET', 'mf-artifacts')
+		vi.stubEnv('JOB_SUBNET_IDS', 'subnet-a,subnet-b')
 
 		// Act
 		const app = await createTestApp({ skipMock: '#/plugins/secrets.ts' })
@@ -19,6 +21,10 @@ describe('Secrets plugin (secrets)', () => {
 			authJwksUrl: 'https://auth.example.com/jwks',
 			authIssuer: 'https://auth.example.com',
 			authAudience: 'audience',
+			infra: expect.objectContaining({
+				artifactsBucket: 'mf-artifacts',
+				jobSubnetIds: ['subnet-a', 'subnet-b'],
+			}),
 		})
 	})
 
