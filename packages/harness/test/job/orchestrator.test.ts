@@ -87,6 +87,7 @@ const createFakePorts = ({
 		verify: vi.fn(async () => ({ ok: true, output: 'green' })),
 		acceptanceTests: vi.fn(async () => ({ ok: true, tokens: 0, summary: 'tests green' })),
 		review: vi.fn(async () => ({ ok: true, tokens: 0, summary: 'no findings' })),
+		licence: vi.fn(async () => ({ ok: true, tokens: 0, summary: 'none denied' })),
 		acceptanceCheck: vi.fn(async () => ({ ok: true, tokens: 0, summary: 'all met' })),
 	}
 
@@ -146,7 +147,7 @@ describe('runJob', () => {
 		expect(types().filter(t => t === 'task_started')).toHaveLength(4)
 		expect(types().filter(t => t === 'task_finished')).toHaveLength(4)
 		expect(types().filter(t => t === 'merge')).toHaveLength(4)
-		expect(types().slice(-5)).toEqual(['gate', 'gate', 'gate', 'gate', 'done'])
+		expect(types().slice(-6)).toEqual(['gate', 'gate', 'gate', 'gate', 'gate', 'done'])
 		// planner 600 + 4 × 100
 		expect(outcome.tokensUsed).toBe(1000)
 		expect(tokens.at(-1)).toBe(1000)

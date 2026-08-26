@@ -124,6 +124,8 @@ export type OrchestratorPorts = {
 	/** M4 gates, run after `verify` in this order; each one fails closed */
 	acceptanceTests: GatePort
 	review: GatePort
+	/** Deterministic dependency-licence check; defaults to the built-in `licenceGate` (fakes in tests) */
+	licence?: GatePort
 	acceptanceCheck: GatePort
 	/** M5 delivery after green gates; optional so gates-only runs (gates-demo) need no clients */
 	deliver?: (input: DeliveryPortInput) => Promise<DeliveryOutcome>

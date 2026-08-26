@@ -1,5 +1,6 @@
 import { deliver } from './delivery/deliver.ts'
 import { acceptanceCheckGate, acceptanceTestsGate, reviewGate } from './gateSessions.ts'
+import { licenceGate } from './gates/licence.ts'
 import { mergeTask } from './merge.ts'
 import { createPlanner } from './planner.ts'
 import { runTask, verifyRepo } from './worker.ts'
@@ -32,6 +33,7 @@ export const createLivePorts = ({
 		verify: ({ repoDir, signal }) => verifyRepo(repoDir, signal),
 		acceptanceTests: input => acceptanceTestsGate(input, { model: workerModel }),
 		review: input => reviewGate(input, { model: workerModel }),
+		licence: input => licenceGate(input),
 		acceptanceCheck: input => acceptanceCheckGate(input, { model: workerModel }),
 		deliver: delivery ? input => deliver(input, delivery) : undefined,
 	}

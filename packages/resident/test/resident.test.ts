@@ -68,6 +68,7 @@ const createFakePorts = ({ taskTokens = 1000, fail, hold = false }: FakePortOpti
 				summary: fail === 'gate' ? '1 high finding' : 'no findings',
 			}
 		}),
+		licence: vi.fn(async () => ({ ok: true, tokens: 0, summary: 'none denied' })),
 		acceptanceCheck: vi.fn(async () => ({ ok: true, tokens: 0, summary: 'all met' })),
 	}
 	return { ports, release: () => release() }
@@ -189,6 +190,7 @@ describe('resident', () => {
 			'gate',
 			'gate',
 			'gate',
+			'gate',
 			'tokens',
 			'files_changed',
 			'pr_opened',
@@ -222,6 +224,7 @@ describe('resident', () => {
 			'verify',
 			'acceptance-tests',
 			'review',
+			'licence',
 			'acceptance-check',
 		])
 		expect(entries.at(-1)).toMatchObject({

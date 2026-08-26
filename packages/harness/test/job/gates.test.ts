@@ -21,6 +21,7 @@ type FakeOptions = {
 	verifyOk?: boolean
 	acceptanceTests?: GateOutcome | Error
 	review?: GateOutcome | Error
+	licence?: GateOutcome | Error
 	acceptanceCheck?: GateOutcome | Error
 }
 
@@ -42,6 +43,7 @@ const createPorts = ({
 	verifyOk = true,
 	acceptanceTests = green('tests green'),
 	review = green('no findings'),
+	licence = green('none denied'),
 	acceptanceCheck = green('all met'),
 }: FakeOptions = {}) => {
 	const calls: string[] = []
@@ -60,6 +62,14 @@ const createPorts = ({
 		),
 		acceptanceTests: record('acceptance-tests', gateFn(acceptanceTests)),
 		review: record('review', gateFn(review)),
+		// Deterministic: never reports usage
+		licence: record(
+			'licence',
+			vi.fn(async () => {
+				if (licence instanceof Error) throw licence
+				return licence
+			})
+		),
 		acceptanceCheck: record('acceptance-check', gateFn(acceptanceCheck)),
 	}
 	return { ports, calls }
@@ -101,9 +111,10 @@ describe('runGates', () => {
 			'verify',
 			'acceptance-tests',
 			'review',
+			'licence',
 			'acceptance-check',
 		])
-		expect(events.map(e => e.type)).toEqual(['gate', 'gate', 'gate', 'gate'])
+		expect(events.map(e => e.type)).toEqual(['gate', 'gate', 'gate', 'gate', 'gate'])
 		events.forEach(event => expect(GateReportSchema.parse(event.payload)).toBeTruthy())
 	})
 
@@ -141,6 +152,22 @@ describe('runGates', () => {
 		expect(gatesFailedReason(result.reports)).toBe(
 			'1 gate(s) failed: review\nreview: 1 high finding still open'
 		)
+	})
+
+	it('Runs the licence gate after review and before the acceptance check, red stops the chain', async () => {
+		const { ports, calls } = createPorts({
+			licence: {
+				ok: false,
+				tokens: 0,
+				summary: '1 package(s) with a denied licence: x@1.0.0 (GPL-3.0-only)',
+			},
+		})
+		const result = await run(ports).outcome
+
+		expect(result.failed).toEqual(['licence'])
+		expect(calls).toEqual(['verify', 'acceptance-tests', 'review', 'licence'])
+		expect(ports.acceptanceCheck).not.toHaveBeenCalled()
+		expect(result.reports.at(-1)!.tokens).toBe(0)
 	})
 
 	it('Counts a gate that throws as red, keeping its tokens', async () => {
