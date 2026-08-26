@@ -40,7 +40,7 @@ export type EnvironmentConfig = {
 	 * and the API on the load balancer DNS name over plain HTTP — fine for a first deploy.
 	 */
 	domain?: DomainConfig
-	/** RDS Postgres sizing */
+	/** RDS Postgres sizing. Automated backups: 7 days dev / 30 days live (M9) */
 	database: {
 		instanceType: InstanceType
 		allocatedStorageGb: number
@@ -48,6 +48,18 @@ export type EnvironmentConfig = {
 	}
 	/** Fargate sizing for build-job tasks (M3) */
 	jobs: { cpu: number; memoryMiB: number }
+	/** Alerting thresholds (M9); alarms notify `adminEmails` through the `mf-alerts-<env>` topic */
+	alerts: {
+		/** A single job using more tokens than this raises the token-burn alarm */
+		jobTokensThreshold: number
+		/** AWS Budgets monthly cost budget for the environment (80 % / 100 % notifications) */
+		monthlyBudgetUsd: number
+		/**
+		 * NAT gateway bytes out per hour above which the cost alarm fires (a build job pulling
+		 * npm/GitHub for a few minutes stays well below 1 GB)
+		 */
+		natBytesOutPerHourThreshold: number
+	}
 }
 
 type Config = {
@@ -90,9 +102,14 @@ export const config: Config = {
 			database: {
 				instanceType: InstanceType.of(InstanceClass.T4G, InstanceSize.MICRO),
 				allocatedStorageGb: 20,
-				backupRetentionDays: 1,
+				backupRetentionDays: 7,
 			},
 			jobs: { cpu: 2048, memoryMiB: 4096 },
+			alerts: {
+				jobTokensThreshold: 20_000_000,
+				monthlyBudgetUsd: 150,
+				natBytesOutPerHourThreshold: 2 * 1024 ** 3,
+			},
 		},
 		{
 			name: 'live',
@@ -104,9 +121,14 @@ export const config: Config = {
 			database: {
 				instanceType: InstanceType.of(InstanceClass.T4G, InstanceSize.SMALL),
 				allocatedStorageGb: 20,
-				backupRetentionDays: 7,
+				backupRetentionDays: 30,
 			},
 			jobs: { cpu: 2048, memoryMiB: 4096 },
+			alerts: {
+				jobTokensThreshold: 20_000_000,
+				monthlyBudgetUsd: 400,
+				natBytesOutPerHourThreshold: 5 * 1024 ** 3,
+			},
 		},
 	],
 }

@@ -13,10 +13,11 @@ import {
 } from 'aws-cdk-lib/aws-cloudfront'
 import { HttpOrigin, S3BucketOrigin } from 'aws-cdk-lib/aws-cloudfront-origins'
 import { Port, SecurityGroup, SubnetType } from 'aws-cdk-lib/aws-ec2'
-import { Cluster, ContainerImage } from 'aws-cdk-lib/aws-ecs'
+import { Cluster, ContainerImage, LogDrivers } from 'aws-cdk-lib/aws-ecs'
 import { ApplicationLoadBalancedFargateService } from 'aws-cdk-lib/aws-ecs-patterns'
 import { ApplicationProtocol } from 'aws-cdk-lib/aws-elasticloadbalancingv2'
 import { PolicyStatement } from 'aws-cdk-lib/aws-iam'
+import { LogGroup, RetentionDays } from 'aws-cdk-lib/aws-logs'
 import { ARecord, HostedZone, RecordTarget } from 'aws-cdk-lib/aws-route53'
 import { CloudFrontTarget, LoadBalancerTarget } from 'aws-cdk-lib/aws-route53-targets'
 import { BlockPublicAccess, Bucket } from 'aws-cdk-lib/aws-s3'
@@ -40,6 +41,11 @@ export interface WebStackProps extends StackProps {
 }
 
 export class WebStack extends Stack {
+	/** The api service (ALB + target group + Fargate service) — alarms live in OpsStack */
+	readonly api: ApplicationLoadBalancedFargateService
+	/** `/mf/<env>/api` — pino JSON lines from the api container (see docs/RUNBOOK.md) */
+	readonly apiLogGroup: LogGroup
+
 	constructor(scope: Construct, id: string, props: WebStackProps) {
 		super(scope, id, props)
 
@@ -54,9 +60,12 @@ export class WebStack extends Stack {
 				})
 			: undefined
 
-		// MARK: SPAs — S3 + CloudFront, one pair per app
+		// MARK: SPAs — S3 + CloudFront, one pair per app. Security headers (M9 baseline): HSTS,
+		// X-Content-Type-Options nosniff, X-Frame-Options DENY + CSP frame-ancestors 'none' (nothing
+		// may frame the portal or the site), strict referrer policy.
 		const responseHeadersPolicy = new ResponseHeadersPolicy(this, 'SecurityHeaders', {
 			securityHeadersBehavior: {
+				contentTypeOptions: { override: true },
 				contentSecurityPolicy: {
 					contentSecurityPolicy:
 						"default-src 'self'; base-uri 'self'; object-src 'none'; frame-ancestors 'none'; form-action 'self'; upgrade-insecure-requests; script-src 'self'; style-src 'self' 'unsafe-inline'; img-src 'self' data:; font-src 'self' data:; connect-src 'self' https: http:",
@@ -130,6 +139,12 @@ export class WebStack extends Stack {
 
 		const apiUrl = domain ? `https://${domain.apiDomainName}` : undefined
 
+		this.apiLogGroup = new LogGroup(this, 'ApiLogGroup', {
+			logGroupName: `/mf/${environment.name}/api`,
+			retention: isLive ? RetentionDays.ONE_MONTH : RetentionDays.TWO_WEEKS,
+			removalPolicy: isLive ? RemovalPolicy.RETAIN : RemovalPolicy.DESTROY,
+		})
+
 		const api = new ApplicationLoadBalancedFargateService(this, 'Api', {
 			cluster,
 			cpu: 512,
@@ -150,6 +165,10 @@ export class WebStack extends Stack {
 			taskImageOptions: {
 				image: ContainerImage.fromAsset(repositoryRoot, { file: 'apps/api/Dockerfile' }),
 				containerPort: 80,
+				logDriver: LogDrivers.awsLogs({ logGroup: this.apiLogGroup, streamPrefix: 'api' }),
+				// Only ARNs and non-secret settings here — every credential is read from Secrets
+				// Manager at start-up by the `secrets` plugin (M9 baseline: no plaintext secrets in
+				// task definitions; infra/test/security-baseline.test.ts enforces it).
 				environment: {
 					ENV: environment.name,
 					LOG_LEVEL: isLive ? 'warn' : 'info',
@@ -177,13 +196,25 @@ export class WebStack extends Stack {
 			taskSubnets: { subnetType: SubnetType.PRIVATE_WITH_EGRESS },
 		})
 		api.targetGroup.configureHealthCheck({ path: '/health', interval: Duration.seconds(30) })
+		this.api = api
 		// The issuer is the api's own URL; without a custom domain it is only known after synth
 		api.taskDefinition.defaultContainer!.addEnvironment(
 			'AUTH_ISSUER',
 			environment.auth.issuer ?? apiUrl ?? `http://${api.loadBalancer.loadBalancerDnsName}`
 		)
 
-		// Least-privilege access to the shared resources
+		// MARK: Api task role — least privilege (reviewed M9). What each grant is for:
+		//   secretsmanager:GetSecretValue on the RDS secret     — Postgres connection (DATABASE_SECRET_ARN)
+		//   ... on anthropic-api-key                            — spec chat (M2 spec engine runs in the api)
+		//   ... on auth-jwt-private-key                         — signs access tokens (EdDSA issuer)
+		//   ... on stripe-secret-key / stripe-webhook-secret    — checkout + webhook verification (M6)
+		//   s3 read/write on the artifacts bucket               — presigned deliverable downloads, uploads
+		//   ses:SendEmail on the domain identity                — magic-link mail (only with a domain)
+		//   ecs:RunTask (job family, jobs cluster only)         — start a build job
+		//   ecs:DescribeTasks/StopTask/ListTasks (jobs cluster) — job status + admin kill switch
+		//   iam:PassRole on the job task + execution roles      — required by RunTask
+		// Not granted: github-token (M5 mints per-job tokens), logs:* (execution role), any
+		// wildcard on secrets or buckets.
 		const taskRole = api.taskDefinition.taskRole
 		resources.databaseSecret.grantRead(taskRole)
 		resources.secrets['anthropic-api-key'].grantRead(taskRole)
