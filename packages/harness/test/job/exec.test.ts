@@ -20,6 +20,8 @@ describe('exec', () => {
 			APPRUNNER_INSTANCE_ROLE_ARN: 'arn:iam:role',
 			GITHUB_TOKEN: 'ghp_x',
 			GITHUB_ORG: 'mjukvaruhuset',
+			JOB_TOKEN: 'job-report-token',
+			API_URL: 'https://api.example',
 		})
 
 		expect(env).toEqual({
@@ -30,6 +32,7 @@ describe('exec', () => {
 			NO_PROXY: 'localhost',
 			GIT_AUTHOR_NAME: 'build',
 			GITHUB_ORG: 'mjukvaruhuset',
+			API_URL: 'https://api.example',
 			// git hooks (husky) are always off inside the job
 			GIT_CONFIG_COUNT: '1',
 			GIT_CONFIG_KEY_0: 'core.hooksPath',
