@@ -7,6 +7,7 @@ import {
 	createPostgresRepositories,
 	migrate,
 } from '@mf/db'
+import { tryCatch } from '@mf/utils/function'
 
 import type { FastifyPluginAsync } from 'fastify'
 import type { DatabaseSecret, Repositories } from '@mf/db'
@@ -22,15 +23,18 @@ declare module 'fastify' {
 			/** False only when a database is configured but cannot be used (see `error`) */
 			available: boolean
 			backend: 'postgres' | 'memory'
-			/** Set when a database is configured but its migrations failed — /health reports 503 */
+			/**
+			 * Set when a database is configured but cannot be used (secret unresolvable, migrations
+			 * failed) — /health reports 503
+			 */
 			error?: string
 		}
 	}
 }
 
 export class DatabaseUnavailable extends Error {
-	constructor(cause: Error) {
-		super(`Database unavailable: migrations failed (${cause.message})`, { cause })
+	constructor(reason: 'migrations failed' | 'secret unresolvable', cause: Error) {
+		super(`Database unavailable: ${reason} (${cause.message})`, { cause })
 	}
 }
 
@@ -55,8 +59,16 @@ const unavailableRepositories = (error: () => Error): Repositories => {
 		Object.fromEntries(keys.map(key => [key, reject])) as T
 	return {
 		jobs: repository(['insert', 'get', 'list', 'update', 'appendEvent', 'listEvents']),
-		orders: repository(['get', 'list', 'upsert']),
-		users: repository(['get', 'findByEmail', 'insert', 'getOrg', 'insertOrg', 'listOrgs']),
+		orders: repository(['get', 'list', 'upsert', 'updateUnlessFrozen']),
+		users: repository([
+			'get',
+			'findByEmail',
+			'insert',
+			'insertWithOrg',
+			'getOrg',
+			'insertOrg',
+			'listOrgs',
+		]),
 		auth: repository([
 			'insertMagicLink',
 			'getMagicLink',
@@ -65,15 +77,33 @@ const unavailableRepositories = (error: () => Error): Repositories => {
 			'insertRefreshToken',
 			'consumeRefreshToken',
 			'revokeRefreshToken',
+			'prune',
 		]),
 	}
 }
 
-const plugin: FastifyPluginAsync = async app => {
-	const connectionString = await resolveConnectionString().catch(error => {
-		app.log.warn({ err: error }, 'Could not resolve the database secret')
-		return undefined
+/** Decorates `app.db` with repositories that reject, so the failure surfaces on every call */
+const decorateUnavailable = (
+	app: Parameters<FastifyPluginAsync>[0],
+	reason: 'migrations failed' | 'secret unresolvable',
+	cause: Error
+) => {
+	app.decorate('db', {
+		available: false,
+		backend: 'postgres',
+		error: cause.message,
+		...unavailableRepositories(() => new DatabaseUnavailable(reason, cause)),
 	})
+}
+
+const plugin: FastifyPluginAsync = async app => {
+	// A configured but unreadable secret is a failure, never a reason to fall back to memory:
+	// a task running on RAM behind a healthy ALB would lose logins and specs at the next restart
+	const [secretError, connectionString] = await tryCatch(resolveConnectionString())
+	if (secretError) {
+		app.log.error({ err: secretError }, 'Could not resolve the database secret — database unavailable')
+		return decorateUnavailable(app, 'secret unresolvable', secretError)
+	}
 
 	if (!connectionString) {
 		app.log.warn(
@@ -94,13 +124,7 @@ const plugin: FastifyPluginAsync = async app => {
 		if (result.applied.length) app.log.info({ applied: result.applied }, 'Migrations applied')
 	} catch (error) {
 		app.log.error({ err: error }, 'Could not run database migrations — database unavailable')
-		app.decorate('db', {
-			available: false,
-			backend: 'postgres',
-			error: (error as Error).message,
-			...unavailableRepositories(() => new DatabaseUnavailable(error as Error)),
-		})
-		return
+		return decorateUnavailable(app, 'migrations failed', error as Error)
 	}
 	app.log.info('Database: Postgres (migrations up to date)')
 	app.decorate('db', { available: true, backend: 'postgres', ...createPostgresRepositories(db) })

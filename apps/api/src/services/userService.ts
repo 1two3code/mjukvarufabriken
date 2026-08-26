@@ -1,4 +1,5 @@
 import fp from 'fastify-plugin'
+import { tryCatch } from '@mf/utils/function'
 
 import { EntityNotFound } from '#/lib/entityError.ts'
 import { isAdminEmail, normalizeEmail, orgNameFromEmail } from '#/services/userService.utils.ts'
@@ -20,6 +21,8 @@ declare module 'fastify' {
 		}
 	}
 }
+
+const isUniqueViolation = (error: unknown) => (error as { code?: string }).code === '23505'
 
 const plugin: FastifyPluginAsync = async app => {
 	const { db, secrets } = app
@@ -43,12 +46,22 @@ const plugin: FastifyPluginAsync = async app => {
 			if (existing) return existing
 
 			const normalized = normalizeEmail(email)
-			const org = await db.users.insertOrg({ name: orgNameFromEmail(normalized) })
-			return db.users.insert({
-				email: normalized,
-				role: isAdminEmail(normalized, secrets.authAdminEmails) ? 'admin' : 'user',
-				orgId: org.id,
-			})
+			const [error, created] = await tryCatch(
+				db.users.insertWithOrg(
+					{
+						email: normalized,
+						role: isAdminEmail(normalized, secrets.authAdminEmails) ? 'admin' : 'user',
+					},
+					{ name: orgNameFromEmail(normalized) }
+				)
+			)
+			if (!error) return created
+			// Two first sign-ins for the same email raced (two magic links, a retried verify):
+			// the other one won, so return what it created
+			if (!isUniqueViolation(error)) throw error
+			const winner = await findByEmail(normalized)
+			if (!winner) throw error
+			return winner
 		},
 	})
 }

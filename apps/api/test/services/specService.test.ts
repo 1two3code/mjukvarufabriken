@@ -19,6 +19,7 @@ describe('Spec Service', () => {
 	const seed = async (draft: SpecDraft) => {
 		await app.db.orders.upsert(draft)
 		vi.spyOn(app.db.orders, 'upsert')
+		vi.spyOn(app.db.orders, 'updateUnlessFrozen')
 		return draft
 	}
 
@@ -132,6 +133,30 @@ describe('Spec Service', () => {
 			expect(app.anthropic.messages.create).not.toHaveBeenCalled()
 		})
 
+		it('Does not undo a freeze that completed while the engine was running', async () => {
+			// Arrange
+			const seeded = await seed(createMockSpecDraft({ orderId: 'order-1', status: 'ready' }))
+			vi.spyOn(app.anthropic.messages, 'create').mockImplementation(async () => {
+				// The user clicked Freeze in another tab during the engine call
+				await app.db.orders.upsert({
+					...seeded,
+					status: 'frozen',
+					frozenAt: '2026-08-26T12:00:00.000Z',
+				})
+				return createMockToolUseMessage(createMockSpecToolOutput({ questions: ['Which stack?'] }))
+			})
+
+			// Act & Assert
+			await expect(
+				app.specService.sendMessage('order-1', 'change it', user)
+			).rejects.toBeInstanceOf(EntityInvalid)
+			await expect(app.db.orders.get('order-1')).resolves.toMatchObject({
+				status: 'frozen',
+				frozenAt: '2026-08-26T12:00:00.000Z',
+				messages: seeded.messages,
+			})
+		})
+
 		it('Propagates engine failures without storing anything', async () => {
 			// Arrange
 			await seed(createEmptyDraft('order-1', 'org-1'))
@@ -142,6 +167,7 @@ describe('Spec Service', () => {
 				'rate limited'
 			)
 			expect(app.db.orders.upsert).not.toHaveBeenCalled()
+			expect(app.db.orders.updateUnlessFrozen).not.toHaveBeenCalled()
 		})
 	})
 

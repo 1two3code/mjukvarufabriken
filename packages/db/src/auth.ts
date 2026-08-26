@@ -125,4 +125,5 @@ export const createAuthRepository = (db: Db): AuthRepository => ({
 			: Promise.reject(new Error(`refresh token: user id "${token.userId}" is not a uuid`)),
 	consumeRefreshToken: tokenHash => consumeRefreshToken(db, tokenHash),
 	revokeRefreshToken: tokenHash => revokeRefreshToken(db, tokenHash),
+	prune: () => pruneAuth(db),
 })

@@ -83,6 +83,53 @@ describe('memory repositories', () => {
 			expect((await repos.orders.list({ orgId: 'a' })).map(d => d.orderId)).toEqual(['demo'])
 			expect(await repos.orders.list()).toHaveLength(2)
 		})
+
+		it('Lists newest first, capped at 200, like the SQL repository', async () => {
+			vi.useFakeTimers({ toFake: ['Date'] })
+			const draft = {
+				orgId: 'a',
+				status: 'drafting' as const,
+				spec: {},
+				messages: [],
+				openQuestions: [],
+			}
+			for (let index = 0; index < 205; index++) {
+				vi.setSystemTime(new Date(2026, 0, 1, 0, 0, index))
+				await repos.orders.upsert({ ...draft, orderId: `order-${index}` })
+			}
+			// An update keeps the original creation time
+			vi.setSystemTime(new Date(2027, 0, 1))
+			await repos.orders.upsert({ ...draft, orderId: 'order-0', status: 'ready' })
+			vi.useRealTimers()
+
+			const listed = await repos.orders.list()
+			expect(listed).toHaveLength(200)
+			expect(listed[0]?.orderId).toBe('order-204')
+			expect(listed.at(-1)?.orderId).toBe('order-5')
+		})
+
+		it('updateUnlessFrozen writes only while the stored draft is not frozen', async () => {
+			const draft = {
+				orderId: 'demo',
+				orgId: 'a',
+				status: 'drafting' as const,
+				spec: {},
+				messages: [],
+				openQuestions: [],
+			}
+			await expect(repos.orders.updateUnlessFrozen(draft)).resolves.toBeUndefined()
+
+			await repos.orders.upsert(draft)
+			await expect(
+				repos.orders.updateUnlessFrozen({ ...draft, status: 'ready' })
+			).resolves.toMatchObject({ status: 'ready' })
+
+			await repos.orders.upsert({ ...draft, status: 'frozen', frozenAt: new Date().toISOString() })
+			await expect(
+				repos.orders.updateUnlessFrozen({ ...draft, status: 'ready' })
+			).resolves.toBeUndefined()
+			await expect(repos.orders.get('demo')).resolves.toMatchObject({ status: 'frozen' })
+		})
 	})
 
 	describe('users', () => {
@@ -96,6 +143,24 @@ describe('memory repositories', () => {
 			await expect(repos.users.findByEmail('ANNA@acme.se')).resolves.toBeUndefined()
 			await expect(repos.users.getOrg(org.id)).resolves.toEqual(org)
 			await expect(repos.users.listOrgs()).resolves.toEqual([org])
+		})
+
+		it('Enforces one user per email like users_email_key, also for insertWithOrg', async () => {
+			const user = await repos.users.insertWithOrg(
+				{ email: 'anna@acme.se', role: 'user' },
+				{ name: 'acme.se' }
+			)
+			expect(user.orgId).toBeDefined()
+			await expect(repos.users.getOrg(user.orgId)).resolves.toMatchObject({ name: 'acme.se' })
+
+			await expect(
+				repos.users.insert({ email: 'anna@acme.se', role: 'user', orgId: user.orgId })
+			).rejects.toMatchObject({ code: '23505' })
+			await expect(
+				repos.users.insertWithOrg({ email: 'anna@acme.se', role: 'user' }, { name: 'dup' })
+			).rejects.toMatchObject({ code: '23505' })
+			// No orphan org from the rejected attempt
+			await expect(repos.users.listOrgs()).resolves.toHaveLength(1)
 		})
 	})
 
@@ -139,6 +204,30 @@ describe('memory repositories', () => {
 			await repos.auth.revokeRefreshToken('r2')
 			await repos.auth.revokeRefreshToken('unknown')
 			await expect(repos.auth.consumeRefreshToken('r2')).resolves.toBeUndefined()
+		})
+
+		it('Prunes expired links and expired or long-revoked tokens', async () => {
+			const day = 24 * 60 * 60 * 1000
+			const past = (days: number) => new Date(Date.now() - days * day)
+			const future = new Date(Date.now() + day)
+			await repos.auth.insertMagicLink({ tokenHash: 'old', email: 'a@x.se', expiresAt: past(8) })
+			await repos.auth.insertMagicLink({ tokenHash: 'recent', email: 'a@x.se', expiresAt: past(1) })
+			await repos.auth.insertMagicLink({ tokenHash: 'live', email: 'a@x.se', expiresAt: future })
+			await repos.auth.insertRefreshToken({ tokenHash: 'expired', userId: 'u', expiresAt: past(1) })
+			await repos.auth.insertRefreshToken({ tokenHash: 'revoked', userId: 'u', expiresAt: future })
+			await repos.auth.insertRefreshToken({ tokenHash: 'live', userId: 'u', expiresAt: future })
+			await repos.auth.revokeRefreshToken('revoked')
+
+			await repos.auth.prune()
+
+			await expect(repos.auth.getMagicLink('old')).resolves.toBeUndefined()
+			await expect(repos.auth.getMagicLink('recent')).resolves.toBeDefined()
+			await expect(repos.auth.getMagicLink('live')).resolves.toBeDefined()
+			await expect(repos.auth.consumeRefreshToken('expired')).resolves.toBeUndefined()
+			await expect(repos.auth.consumeRefreshToken('live')).resolves.toBeDefined()
+			// Revoked just now: kept for a week, so still known (and still revoked)
+			await expect(repos.auth.consumeRefreshToken('revoked')).resolves.toBeUndefined()
+			await expect(repos.auth.countMagicLinksSince('a@x.se', past(30))).resolves.toBe(2)
 		})
 	})
 })

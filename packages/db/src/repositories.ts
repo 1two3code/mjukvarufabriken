@@ -22,6 +22,11 @@ export type OrdersRepository = {
 	list: (filter?: { orgId?: string }) => Promise<SpecDraft[]>
 	/** Inserts or replaces the whole draft; `createdBy` is only written on insert */
 	upsert: (draft: SpecDraft, createdBy?: string) => Promise<SpecDraft>
+	/**
+	 * Replaces the draft only while the stored row is not frozen (guards the read → engine →
+	 * write window against a concurrent freeze); `undefined` when frozen or missing
+	 */
+	updateUnlessFrozen: (draft: SpecDraft) => Promise<SpecDraft | undefined>
 }
 
 export type NewUser = { email: string; name?: string; role: User['role']; orgId: string }
@@ -32,6 +37,11 @@ export type UsersRepository = {
 	/** Exact match on the stored (lower-cased) email */
 	findByEmail: (email: string) => Promise<User | undefined>
 	insert: (user: NewUser) => Promise<User>
+	/**
+	 * Creates the org and its first user atomically (first sign-in). Rejects with
+	 * `code: '23505'` when the email already exists — without leaving an orphan org.
+	 */
+	insertWithOrg: (user: Omit<NewUser, 'orgId'>, org: NewOrg) => Promise<User>
 	getOrg: (id: string) => Promise<Org | undefined>
 	insertOrg: (org: NewOrg) => Promise<Org>
 	listOrgs: () => Promise<Org[]>
@@ -72,6 +82,8 @@ export type AuthRepository = {
 	/** Revokes the token and returns it; `undefined` when unknown or already revoked */
 	consumeRefreshToken: (tokenHash: string) => Promise<RefreshToken | undefined>
 	revokeRefreshToken: (tokenHash: string) => Promise<void>
+	/** Housekeeping: drops expired links and revoked/expired tokens older than a week */
+	prune: () => Promise<void>
 }
 
 export type Repositories = {

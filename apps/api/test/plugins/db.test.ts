@@ -112,7 +112,7 @@ describe('Db plugin (db)', () => {
 		expect(sendMock).toHaveBeenCalledTimes(1)
 	})
 
-	it('Degrades to unavailable when the secret cannot be read', async () => {
+	it('Is unavailable (never silently in memory) when the configured secret cannot be read', async () => {
 		// Arrange
 		vi.stubEnv('DATABASE_URL', '')
 		vi.stubEnv('DATABASE_SECRET_ARN', 'arn:aws:secretsmanager:eu-north-1:1:secret:rds')
@@ -121,7 +121,17 @@ describe('Db plugin (db)', () => {
 		// Act
 		app = await createTestApp({ skipMock: '#/plugins/db.ts' })
 
-		// Assert — no connection string at all: the memory fallback, never a half-configured Postgres
-		expect(app.db.backend).toBe('memory')
+		// Assert — a memory fallback here would pass health checks and lose every login and spec
+		expect(app.db.available).toBe(false)
+		expect(app.db.backend).toBe('postgres')
+		expect(app.db.error).toBe('AccessDenied')
+		expect(migrateMock).not.toHaveBeenCalled()
+		await expect(app.db.orders.get('order-1')).rejects.toThrow(
+			'Database unavailable: secret unresolvable (AccessDenied)'
+		)
+		await expect(
+			app.db.auth.insertMagicLink({ tokenHash: 'h', email: 'a@x.se', expiresAt: new Date() })
+		).rejects.toThrow(/Database unavailable/)
+		await expect(app.db.users.findByEmail('a@x.se')).rejects.toThrow(/Database unavailable/)
 	})
 })

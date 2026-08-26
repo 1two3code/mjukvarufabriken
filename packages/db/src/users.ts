@@ -58,6 +58,22 @@ export const insertUser = async (db: Db, user: NewUser): Promise<User> => {
 	return toUser(row!)
 }
 
+/** Org + first user in one transaction: a `users.email` unique violation rolls the org back */
+export const insertUserWithOrg = async (
+	db: Db,
+	user: Omit<NewUser, 'orgId'>,
+	org: NewOrg
+): Promise<User> => {
+	const [row] = await db.sql.begin(async tx => {
+		const [orgRow] = await tx<OrgRow[]>`insert into orgs (name) values (${org.name}) returning *`
+		return tx<UserRow[]>`
+			insert into users (org_id, email, name, role)
+			values (${orgRow!.id}, ${user.email}, ${user.name ?? null}, ${user.role})
+			returning *`
+	})
+	return toUser(row!)
+}
+
 export const getOrg = async (db: Db, id: string): Promise<Org | undefined> => {
 	if (!isUuid(id)) return undefined
 	const [row] = await db.sql<OrgRow[]>`select * from orgs where id = ${id}`
@@ -78,6 +94,7 @@ export const createUsersRepository = (db: Db): UsersRepository => ({
 	get: id => getUser(db, id),
 	findByEmail: email => findUserByEmail(db, email),
 	insert: user => insertUser(db, user),
+	insertWithOrg: (user, org) => insertUserWithOrg(db, user, org),
 	getOrg: id => getOrg(db, id),
 	insertOrg: org => insertOrg(db, org),
 	listOrgs: () => listOrgs(db),

@@ -53,6 +53,33 @@ describe('User Service', () => {
 			expect(orgs).toHaveLength(1)
 		})
 
+		it('Returns the winner when two first sign-ins for the same email race', async () => {
+			// Arrange — both requests miss the lookup before either has inserted
+			const findByEmail = vi.spyOn(app.db.users, 'findByEmail')
+			findByEmail.mockResolvedValueOnce(undefined).mockResolvedValueOnce(undefined)
+
+			// Act
+			const [first, second] = await Promise.all([
+				app.userService.findOrCreateByEmail('anna@acme.se'),
+				app.userService.findOrCreateByEmail('anna@acme.se'),
+			])
+			const orgs = await app.db.users.listOrgs()
+
+			// Assert — one user, one org, no 23505 leaking out as a 500
+			expect(second).toEqual(first)
+			expect(orgs).toHaveLength(1)
+		})
+
+		it('Rethrows insert failures that are not a unique violation', async () => {
+			// Arrange
+			vi.spyOn(app.db.users, 'insertWithOrg').mockRejectedValue(new Error('connection reset'))
+
+			// Act & Assert
+			await expect(app.userService.findOrCreateByEmail('anna@acme.se')).rejects.toThrow(
+				'connection reset'
+			)
+		})
+
 		it('Grants the admin role to emails in AUTH_ADMIN_EMAILS', async () => {
 			// Arrange
 			const [adminEmail] = app.secrets.authAdminEmails

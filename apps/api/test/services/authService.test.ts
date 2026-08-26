@@ -2,7 +2,11 @@ import { decodeProtectedHeader, jwtVerify } from 'jose'
 
 import { EntityInvalid } from '#/lib/entityError.ts'
 import { createMockUser } from '#/services/__mocks__/userService.ts'
-import { magicLinkRateLimit, magicLinkTtlMinutes } from '#/services/authService.ts'
+import {
+	magicLinkRateLimit,
+	magicLinkTtlMinutes,
+	pruneIntervalMs,
+} from '#/services/authService.ts'
 import { hashToken } from '#/services/authService.utils.ts'
 
 import type { FastifyInstance } from 'fastify'
@@ -26,6 +30,27 @@ describe('Auth Service', () => {
 
 	afterEach(() => {
 		vi.useRealTimers()
+	})
+
+	describe('housekeeping', () => {
+		it('Prunes expired links and tokens at boot and then on an interval', async () => {
+			// Arrange
+			vi.useFakeTimers({ toFake: ['Date', 'setInterval', 'clearInterval'] })
+			app = await createTestApp({ skipMock: '#/services/authService.ts' })
+			const prune = vi.spyOn(app.db.auth, 'prune')
+			await app.db.auth.insertMagicLink({
+				tokenHash: 'stale',
+				email,
+				expiresAt: new Date(Date.now() - 8 * 24 * 60 * 60 * 1000),
+			})
+
+			// Act
+			await vi.advanceTimersByTimeAsync(pruneIntervalMs)
+
+			// Assert
+			expect(prune).toHaveBeenCalledTimes(1)
+			await expect(app.db.auth.getMagicLink('stale')).resolves.toBeUndefined()
+		})
 	})
 
 	describe('requestMagicLink', () => {

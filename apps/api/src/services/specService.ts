@@ -74,7 +74,10 @@ const plugin: FastifyPluginAsync = async app => {
 					chatMessage('assistant', turn.assistantMessage),
 				],
 			}
-			return db.orders.upsert(updated)
+			// The engine call takes seconds: a freeze that landed meanwhile must win, not be undone
+			const stored = await db.orders.updateUnlessFrozen(updated)
+			if (!stored) throw new EntityInvalid('spec', orderId)
+			return stored
 		},
 		freeze: async (orderId, session) => {
 			const draft = await get(orderId, session)

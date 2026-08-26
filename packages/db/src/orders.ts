@@ -78,8 +78,30 @@ export const upsertOrder = async (
 	return toSpecDraft(row!)
 }
 
+/** The update half of `upsertOrder`, matching only a non-frozen row; `undefined` otherwise */
+export const updateOrderUnlessFrozen = async (
+	db: Db,
+	draft: SpecDraft
+): Promise<SpecDraft | undefined> => {
+	const { sql } = db
+	const [row] = await sql<OrderRow[]>`
+		update orders set
+			status = ${draft.status},
+			spec = ${sql.json(draft.spec as never)},
+			messages = ${sql.json(draft.messages as never)},
+			open_questions = ${sql.json(draft.openQuestions as never)},
+			size_class = ${draft.spec.sizeClass ?? null},
+			price_sek = ${draft.priceSek ?? null},
+			frozen_at = ${draft.frozenAt ? new Date(draft.frozenAt) : null},
+			updated_at = now()
+		where id = ${draft.orderId} and status <> 'frozen'
+		returning *`
+	return row && toSpecDraft(row)
+}
+
 export const createOrdersRepository = (db: Db): OrdersRepository => ({
 	get: orderId => getOrder(db, orderId),
 	list: filter => listOrders(db, filter),
 	upsert: (draft, createdBy) => upsertOrder(db, draft, createdBy),
+	updateUnlessFrozen: draft => updateOrderUnlessFrozen(db, draft),
 })
