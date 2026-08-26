@@ -40,6 +40,8 @@ export const publicUrls = new Set([
 	'/bff/auth/verify',
 	'/bff/auth/refresh',
 	'/bff/auth/logout',
+	'/bff/auth/github',
+	'/bff/auth/github/callback',
 	'/bff/contact',
 	// Stripe calls the webhook with its own signature (the fake provider's checkout is a normal
 	// authenticated POST, so it is not listed here)

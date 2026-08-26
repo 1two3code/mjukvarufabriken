@@ -10,6 +10,7 @@ import dbPlugin from '#/plugins/db.ts'
 import ecsPlugin from '#/plugins/ecs.ts'
 import emailPlugin from '#/plugins/email.ts'
 import errorHandlingPlugin from '#/plugins/errorHandling.ts'
+import githubOAuthPlugin from '#/plugins/githubOAuth.ts'
 import s3Plugin from '#/plugins/s3.ts'
 import secretsPlugin from '#/plugins/secrets.ts'
 import stripePlugin from '#/plugins/stripe.ts'
@@ -59,6 +60,7 @@ export async function createServer({ logLevel }: Options = {}): Promise<FastifyI
 		.register(authKeysPlugin)
 		.register(emailPlugin)
 		.register(stripePlugin)
+		.register(githubOAuthPlugin)
 
 		// Services
 		.register(itemService)

@@ -16,6 +16,7 @@ import { normalizeEmail } from '#/services/userService.utils.ts'
 
 import type { FastifyPluginAsync } from 'fastify'
 import type { TokenPair, User } from '@mf/models'
+import type { GithubProfile } from '#/plugins/githubOAuth.ts'
 
 declare module 'fastify' {
 	interface FastifyInstance {
@@ -32,12 +33,26 @@ declare module 'fastify' {
 			refresh: (refreshToken: string) => Promise<TokenPair>
 			/** Revokes a refresh token. Unknown tokens are ignored. */
 			logout: (refreshToken: string) => Promise<void>
+			/**
+			 * Signs a GitHub account in (M6): the user already linked to the account, else the user
+			 * with the same verified email (linked now), else a new user + org with the magic-link
+			 * rules. Throws EntityInvalid('githubEmail') when GitHub has no verified email for it.
+			 */
+			signInWithGithub: (profile: GithubProfile) => Promise<User>
+			/**
+			 * One-shot portal link (`/auth/callback?token=…`, 2 min) for a user just authenticated
+			 * by another provider. Consumed by `verifyMagicLink` exactly like an emailed link, so
+			 * the token pair never travels in a redirect url.
+			 */
+			createLoginLink: (user: User) => Promise<string>
 		}
 	}
 }
 
 export const magicLinkTtlMinutes = 15
 export const magicLinkRateLimit = { max: 3, windowMinutes: 10 } as const
+/** A GitHub sign-in ends in a one-shot link the browser follows at once */
+export const loginLinkTtlMinutes = 2
 export const accessTokenTtl = '1h'
 export const refreshTokenTtlDays = 30
 /** Expired links and rotated tokens are pruned at boot and then hourly */
@@ -122,6 +137,30 @@ const plugin: FastifyPluginAsync = async app => {
 
 		logout: async refreshToken => {
 			await db.auth.revokeRefreshToken(hashToken(refreshToken))
+		},
+
+		signInWithGithub: async profile => {
+			const identity = { githubId: profile.id, githubLogin: profile.login, name: profile.name }
+			const linked = await db.users.findByGithubId(profile.id)
+			if (linked) {
+				// Same account: refresh the login (renames) and fill in a missing name
+				if (linked.githubLogin === profile.login && (linked.name || !profile.name)) return linked
+				return (await db.users.linkGithub(linked.id, identity)) ?? linked
+			}
+			if (!profile.email) throw new EntityInvalid('githubEmail', profile.login)
+
+			const user = await userService.findOrCreateByEmail(profile.email)
+			return (await db.users.linkGithub(user.id, identity)) ?? user
+		},
+
+		createLoginLink: async user => {
+			const token = generateToken()
+			await db.auth.insertMagicLink({
+				tokenHash: hashToken(token),
+				email: user.email,
+				expiresAt: addMinutes(new Date(), loginLinkTtlMinutes),
+			})
+			return buildMagicLink(secrets.portalUrl, token)
 		},
 	})
 }

@@ -1,8 +1,14 @@
 import { decodeProtectedHeader, jwtVerify } from 'jose'
 
 import { EntityInvalid } from '#/lib/entityError.ts'
+import { createMockGithubProfile } from '#/plugins/__mocks__/githubOAuth.ts'
 import { createMockUser } from '#/services/__mocks__/userService.ts'
-import { magicLinkRateLimit, magicLinkTtlMinutes, pruneIntervalMs } from '#/services/authService.ts'
+import {
+	loginLinkTtlMinutes,
+	magicLinkRateLimit,
+	magicLinkTtlMinutes,
+	pruneIntervalMs,
+} from '#/services/authService.ts'
 import { hashToken } from '#/services/authService.utils.ts'
 
 import type { FastifyInstance } from 'fastify'
@@ -193,6 +199,108 @@ describe('Auth Service', () => {
 
 			// Assert
 			await expect(app.authService.refresh(pair.refreshToken)).rejects.toBeInstanceOf(EntityInvalid)
+		})
+	})
+
+	describe('signInWithGithub', () => {
+		// The real userService runs against the in-memory users repository (linking by email);
+		// the outer beforeEach already registered its mock, so un-mock it for these cases
+		beforeEach(async () => {
+			vi.doUnmock('#/services/userService.ts')
+			vi.resetModules()
+			app = await createTestApp({
+				skipMock: ['#/services/authService.ts', '#/services/userService.ts'],
+			})
+		})
+
+		it('Creates a user and org for an unknown account with the magic-link rules', async () => {
+			// Arrange
+			const profile = createMockGithubProfile({ email: 'Anna@Acme.se', login: 'anna', id: '1' })
+
+			// Act
+			const user = await app.authService.signInWithGithub(profile)
+
+			// Assert
+			expect(user).toMatchObject({
+				email: 'anna@acme.se',
+				name: 'Turanga Leela',
+				role: 'user',
+				githubId: '1',
+				githubLogin: 'anna',
+			})
+			await expect(app.userService.getOrg(user.orgId)).resolves.toMatchObject({ name: 'acme.se' })
+			await expect(app.db.users.findByGithubId('1')).resolves.toEqual(user)
+		})
+
+		it('Links the account to the existing user with the same verified email', async () => {
+			// Arrange
+			const existing = await app.userService.findOrCreateByEmail('admin@example.com')
+			const profile = createMockGithubProfile({ email: 'admin@example.com', id: '9', login: 'adm' })
+
+			// Act
+			const user = await app.authService.signInWithGithub(profile)
+
+			// Assert
+			expect(user).toMatchObject({
+				id: existing.id,
+				role: 'admin',
+				githubId: '9',
+				githubLogin: 'adm',
+			})
+			await expect(app.db.users.listOrgs()).resolves.toHaveLength(1)
+		})
+
+		it('Finds a linked account by GitHub id even when the email changed, and follows renames', async () => {
+			// Arrange
+			const first = await app.authService.signInWithGithub(
+				createMockGithubProfile({ id: '5', login: 'old', email: 'old@acme.se' })
+			)
+
+			// Act
+			const again = await app.authService.signInWithGithub(
+				createMockGithubProfile({ id: '5', login: 'renamed', email: 'new@acme.se' })
+			)
+
+			// Assert
+			expect(again).toMatchObject({ id: first.id, email: 'old@acme.se', githubLogin: 'renamed' })
+			await expect(app.db.users.findByEmail('new@acme.se')).resolves.toBeUndefined()
+		})
+
+		it('Refuses an account without a verified email', async () => {
+			// Act + Assert
+			await expect(
+				app.authService.signInWithGithub(createMockGithubProfile({ email: undefined }))
+			).rejects.toMatchObject({ entityName: 'githubEmail' })
+			await expect(app.db.users.findByGithubId('4242')).resolves.toBeUndefined()
+		})
+	})
+
+	describe('createLoginLink', () => {
+		it('Returns a short-lived one-shot portal link that verifyMagicLink accepts once', async () => {
+			// Arrange
+			vi.useFakeTimers({ toFake: ['Date'] })
+			vi.setSystemTime(new Date('2026-08-26T10:00:00.000Z'))
+			const user = createMockUser({ email })
+			vi.spyOn(app.userService, 'findOrCreateByEmail').mockResolvedValue(user)
+
+			// Act
+			const link = await app.authService.createLoginLink(user)
+			const token = new URL(link).searchParams.get('token')!
+
+			// Assert
+			expect(link).toBe(`${app.secrets.portalUrl}/auth/callback?token=${token}`)
+			await expect(app.db.auth.getMagicLink(hashToken(token))).resolves.toMatchObject({
+				email,
+				expiresAt: `2026-08-26T10:0${loginLinkTtlMinutes}:00.000Z`,
+			})
+			expect(app.email.send).not.toHaveBeenCalled()
+			const pair = await app.authService.verifyMagicLink(token)
+			expect(app.userService.findOrCreateByEmail).toHaveBeenCalledWith(email)
+			expect(pair.token).toEqual(expect.any(String))
+			// (toMatchObject: the module registry was reset above, so class identity differs)
+			await expect(app.authService.verifyMagicLink(token)).rejects.toMatchObject({
+				entityName: 'magicLink',
+			})
 		})
 	})
 })

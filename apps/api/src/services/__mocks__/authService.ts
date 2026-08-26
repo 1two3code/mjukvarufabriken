@@ -1,5 +1,7 @@
 import fp from 'fastify-plugin'
 
+import { createMockUser } from '#/services/__mocks__/userService.ts'
+
 import type { FastifyInstance, FastifyPluginAsync } from 'fastify'
 import type { TokenPair } from '@mf/models'
 
@@ -15,6 +17,12 @@ const mockPlugin: FastifyPluginAsync = async app => {
 		verifyMagicLink: vi.fn().mockResolvedValue(createMockTokenPair()),
 		refresh: vi.fn().mockResolvedValue(createMockTokenPair()),
 		logout: vi.fn().mockResolvedValue(undefined),
+		signInWithGithub: vi
+			.fn()
+			.mockResolvedValue(createMockUser({ githubId: '4242', githubLogin: 'leela' })),
+		createLoginLink: vi
+			.fn()
+			.mockResolvedValue('https://portal.example.com/auth/callback?token=login-token'),
 	}
 
 	app.decorate('authService', mock)

@@ -6,6 +6,7 @@ import {
 	isSpecComplete,
 	orderTransitions,
 } from '@mf/models'
+import { tryCatch } from '@mf/utils/function'
 
 import { EntityInvalid, EntityNotFound } from '#/lib/entityError.ts'
 
@@ -68,7 +69,13 @@ const toJobSummary = (job: Job): JobSummary => ({
 })
 
 const plugin: FastifyPluginAsync = async app => {
-	const { db, jobService, paymentProvider } = app
+	const { db, jobService, paymentProvider, userService } = app
+
+	/** The creator's GitHub login (M6 sign-in) — the account M5 transfers the repo to */
+	const githubLoginOf = async (session: BackendSession) => {
+		const [, user] = await tryCatch(userService.get(session.userId))
+		return user?.githubLogin
+	}
 
 	const scoped = (order: Order | undefined, session: BackendSession, id: string) => {
 		if (!order || (!isAdmin(session) && order.orgId !== session.orgId)) {
@@ -113,6 +120,7 @@ const plugin: FastifyPluginAsync = async app => {
 				orgId: session.orgId,
 				name,
 				createdBy: session.userId,
+				customerGithubLogin: await githubLoginOf(session),
 			}),
 		list: session => db.orders.listOrders(isAdmin(session) ? {} : { orgId: session.orgId }),
 		getDetail: async (orderId, session) => {
@@ -170,5 +178,10 @@ const plugin: FastifyPluginAsync = async app => {
 
 export default fp(plugin, {
 	name: '#internal/orderService',
-	dependencies: ['#internal/db', '#internal/jobService', '#internal/stripe'],
+	dependencies: [
+		'#internal/db',
+		'#internal/jobService',
+		'#internal/stripe',
+		'#internal/userService',
+	],
 })
