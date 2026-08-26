@@ -25,3 +25,5 @@ Format: date | milestone | session tokens (in/out) | notes
 | 2026-08-27 | overnight wave 1 m4-gates | subagent | n/a | Job/Gate schemas, harness runGates (acceptance-tests, review, acceptance-check, fail closed + notify), gate sessions, gates-demo script, migration 0005 jobs.gates/gate_waivers; tests → 312; live run pending |
 | 2026-08-27 | overnight wave 1 m7-site | subagent | n/a | apps/site sv/en pages (landing, how it works, pricing, contact, sitemap) + POST /bff/contact with XFF-safe rate limit; tests → 353; site smoke renders 6.9k chars |
 | 2026-08-27 | overnight wave 1 m9-ops | subagent | n/a | ops-<env> stack: SNS alerts, 9 alarms, AWS Budgets; RDS backups 7/30 d, bucket versioning; deploy workflow/script deploy ops stack; RUNBOOK; infra tests 16; merge conflicts in PLAN.md/TODO-EXTERNAL.md resolved (kept both) |
+| 2026-08-27 | overnight wave 1 (workflow) | ~1.84M | n/a | 21 agents / 33 min: 4 builders + 12 reviewers + 4 fixers + merge; 251 → 353 tests; persistence, M4 gates, site, ops merged |
+| 2026-08-27 | overnight main session | ~150k | ~20k | briefs, Fargate runs #6/#7 (≈ USD 13 Anthropic), deps-sync + hooks fixes, deploys |
