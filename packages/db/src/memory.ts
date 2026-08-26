@@ -32,7 +32,19 @@ export class UniqueViolation extends Error {
 	}
 }
 
-export const createMemoryRepositories = (): Repositories => {
+/** Upper bound on tracked keys per scope; beyond it the oldest keys are evicted (memory guard) */
+export const memoryRateLimitMaxKeys = 10_000
+/** Hits older than this are dropped on every `record` — longer than any window a service counts over */
+export const memoryRateLimitRetentionMs = 60 * 60 * 1000
+
+export type MemoryRepositories = Repositories & {
+	rateLimits: Repositories['rateLimits'] & {
+		/** Number of tracked keys in the scope (for tests) */
+		size: (scope: string) => number
+	}
+}
+
+export const createMemoryRepositories = (): MemoryRepositories => {
 	const jobs = new Map<string, Job>()
 	const events: JobEvent[] = []
 	/** report token hash → job id (the hash is never part of the `Job` model) */
@@ -46,6 +58,10 @@ export const createMemoryRepositories = (): Repositories => {
 	const orgs = new Map<string, Org>()
 	const magicLinks = new Map<string, MagicLink>()
 	const refreshTokens = new Map<string, RefreshToken>()
+	/** scope → key → hit times (ms); keys are kept in insertion order for eviction */
+	const rateLimits = new Map<string, Map<string, number[]>>()
+	/** scope → when the retention sweep last ran (ms), so it runs at most once a minute */
+	const rateLimitSweptAt = new Map<string, number>()
 
 	const byCreatedDesc = <T extends { createdAt: string }>(items: T[]) =>
 		items.sort((a, b) => b.createdAt.localeCompare(a.createdAt))
@@ -99,6 +115,19 @@ export const createMemoryRepositories = (): Repositories => {
 		const created: Org = { id: crypto.randomUUID(), name: org.name, createdAt: now() }
 		orgs.set(created.id, created)
 		return clone(created)
+	}
+
+	// MARK: Rate limits helpers
+	/** Drops hits at or before `since` and keys left without any, so the map only holds keys
+	 * with hits inside the retention */
+	const sweepRateLimits = (scope: string, since: number) => {
+		const keys = rateLimits.get(scope)
+		if (!keys) return
+		for (const [key, times] of keys) {
+			const recent = times.filter(time => time > since)
+			if (recent.length) keys.set(key, recent)
+			else keys.delete(key)
+		}
 	}
 
 	return {
@@ -372,6 +401,40 @@ export const createMemoryRepositories = (): Repositories => {
 					}
 				}
 			},
+		},
+
+		rateLimits: {
+			count: async (scope, key, since) => {
+				const keys = rateLimits.get(scope)
+				if (!keys) return 0
+				const recent = (times: number[]) => times.filter(time => time > since.getTime()).length
+				if (key !== undefined) return recent(keys.get(key) ?? [])
+				let total = 0
+				for (const times of keys.values()) total += recent(times)
+				return total
+			},
+			record: async (scope, key, at = new Date()) => {
+				const now = at.getTime()
+				if (now - (rateLimitSweptAt.get(scope) ?? 0) > 60_000) {
+					sweepRateLimits(scope, now - memoryRateLimitRetentionMs)
+					rateLimitSweptAt.set(scope, now)
+				}
+				const keys = rateLimits.get(scope) ?? new Map<string, number[]>()
+				rateLimits.set(scope, keys)
+				// Re-insert so the key moves to the end: Map iteration order == insertion order
+				const times = keys.get(key) ?? []
+				keys.delete(key)
+				keys.set(key, [...times, at.getTime()])
+				while (keys.size > memoryRateLimitMaxKeys) {
+					const oldest = keys.keys().next().value
+					if (oldest === undefined) break
+					keys.delete(oldest)
+				}
+			},
+			prune: async before => {
+				for (const scope of rateLimits.keys()) sweepRateLimits(scope, before.getTime())
+			},
+			size: scope => rateLimits.get(scope)?.size ?? 0,
 		},
 	}
 }

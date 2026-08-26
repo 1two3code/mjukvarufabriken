@@ -1,12 +1,14 @@
 import { createMockContactMessage } from '#/services/__mocks__/contactService.ts'
-import {
-	contactEmail,
-	contactRateLimit,
-	contactRateLimitMaxKeys,
-	createRateLimiter,
-} from '#/services/contactService.ts'
+import { contactEmail, contactRateLimit, contactRateLimitScope } from '#/services/contactService.ts'
 
 import type { FastifyInstance } from 'fastify'
+import type * as housekeeping from '#/lib/housekeeping.ts'
+
+// The scheduler is unit-tested in test/lib/housekeeping.test.ts; here only its wiring matters
+vi.mock('#/lib/housekeeping.ts', async importOriginal => ({
+	...(await importOriginal<typeof housekeeping>()),
+	scheduleHousekeeping: vi.fn().mockResolvedValue(undefined),
+}))
 
 const ip = '203.0.113.7'
 
@@ -164,40 +166,58 @@ describe('Contact Service', () => {
 	})
 
 	describe('Rate limiter', () => {
-		const now = Date.parse('2026-08-26T10:00:00.000Z')
-		const later = now + (contactRateLimit.windowMinutes + 1) * 60 * 1000
-
-		it('Drops keys whose sends fell out of the window instead of keeping them forever', () => {
+		it('Counts delivered messages in the shared rate-limit repository under the contact scope', async () => {
 			// Arrange
-			const limiter = createRateLimiter()
-			for (let i = 0; i < 100; i++) limiter.record(`10.0.0.${i}`, now)
+			vi.useFakeTimers({ toFake: ['Date'] })
+			vi.setSystemTime(new Date('2026-08-26T10:00:00.000Z'))
+			const record = vi.spyOn(app.db.rateLimits, 'record')
 
 			// Act
-			limiter.isLimited('10.0.0.1', later)
+			await app.contactService.submit(createMockContactMessage(), ip)
 
 			// Assert
-			expect(limiter.size()).toBe(0)
+			expect(record).toHaveBeenCalledWith(contactRateLimitScope, ip, new Date())
 		})
 
-		it('Never tracks more than the max number of keys', () => {
+		it('Applies a global ceiling regardless of ip', async () => {
 			// Arrange
-			const limiter = createRateLimiter()
+			vi.useFakeTimers({ toFake: ['Date'] })
+			vi.setSystemTime(new Date('2026-08-26T10:00:00.000Z'))
+			const now = new Date()
+			for (let i = 0; i < contactRateLimit.globalMax; i++) {
+				await app.db.rateLimits.record(contactRateLimitScope, `10.1.${i}.1`, now)
+			}
+			const message = createMockContactMessage()
 
 			// Act
-			for (let i = 0; i < contactRateLimitMaxKeys + 500; i++) limiter.record(`key-${i}`, now)
+			const limited = await app.contactService.submit(message, '198.51.100.1')
+			vi.setSystemTime(new Date('2026-08-26T10:11:00.000Z'))
+			const afterWindow = await app.contactService.submit(message, '198.51.100.1')
 
 			// Assert
-			expect(limiter.size()).toBe(contactRateLimitMaxKeys)
+			expect(limited).toBe('rateLimited')
+			expect(afterWindow).toBe('sent')
+			expect(app.email.send).toHaveBeenCalledTimes(1)
 		})
 
-		it('Applies a global ceiling regardless of ip', () => {
+		it('Prunes hits older than the window through the shared scheduler (Postgres only)', async () => {
 			// Arrange
-			const limiter = createRateLimiter()
-			for (let i = 0; i < contactRateLimit.globalMax; i++) limiter.record(`10.1.${i}.1`, now)
+			vi.useFakeTimers({ toFake: ['Date'] })
+			vi.setSystemTime(new Date('2026-08-26T10:00:00.000Z'))
+			const { scheduleHousekeeping } = await import('#/lib/housekeeping.ts')
+			const call = vi
+				.mocked(scheduleHousekeeping)
+				.mock.calls.findLast(([, name]) => name === 'Rate-limit prune')
+			const prune = vi.spyOn(app.db.rateLimits, 'prune')
 
-			// Act + Assert
-			expect(limiter.isLimited('198.51.100.1', now)).toBe(true)
-			expect(limiter.isLimited('198.51.100.1', later)).toBe(false)
+			// Act
+			await call?.[2]()
+
+			// Assert
+			expect(call).toBeDefined()
+			expect(prune).toHaveBeenCalledWith(
+				new Date(Date.now() - contactRateLimit.windowMinutes * 60 * 1000)
+			)
 		})
 	})
 })

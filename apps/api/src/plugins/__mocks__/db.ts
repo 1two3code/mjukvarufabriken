@@ -43,7 +43,7 @@ export const createMockJobEvent = (overrides?: PartialDeep<JobEvent>): JobEvent 
 	mergeDeep(defaultEvent, overrides)
 
 /**
- * Jobs are mocked with fixtures (routes/services assert on them); orders, users and auth use
+ * Jobs are mocked with fixtures (routes/services assert on them); orders, users, auth and rateLimits use
  * the real in-memory repositories from @mf/db, one fresh set per test app, so the services
  * exercise the same contract as Postgres. Spy with `vi.spyOn(app.db.orders, 'get')`.
  */
@@ -55,6 +55,7 @@ const mockPlugin: FastifyPluginAsync = async app => {
 		orders: memory.orders,
 		users: memory.users,
 		auth: memory.auth,
+		rateLimits: memory.rateLimits,
 		jobs: {
 			insert: vi.fn(job => Promise.resolve(createMockJob({ ...job, id: 'job-1' }))),
 			get: vi.fn((id: string) => Promise.resolve(createMockJob({ id }))),

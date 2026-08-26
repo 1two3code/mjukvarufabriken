@@ -1,5 +1,7 @@
 import fp from 'fastify-plugin'
 
+import { scheduleHousekeeping } from '#/lib/housekeeping.ts'
+
 import type { FastifyPluginAsync } from 'fastify'
 
 /** A message posted through the public contact form on the site */
@@ -20,8 +22,8 @@ export type ContactResult = (typeof contactResults)[number]
  */
 export const contactRateLimit = { max: 5, globalMax: 60, windowMinutes: 10 } as const
 
-/** Upper bound on tracked ip keys; beyond it the oldest keys are evicted (memory guard) */
-export const contactRateLimitMaxKeys = 10_000
+/** Scope of the contact-form hits in `db.rateLimits` */
+export const contactRateLimitScope = 'contact'
 
 declare module 'fastify' {
 	interface FastifyInstance {
@@ -41,51 +43,6 @@ declare module 'fastify' {
 // MARK: Helpers
 const windowMs = contactRateLimit.windowMinutes * 60 * 1000
 
-const inWindow = (times: number[], now: number) => times.filter(time => now - time < windowMs)
-
-/**
- * Keeps the send timestamps per ip plus a global list. Entries are pruned on every call and
- * keys without recent sends are dropped, so the map only holds ips active within the window
- * (and never more than `contactRateLimitMaxKeys` of them).
- */
-export const createRateLimiter = () => {
-	const sentAt = new Map<string, number[]>()
-	let globalSentAt: number[] = []
-
-	const sweep = (now: number) => {
-		globalSentAt = inWindow(globalSentAt, now)
-		for (const [key, times] of sentAt) {
-			const recent = inWindow(times, now)
-			if (recent.length) sentAt.set(key, recent)
-			else sentAt.delete(key)
-		}
-	}
-
-	return {
-		/** Whether a send from `ip` right now would exceed the per-ip or global limit */
-		isLimited: (ip: string, now: number) => {
-			sweep(now)
-			if (globalSentAt.length >= contactRateLimit.globalMax) return true
-			return (sentAt.get(ip)?.length ?? 0) >= contactRateLimit.max
-		},
-		/** Counts a delivered message for `ip` */
-		record: (ip: string, now: number) => {
-			globalSentAt.push(now)
-			// Re-insert so the key moves to the end: Map iteration order == insertion order
-			const times = sentAt.get(ip) ?? []
-			sentAt.delete(ip)
-			sentAt.set(ip, [...times, now])
-			while (sentAt.size > contactRateLimitMaxKeys) {
-				const oldest = sentAt.keys().next().value
-				if (oldest === undefined) break
-				sentAt.delete(oldest)
-			}
-		},
-		/** Number of tracked ip keys (for tests) */
-		size: () => sentAt.size,
-	}
-}
-
 const singleLine = (value: string) => value.replace(/[\r\n]+/g, ' ').trim()
 
 export const contactEmail = ({ name, email, company, message }: ContactMessage) => {
@@ -104,12 +61,25 @@ export const contactEmail = ({ name, email, company, message }: ContactMessage) 
 
 // MARK: Plugin
 const plugin: FastifyPluginAsync = async app => {
-	const { secrets, email: mailer } = app
-	const limiter = createRateLimiter()
+	const { db, secrets, email: mailer } = app
+	const { rateLimits } = db
+
+	/** Whether a send from `ip` right now would exceed the per-ip or global limit */
+	const isLimited = async (ip: string, now: Date) => {
+		const since = new Date(now.getTime() - windowMs)
+		const global = await rateLimits.count(contactRateLimitScope, undefined, since)
+		if (global >= contactRateLimit.globalMax) return true
+		return (await rateLimits.count(contactRateLimitScope, ip, since)) >= contactRateLimit.max
+	}
+
+	// Rows older than the window count for nothing: drop them hourly (Postgres only)
+	await scheduleHousekeeping(app, 'Rate-limit prune', () =>
+		rateLimits.prune(new Date(Date.now() - windowMs))
+	)
 
 	app.decorate('contactService', {
 		submit: async (message, ip) => {
-			if (limiter.isLimited(ip, Date.now())) {
+			if (await isLimited(ip, new Date())) {
 				app.log.warn({ ip }, 'Contact form rate limit hit')
 				return 'rateLimited'
 			}
@@ -141,7 +111,7 @@ const plugin: FastifyPluginAsync = async app => {
 			for (const { to, error } of failed) {
 				app.log.error({ to, error }, 'Contact form email failed for a recipient')
 			}
-			limiter.record(ip, Date.now())
+			await rateLimits.record(contactRateLimitScope, ip, new Date())
 			return 'sent'
 		},
 	})
@@ -149,5 +119,5 @@ const plugin: FastifyPluginAsync = async app => {
 
 export default fp(plugin, {
 	name: '#internal/contactService',
-	dependencies: ['#internal/secrets', '#internal/email'],
+	dependencies: ['#internal/db', '#internal/secrets', '#internal/email'],
 })

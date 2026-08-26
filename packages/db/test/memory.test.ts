@@ -1,7 +1,11 @@
-import { createMemoryRepositories } from '#/memory.ts'
+import {
+	createMemoryRepositories,
+	memoryRateLimitMaxKeys,
+	memoryRateLimitRetentionMs,
+} from '#/memory.ts'
 
 import type { Spec } from '@mf/models'
-import type { Repositories } from '#/repositories.ts'
+import type { MemoryRepositories } from '#/memory.ts'
 
 const spec: Spec = {
 	goal: 'g',
@@ -14,7 +18,7 @@ const spec: Spec = {
 const budget = { maxTokens: 1000, maxWorkers: 1, maxDurationMinutes: 10 }
 
 describe('memory repositories', () => {
-	let repos: Repositories
+	let repos: MemoryRepositories
 
 	beforeEach(() => {
 		repos = createMemoryRepositories()
@@ -359,6 +363,51 @@ describe('memory repositories', () => {
 			// Revoked just now: kept for a week, so still known (and still revoked)
 			await expect(repos.auth.consumeRefreshToken('revoked')).resolves.toBeUndefined()
 			await expect(repos.auth.countMagicLinksSince('a@x.se', past(30))).resolves.toBe(2)
+		})
+	})
+
+	describe('rateLimits', () => {
+		const now = new Date('2026-08-26T10:00:00.000Z')
+		const at = (offsetMs: number) => new Date(now.getTime() + offsetMs)
+
+		it('Counts hits per key and globally per scope since an instant', async () => {
+			await repos.rateLimits.record('contact', 'ip-1', at(-3000))
+			await repos.rateLimits.record('contact', 'ip-1', at(-1000))
+			await repos.rateLimits.record('contact', 'ip-2', at(-1000))
+			await repos.rateLimits.record('other', 'ip-1', at(-1000))
+
+			await expect(repos.rateLimits.count('contact', 'ip-1', at(-5000))).resolves.toBe(2)
+			await expect(repos.rateLimits.count('contact', 'ip-1', at(-2000))).resolves.toBe(1)
+			await expect(repos.rateLimits.count('contact', undefined, at(-5000))).resolves.toBe(3)
+			await expect(repos.rateLimits.count('contact', 'ip-3', at(-5000))).resolves.toBe(0)
+			await expect(repos.rateLimits.count('missing', undefined, at(-5000))).resolves.toBe(0)
+		})
+
+		it('Drops keys whose hits fell out of the retention instead of keeping them forever', async () => {
+			for (let i = 0; i < 100; i++) await repos.rateLimits.record('contact', `10.0.0.${i}`, now)
+
+			await repos.rateLimits.record('contact', 'fresh', at(memoryRateLimitRetentionMs + 1))
+
+			expect(repos.rateLimits.size('contact')).toBe(1)
+		})
+
+		it('Never tracks more than the max number of keys per scope', async () => {
+			for (let i = 0; i < memoryRateLimitMaxKeys + 500; i++) {
+				await repos.rateLimits.record('contact', `key-${i}`, now)
+			}
+
+			expect(repos.rateLimits.size('contact')).toBe(memoryRateLimitMaxKeys)
+			await expect(repos.rateLimits.count('contact', 'key-0', at(-1))).resolves.toBe(0)
+			await expect(repos.rateLimits.count('contact', 'key-600', at(-1))).resolves.toBe(1)
+		})
+
+		it('Prunes hits older than the given instant', async () => {
+			await repos.rateLimits.record('contact', 'ip-1', at(-3000))
+			await repos.rateLimits.record('contact', 'ip-1', at(-1000))
+
+			await repos.rateLimits.prune(at(-2000))
+
+			await expect(repos.rateLimits.count('contact', 'ip-1', at(-10_000))).resolves.toBe(1)
 		})
 	})
 })

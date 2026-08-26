@@ -15,7 +15,7 @@ import type { DatabaseSecret, Repositories } from '@mf/db'
 declare module 'fastify' {
 	interface FastifyInstance {
 		/**
-		 * The repositories from @mf/db (`jobs`, `orders`, `users`, `auth`). Postgres-backed when
+		 * The repositories from @mf/db (`jobs`, `orders`, `users`, `auth`, `rateLimits`). Postgres-backed when
 		 * `DATABASE_URL` or `DATABASE_SECRET_ARN` is set, otherwise the in-memory implementation
 		 * (local dev without docker, tests) — same interface, everything lost on restart.
 		 */
@@ -105,6 +105,7 @@ const unavailableRepositories = (error: () => Error): Repositories => {
 			'revokeRefreshToken',
 			'prune',
 		]),
+		rateLimits: repository(['count', 'record', 'prune']),
 	}
 }
 

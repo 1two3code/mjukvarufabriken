@@ -10,6 +10,7 @@ import postgres from 'postgres'
 import { createAuthRepository } from './auth.ts'
 import { createJobsRepository } from './jobs.ts'
 import { createOrdersRepository } from './orders.ts'
+import { createRateLimitsRepository } from './rateLimits.ts'
 import { createUsersRepository } from './users.ts'
 
 import type { Sql } from 'postgres'
@@ -20,6 +21,7 @@ export * from './jobs.ts'
 export * from './memory.ts'
 export * from './migrate.ts'
 export * from './orders.ts'
+export * from './rateLimits.ts'
 export * from './repositories.ts'
 export * from './users.ts'
 
@@ -94,4 +96,5 @@ export const createPostgresRepositories = (db: Db): Repositories => ({
 	orders: createOrdersRepository(db),
 	users: createUsersRepository(db),
 	auth: createAuthRepository(db),
+	rateLimits: createRateLimitsRepository(db),
 })
