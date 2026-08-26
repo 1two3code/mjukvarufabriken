@@ -11,7 +11,6 @@ import ecsPlugin from '#/plugins/ecs.ts'
 import emailPlugin from '#/plugins/email.ts'
 import errorHandlingPlugin from '#/plugins/errorHandling.ts'
 import secretsPlugin from '#/plugins/secrets.ts'
-import storePlugin from '#/plugins/store.ts'
 import authService from '#/services/authService.ts'
 import itemService from '#/services/itemService.ts'
 import jobService from '#/services/jobService.ts'
@@ -47,7 +46,6 @@ export async function createServer({ logLevel }: Options = {}): Promise<FastifyI
 
 		// Plugins
 		.register(secretsPlugin)
-		.register(storePlugin)
 		.register(dbPlugin)
 		.register(ecsPlugin)
 		.register(anthropicPlugin)

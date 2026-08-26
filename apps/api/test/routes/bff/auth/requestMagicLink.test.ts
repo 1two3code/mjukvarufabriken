@@ -63,7 +63,7 @@ describe('Magic-link flow end to end (real services, log transport)', () => {
 	const realModules = [
 		'#/services/authService.ts',
 		'#/services/userService.ts',
-		'#/plugins/store.ts',
+		'#/plugins/db.ts',
 		'#/plugins/email.ts',
 	]
 

@@ -8,7 +8,7 @@ describe('User Service', () => {
 	let app: FastifyInstance
 
 	beforeEach(async () => {
-		app = await createTestApp({ skipMock: ['#/services/userService.ts', '#/plugins/store.ts'] })
+		app = await createTestApp({ skipMock: '#/services/userService.ts' })
 	})
 
 	describe('orgNameFromEmail', () => {
@@ -46,7 +46,7 @@ describe('User Service', () => {
 
 			// Act
 			const second = await app.userService.findOrCreateByEmail('ANNA@acme.se')
-			const orgs = await app.store.list('orgs')
+			const orgs = await app.db.users.listOrgs()
 
 			// Assert
 			expect(second).toEqual(first)
@@ -70,10 +70,8 @@ describe('User Service', () => {
 	describe('get / getOrg', () => {
 		it('Returns stored entities and throws EntityNotFound otherwise', async () => {
 			// Arrange
-			const user = createMockUser()
-			const org = createMockOrg()
-			await app.store.put('users', user.id, user)
-			await app.store.put('orgs', org.id, org)
+			const org = await app.db.users.insertOrg({ name: createMockOrg().name })
+			const user = await app.db.users.insert({ ...createMockUser(), orgId: org.id })
 
 			// Act & Assert
 			await expect(app.userService.get(user.id)).resolves.toEqual(user)

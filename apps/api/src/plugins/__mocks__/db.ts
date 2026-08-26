@@ -1,4 +1,5 @@
 import fp from 'fastify-plugin'
+import { createMemoryRepositories } from '@mf/db'
 import { mergeDeep } from '@mf/utils/object'
 
 import type { FastifyInstance, FastifyPluginAsync } from 'fastify'
@@ -41,9 +42,19 @@ export const createMockJob = (overrides?: PartialDeep<Job>): Job => mergeDeep(de
 export const createMockJobEvent = (overrides?: PartialDeep<JobEvent>): JobEvent =>
 	mergeDeep(defaultEvent, overrides)
 
+/**
+ * Jobs are mocked with fixtures (routes/services assert on them); orders, users and auth use
+ * the real in-memory repositories from @mf/db, one fresh set per test app, so the services
+ * exercise the same contract as Postgres. Spy with `vi.spyOn(app.db.orders, 'get')`.
+ */
 const mockPlugin: FastifyPluginAsync = async app => {
+	const memory = createMemoryRepositories()
 	const mock: FastifyInstance['db'] = {
 		available: true,
+		backend: 'memory',
+		orders: memory.orders,
+		users: memory.users,
+		auth: memory.auth,
 		jobs: {
 			insert: vi.fn(job => Promise.resolve(createMockJob({ ...job, id: 'job-1' }))),
 			get: vi.fn((id: string) => Promise.resolve(createMockJob({ id }))),

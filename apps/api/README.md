@@ -12,7 +12,7 @@ Fastify 5 BFF, executed directly by Node (no build step) and tested with Vitest.
 
 ## Folder structure
 
-- `src/plugins` — infrastructure singletons decorated on the Fastify instance (`secrets`, `store`, `authKeys`, `auth`, `email`, `anthropic`, `accessControl`, `errorHandling`).
+- `src/plugins` — infrastructure singletons decorated on the Fastify instance (`secrets`, `db`, `authKeys`, `auth`, `email`, `anthropic`, `accessControl`, `errorHandling`).
 - `src/services` — business logic; a facade over the data plugins.
 - `src/routes` — the BFF surface under `/bff/*`, auto-loaded, files named by action.
 - `src/lib` — internal helpers that aren't tied to a single plugin or service (domain error classes).
@@ -35,4 +35,4 @@ Access tokens are EdDSA (Ed25519) JWTs, 1 h, claims `sub` (user id), `email`, `n
 
 Environment: `AUTH_JWT_PRIVATE_KEY` (JSON JWK) or `AUTH_JWT_PRIVATE_KEY_SECRET_ARN` (generate with `node scripts/gen-auth-key.mjs`; without either an ephemeral key is used and a warning logged), `AUTH_ISSUER`, `AUTH_AUDIENCE`, `AUTH_ADMIN_EMAILS` (comma list → role `admin`), `PORTAL_URL`, `EMAIL_TRANSPORT` (`log` prints the link in the log — the default outside live; `ses` sends via SES v2), `AUTH_EMAIL_FROM`. See `.env.example`.
 
-Storage is the in-memory `store` (`users`, `orgs`, `magicLinks`, `refreshTokens`) until Postgres lands — everything resets on restart.
+Storage is Postgres via `app.db` (`users`, `orgs`, `magic_links`, `refresh_tokens` — see `packages/db`). Without `DATABASE_URL` / `DATABASE_SECRET_ARN` the api boots on the in-memory repositories and logs it: everything then resets on restart.

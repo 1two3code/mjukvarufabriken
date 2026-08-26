@@ -1,5 +1,3 @@
-import { DatabaseNotConfigured } from '#/plugins/db.ts'
-
 import type { FastifyInstance } from 'fastify'
 import type * as mfDb from '@mf/db'
 
@@ -33,18 +31,29 @@ describe('Db plugin (db)', () => {
 		await app?.close()
 	})
 
-	it('Boots without a database and rejects every repository call', async () => {
+	it('Falls back to the in-memory repositories without a database', async () => {
 		// Arrange
 		vi.stubEnv('DATABASE_URL', '')
 		vi.stubEnv('DATABASE_SECRET_ARN', '')
 
 		// Act
 		app = await createTestApp({ skipMock: '#/plugins/db.ts' })
+		const org = await app.db.users.insertOrg({ name: 'acme.se' })
+		const draft = await app.db.orders.upsert({
+			orderId: 'order-1',
+			orgId: org.id,
+			status: 'drafting',
+			spec: {},
+			messages: [],
+			openQuestions: [],
+		})
 
 		// Assert
-		expect(app.db.available).toBe(false)
-		await expect(app.db.jobs.get('job-1')).rejects.toBeInstanceOf(DatabaseNotConfigured)
-		await expect(app.db.jobs.list()).rejects.toBeInstanceOf(DatabaseNotConfigured)
+		expect(app.db.available).toBe(true)
+		expect(app.db.backend).toBe('memory')
+		expect(migrateMock).not.toHaveBeenCalled()
+		await expect(app.db.orders.get('order-1')).resolves.toEqual(draft)
+		await expect(app.db.jobs.list()).resolves.toEqual([])
 	})
 
 	it('Creates a client from DATABASE_URL (lazy connection)', async () => {
@@ -56,6 +65,7 @@ describe('Db plugin (db)', () => {
 
 		// Assert
 		expect(app.db.available).toBe(true)
+		expect(app.db.backend).toBe('postgres')
 		expect(app.db.error).toBeUndefined()
 		expect(migrateMock).toHaveBeenCalledTimes(1)
 		expect(sendMock).not.toHaveBeenCalled()
@@ -72,6 +82,7 @@ describe('Db plugin (db)', () => {
 		// Assert
 		expect(app.db.available).toBe(false)
 		expect(app.db.error).toMatch(/syntax error/)
+		await expect(app.db.orders.get('order-1')).rejects.toThrow(/Database unavailable/)
 		const error = await app.db.jobs.get('job-1').catch((cause: Error) => cause)
 		expect(error).toMatchObject({
 			name: 'Error',
@@ -110,7 +121,7 @@ describe('Db plugin (db)', () => {
 		// Act
 		app = await createTestApp({ skipMock: '#/plugins/db.ts' })
 
-		// Assert
-		expect(app.db.available).toBe(false)
+		// Assert — no connection string at all: the memory fallback, never a half-configured Postgres
+		expect(app.db.backend).toBe('memory')
 	})
 })

@@ -7,7 +7,7 @@ import { createMockSpec, createMockSpecDraft } from '#/services/__mocks__/specSe
 import { createEmptyDraft } from '#/services/specService.ts'
 
 import type { FastifyInstance } from 'fastify'
-import type { BackendSession } from '@mf/models'
+import type { BackendSession, SpecDraft } from '@mf/models'
 
 const user: BackendSession = { userId: 'user-1', role: 'user', orgId: 'org-1' }
 const admin: BackendSession = { userId: 'admin-1', role: 'admin', orgId: 'org-admin' }
@@ -15,28 +15,30 @@ const admin: BackendSession = { userId: 'admin-1', role: 'admin', orgId: 'org-ad
 describe('Spec Service', () => {
 	let app: FastifyInstance
 
+	/** Seeds the (in-memory) orders repository and spies on writes */
+	const seed = async (draft: SpecDraft) => {
+		await app.db.orders.upsert(draft)
+		vi.spyOn(app.db.orders, 'upsert')
+		return draft
+	}
+
 	beforeEach(async () => {
 		app = await createTestApp({ skipMock: '#/services/specService.ts' })
 	})
 
 	describe('get', () => {
 		it('Creates and stores an empty draft on first access', async () => {
-			// Arrange
-			vi.spyOn(app.store, 'get').mockResolvedValue(undefined)
-
 			// Act
 			const draft = await app.specService.get('order-9', user)
 
 			// Assert
 			expect(draft).toEqual(createEmptyDraft('order-9', 'org-1'))
-			expect(app.store.put).toHaveBeenCalledWith('specs', 'order-9', draft)
+			await expect(app.db.orders.get('order-9')).resolves.toEqual(draft)
 		})
 
 		it("Hides another org's draft as not found, but admins see it", async () => {
 			// Arrange
-			vi.spyOn(app.store, 'get').mockResolvedValue(
-				createMockSpecDraft({ orderId: 'order-1', orgId: 'org-2' })
-			)
+			await seed(createMockSpecDraft({ orderId: 'order-1', orgId: 'org-2' }))
 
 			// Act / Assert
 			await expect(app.specService.get('order-1', user)).rejects.toBeInstanceOf(EntityNotFound)
@@ -47,28 +49,28 @@ describe('Spec Service', () => {
 			await expect(app.specService.get('order-1', admin)).resolves.toMatchObject({
 				orgId: 'org-2',
 			})
-			expect(app.store.put).not.toHaveBeenCalled()
+			expect(app.db.orders.upsert).not.toHaveBeenCalled()
 		})
 
 		it('Returns the stored draft', async () => {
 			// Arrange
-			const stored = createMockSpecDraft({ orderId: 'order-1' })
-			vi.spyOn(app.store, 'get').mockResolvedValue(stored)
+			const stored = await seed(createMockSpecDraft({ orderId: 'order-1' }))
+			vi.spyOn(app.db.orders, 'get')
 
 			// Act
 			const draft = await app.specService.get('order-1', user)
 
 			// Assert
-			expect(app.store.get).toHaveBeenCalledWith('specs', 'order-1')
+			expect(app.db.orders.get).toHaveBeenCalledWith('order-1')
 			expect(draft).toEqual(stored)
-			expect(app.store.put).not.toHaveBeenCalled()
+			expect(app.db.orders.upsert).not.toHaveBeenCalled()
 		})
 	})
 
 	describe('sendMessage', () => {
 		it('Runs an engine turn, appends both messages and stores open questions', async () => {
 			// Arrange
-			vi.spyOn(app.store, 'get').mockResolvedValue(createEmptyDraft('order-1', 'org-1'))
+			await seed(createEmptyDraft('order-1', 'org-1'))
 
 			// Act
 			const draft = await app.specService.sendMessage('order-1', 'I want a booking app', user)
@@ -86,12 +88,12 @@ describe('Spec Service', () => {
 				['user', 'I want a booking app'],
 				['assistant', 'Got it. A couple of questions...'],
 			])
-			expect(app.store.put).toHaveBeenCalledWith('specs', 'order-1', draft)
+			await expect(app.db.orders.get('order-1')).resolves.toEqual(draft)
 		})
 
 		it('Marks the draft ready with an estimated price when the spec becomes complete', async () => {
 			// Arrange
-			vi.spyOn(app.store, 'get').mockResolvedValue(createMockSpecDraft({ orderId: 'order-1' }))
+			await seed(createMockSpecDraft({ orderId: 'order-1' }))
 			vi.spyOn(app.anthropic.messages, 'create').mockResolvedValue(
 				createMockToolUseMessage(
 					createMockSpecToolOutput({
@@ -121,7 +123,7 @@ describe('Spec Service', () => {
 
 		it('Rejects messages on a frozen draft', async () => {
 			// Arrange
-			vi.spyOn(app.store, 'get').mockResolvedValue(createMockSpecDraft({ status: 'frozen' }))
+			await seed(createMockSpecDraft({ status: 'frozen' }))
 
 			// Act & Assert
 			await expect(app.specService.sendMessage('order-1', 'more', user)).rejects.toBeInstanceOf(
@@ -132,31 +134,30 @@ describe('Spec Service', () => {
 
 		it('Propagates engine failures without storing anything', async () => {
 			// Arrange
-			vi.spyOn(app.store, 'get').mockResolvedValue(createEmptyDraft('order-1', 'org-1'))
+			await seed(createEmptyDraft('order-1', 'org-1'))
 			vi.spyOn(app.anthropic.messages, 'create').mockRejectedValue(new Error('rate limited'))
 
 			// Act & Assert
 			await expect(app.specService.sendMessage('order-1', 'hi', user)).rejects.toThrow(
 				'rate limited'
 			)
-			expect(app.store.put).not.toHaveBeenCalled()
+			expect(app.db.orders.upsert).not.toHaveBeenCalled()
 		})
 	})
 
 	describe('freeze', () => {
 		it('Rejects an incomplete draft', async () => {
 			// Arrange
-			vi.spyOn(app.store, 'get').mockResolvedValue(createMockSpecDraft())
+			await seed(createMockSpecDraft())
 
 			// Act & Assert
 			await expect(app.specService.freeze('order-1', user)).rejects.toBeInstanceOf(EntityInvalid)
-			expect(app.store.put).not.toHaveBeenCalled()
+			expect(app.db.orders.upsert).not.toHaveBeenCalled()
 		})
 
 		it('Freezes a complete draft with size class, price and timestamp', async () => {
 			// Arrange
-			const ready = createMockSpecDraft({ status: 'ready', spec: createMockSpec() })
-			vi.spyOn(app.store, 'get').mockResolvedValue(ready)
+			const ready = await seed(createMockSpecDraft({ status: 'ready', spec: createMockSpec() }))
 
 			// Act
 			const frozen = await app.specService.freeze('order-1', user)
@@ -170,20 +171,21 @@ describe('Spec Service', () => {
 				priceSek: 15_000,
 				frozenAt: expect.any(String),
 			})
-			expect(app.store.put).toHaveBeenCalledWith('specs', 'order-1', frozen)
+			await expect(app.db.orders.get('order-1')).resolves.toEqual(frozen)
 		})
 
 		it('Is idempotent for an already frozen draft', async () => {
 			// Arrange
-			const frozen = createMockSpecDraft({ status: 'frozen', frozenAt: '2026-08-26T00:00:00.000Z' })
-			vi.spyOn(app.store, 'get').mockResolvedValue(frozen)
+			const frozen = await seed(
+				createMockSpecDraft({ status: 'frozen', frozenAt: '2026-08-26T00:00:00.000Z' })
+			)
 
 			// Act
 			const result = await app.specService.freeze('order-1', user)
 
 			// Assert
 			expect(result).toEqual(frozen)
-			expect(app.store.put).not.toHaveBeenCalled()
+			expect(app.db.orders.upsert).not.toHaveBeenCalled()
 		})
 	})
 })
