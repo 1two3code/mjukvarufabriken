@@ -22,6 +22,8 @@ export type JobConfig = {
 		/** `APPRUNNER_CONNECTION_ARN` — the App Runner GitHub connection (TODO-EXTERNAL) */
 		appRunnerConnectionArn?: string
 		appRunnerInstanceRoleArn?: string
+		/** `PREVIEW_AUTH_ISSUER` (+ `_JWKS_URL`, `_AUDIENCE`) — IdP of the preview api; no deploy without it */
+		previewAuth?: { issuer: string; jwksUrl: string; audience: string }
 		/** `ARTIFACTS_BUCKET` — bundle + SPA build destination */
 		artifactsBucket?: string
 		/** `DELIVERY_DRY_RUN=1`: log the GitHub / App Runner / S3 calls instead of making them */
@@ -64,6 +66,20 @@ const resolveAnthropicKey = async () => {
 	return key
 }
 
+/**
+ * `PREVIEW_AUTH_ISSUER` is the IdP the preview api verifies tokens against (our own api: it
+ * publishes `/.well-known/jwks.json`); JWKS URL and audience default from it
+ */
+const previewAuthFromEnv = () => {
+	const issuer = process.env.PREVIEW_AUTH_ISSUER?.trim()
+	if (!issuer) return undefined
+	return {
+		issuer,
+		jwksUrl: process.env.PREVIEW_AUTH_JWKS_URL || `${issuer.replace(/\/$/, '')}/.well-known/jwks.json`,
+		audience: process.env.PREVIEW_AUTH_AUDIENCE || 'preview',
+	}
+}
+
 /** Optional secret: env value, else Secrets Manager via the ARN, else undefined (empty placeholder too) */
 const resolveOptionalSecret = async (envName: string, arnEnvName: string) => {
 	const fromEnv = process.env[envName]?.trim()
@@ -95,6 +111,7 @@ export const loadConfig = async (argv: string[]): Promise<JobConfig> => {
 			githubOrg: process.env.GITHUB_ORG || undefined,
 			appRunnerConnectionArn: process.env.APPRUNNER_CONNECTION_ARN || undefined,
 			appRunnerInstanceRoleArn: process.env.APPRUNNER_INSTANCE_ROLE_ARN || undefined,
+			previewAuth: previewAuthFromEnv(),
 			artifactsBucket: process.env.ARTIFACTS_BUCKET || undefined,
 			dryRun: ['1', 'true'].includes(process.env.DELIVERY_DRY_RUN ?? ''),
 		},

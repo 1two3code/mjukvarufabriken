@@ -6,7 +6,7 @@ import { acceptanceReportOf } from './types.ts'
 import { criteriaOf } from '#job/gateSessions.ts'
 
 import type { AcceptanceReport, GateReport, Plan, ReviewFinding, Spec } from '@mf/models'
-import type { DeliveryTarget } from './types.ts'
+import type { DeliveryTarget, PreviewAuth } from './types.ts'
 
 // MARK: Tables (deterministic — generated from the gate reports, never by a model)
 
@@ -74,6 +74,8 @@ export type DocsInput = {
 	verifyOutput?: string
 	/** Repository URL once known (docs are written before the push; README links are filled from the target) */
 	repositoryUrl?: string
+	/** IdP the preview api verifies tokens against; placeholders in `apprunner.yaml` without it */
+	previewAuth?: PreviewAuth
 }
 
 export const renderHandover = ({
@@ -182,7 +184,7 @@ ${body}`
  * template's Node 24 requirement, so the api is started with type stripping on Node 22 — a v1
  * limitation documented in HANDOVER.md; the customer's own CDK (`infra/`) is the real deploy.
  */
-export const renderAppRunnerConfig = () => `version: 1.0
+export const renderAppRunnerConfig = (auth?: PreviewAuth) => `version: 1.0
 runtime: nodejs22
 build:
   commands:
@@ -200,8 +202,14 @@ run:
       value: "0.0.0.0"
     - name: ENV
       value: preview
+    # The api refuses to start without an issuer + JWKS (apps/api/src/plugins/secrets.ts). Point
+    # them at a real identity provider — never disable auth on a public preview URL.
+    - name: AUTH_ISSUER
+      value: "${auth?.issuer ?? 'https://auth.example.com'}"
+    - name: AUTH_JWKS_URL
+      value: "${auth?.jwksUrl ?? 'https://auth.example.com/.well-known/jwks.json'}"
     - name: AUTH_AUDIENCE
-      value: preview
+      value: "${auth?.audience ?? 'preview'}"
 `
 
 /** Writes HANDOVER.md, TEST-REPORT.md, README.md and apprunner.yaml into the repo */
@@ -211,7 +219,7 @@ export const writeDocs = async (repoDir: string, input: DocsInput) => {
 		'HANDOVER.md': renderHandover(input),
 		'TEST-REPORT.md': renderTestReport(input),
 		'README.md': renderReadme(readme, input),
-		'apprunner.yaml': renderAppRunnerConfig(),
+		'apprunner.yaml': renderAppRunnerConfig(input.previewAuth),
 	}
 	for (const [name, content] of Object.entries(files)) {
 		await writeFile(join(repoDir, name), content)

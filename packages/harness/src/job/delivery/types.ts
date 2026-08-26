@@ -44,12 +44,28 @@ export type GitHubClient = {
 }
 
 export type DeployClient = {
-	/** Creates (or updates) an App Runner service deployed from the pushed repo; resolves to its URL */
+	/**
+	 * Creates (or redeploys) an App Runner service deployed from the pushed repo; resolves to its
+	 * URL. An existing service of that name is only reused when it deploys the same repository.
+	 * Rejects when `signal` aborts (kill switch / budget) instead of polling on.
+	 */
 	deployFromRepo: (input: {
 		serviceName: string
 		repositoryUrl: string
 		branch: string
+		signal?: AbortSignal
 	}) => Promise<{ url: string }>
+}
+
+/**
+ * Identity provider the preview api verifies tokens against (`AUTH_ISSUER` / `AUTH_JWKS_URL` /
+ * `AUTH_AUDIENCE` in the generated `apprunner.yaml`). The template api refuses to boot without
+ * them, so without this the deploy step is not attempted.
+ */
+export type PreviewAuth = {
+	issuer: string
+	jwksUrl: string
+	audience: string
 }
 
 export type ArtifactStore = {
@@ -79,6 +95,8 @@ export type DeliveryClients = {
 	prose?: ProseWriter
 	/** GitHub organisation that owns customer repos (default `mjukvaruhuset`) */
 	githubOrg?: string
+	/** IdP for the preview api; without it `apprunner.yaml` carries placeholders */
+	previewAuth?: PreviewAuth
 	/** Log instead of calling GitHub / App Runner / S3 (`--dry-run`); events say so */
 	dryRun?: boolean
 }

@@ -1,6 +1,6 @@
 import { Octokit } from '@octokit/rest'
 
-import { git } from '#job/exec.ts'
+import { exec, redactUrlCredentials, tail } from '#job/exec.ts'
 
 import type { CreatedRepo, GitHubClient } from './types.ts'
 
@@ -14,17 +14,28 @@ const authenticatedCloneUrl = (cloneUrl: string, token: string) => {
 	return url.toString()
 }
 
-/** `git push` of one branch over HTTPS; the token only lives in the argument list of this one process */
+/**
+ * `git push` of one branch over HTTPS. The token lives in the argument list of this one process
+ * only: the error on a failed push is built from the plain `cloneUrl` and a redacted stderr tail
+ * (never from the arguments), because that message becomes a job event, the job's `reason` and a
+ * log line the customer can read.
+ */
 export const pushBranch = async (
 	repoDir: string,
 	cloneUrl: string,
 	branch: string,
 	token: string
 ) => {
-	await git(['push', '--force', authenticatedCloneUrl(cloneUrl, token), `${branch}:${branch}`], {
-		cwd: repoDir,
-		timeoutMs: 10 * 60_000,
-	})
+	const result = await exec(
+		'git',
+		['push', '--force', authenticatedCloneUrl(cloneUrl, token), `${branch}:${branch}`],
+		{ cwd: repoDir, timeoutMs: 10 * 60_000 }
+	)
+	if (result.code !== 0) {
+		throw new Error(
+			`git push ${branch} → ${cloneUrl} failed (${result.code}):\n${redactUrlCredentials(tail(result.stderr || result.stdout))}`
+		)
+	}
 }
 
 /** Octokit against api.github.com with `GITHUB_TOKEN` (repo + admin:org scope on the org) */

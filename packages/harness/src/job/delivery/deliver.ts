@@ -3,20 +3,29 @@ import { writeDocs } from './docs.ts'
 import { defaultGitHubOrg } from './github.ts'
 import { acceptanceReportOf } from './types.ts'
 
-import { exec } from '#job/exec.ts'
+import { git } from '#job/exec.ts'
 import { totalTokens } from '#job/types.ts'
 
 import type { Deliverable, DeliveryEventPayload, NotifyPayload } from '@mf/models'
 import type { TokenUsage } from '#job/types.ts'
 import type { DeliveryClients, DeliveryInput, DeliveryOutcome } from './types.ts'
 
+/** Throws on a failed add/commit: the pushed repo and repo.zip must carry the docs + apprunner.yaml */
 const commitDocs = async (repoDir: string, signal: AbortSignal) => {
-	await exec('git', ['add', '-A'], { cwd: repoDir, signal })
-	await exec('git', ['commit', '-q', '-m', 'docs: handover, test report and App Runner config'], {
+	await git(['add', '-A'], { cwd: repoDir, signal })
+	await git(['commit', '-q', '-m', 'docs: handover, test report and App Runner config'], {
 		cwd: repoDir,
 		signal,
 	})
 }
+
+/**
+ * App Runner service name: the job-unique part first, so the 40-char limit never cuts it off
+ * (the slug already ends with the same job prefix — an app name of 37+ chars used to leave two
+ * jobs with the same goal on one service)
+ */
+export const previewServiceName = (jobId: string, slug: string) =>
+	`mf-${jobId.slice(0, 8)}-${slug}`
 
 /** The `notify` payload for a delivered job whose preview deployment failed */
 export const deployFailedNotification = (
@@ -36,7 +45,8 @@ export const deployFailedNotification = (
  *   deploy — App Runner service from the pushed repo + SPA build to the artifacts bucket
  *   bundle — repo.zip, docs and the gate/acceptance reports under `deliverables/<jobId>/`
  * The repo push and the bundle are the contract (`ok`); a failed deploy leaves `deployUrl`
- * null and raises a `notify` event for the admins. Docs failures are not fatal either.
+ * null and raises a `notify` event for the admins. A docs failure is fatal: without the commit
+ * the repo, the archive and the App Runner deployment (needs `apprunner.yaml`) would be wrong.
  */
 export const deliver = async (
 	{
@@ -53,7 +63,15 @@ export const deliver = async (
 	}: DeliveryInput,
 	clients: DeliveryClients
 ): Promise<DeliveryOutcome> => {
-	const { github, deploy, artifacts, prose, githubOrg = defaultGitHubOrg, dryRun } = clients
+	const {
+		github,
+		deploy,
+		artifacts,
+		prose,
+		githubOrg = defaultGitHubOrg,
+		previewAuth,
+		dryRun,
+	} = clients
 	const steps: DeliveryEventPayload[] = []
 	let tokens = 0
 	const count = (usage: TokenUsage) => {
@@ -95,6 +113,7 @@ export const deliver = async (
 			summary,
 			repositoryUrl,
 			verifyOutput: verify?.summary,
+			previewAuth,
 		})
 		await commitDocs(repoDir, signal)
 		await step({ step: 'docs', ok: true })
@@ -104,7 +123,9 @@ export const deliver = async (
 	if (aborted()) return aborted()!
 
 	// MARK: repo
-	let transferPending = !target.customerGithubLogin
+	let transferPending = target.customerGithubLogin
+		? undefined
+		: 'transfer pending: no customer GitHub login'
 	try {
 		const repo = await github.createRepo({
 			org: githubOrg,
@@ -122,18 +143,15 @@ export const deliver = async (
 				})
 			} catch (error) {
 				// The push is the contract; a failed invitation is an admin follow-up, not a failure
-				transferPending = true
-				await emit({
-					type: 'log',
-					payload: { message: `add collaborator failed: ${(error as Error).message}` },
-				}).catch(() => {})
+				transferPending = `transfer pending: adding ${target.customerGithubLogin} as admin failed: ${(error as Error).message}`
+				await emit({ type: 'log', payload: { message: transferPending } }).catch(() => {})
 			}
 		}
 		await step({
 			step: 'repo',
 			ok: true,
 			url: repo.url,
-			reason: transferPending ? 'transfer pending: no customer GitHub login' : undefined,
+			reason: transferPending,
 		})
 	} catch (error) {
 		const reason = `github: ${(error as Error).message}`
@@ -148,9 +166,10 @@ export const deliver = async (
 	try {
 		deployUrl = (
 			await deploy.deployFromRepo({
-				serviceName: `mf-${target.slug}-${jobId.slice(0, 8)}`,
+				serviceName: previewServiceName(jobId, target.slug),
 				repositoryUrl,
 				branch: 'main',
+				signal,
 			})
 		).url
 	} catch (error) {
@@ -193,7 +212,7 @@ export const deliver = async (
 		const deliverable: Deliverable = {
 			jobId,
 			repositoryUrl,
-			transferPending,
+			transferPending: transferPending !== undefined,
 			deployUrl,
 			siteUrl,
 			deliverableKey: deliverableKeyOf(jobId),

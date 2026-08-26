@@ -12,9 +12,10 @@ export type ExecOptions = {
 
 /**
  * Environment keys that must never reach the model-driven sandbox (worker shell, repo scripts):
- * database credentials, secret ARNs, the ECS task-role credential endpoint and other AWS config.
+ * database credentials, secret ARNs, the ECS task-role credential endpoint and other AWS config,
+ * the App Runner connection/instance-role ARNs (M5) and the GitHub org token.
  */
-const secretEnvKey = /^(DATABASE_|AWS_|ECS_|ARTIFACTS_BUCKET$)|_SECRET_ARN$/
+const secretEnvKey = /^(DATABASE_|AWS_|ECS_|APPRUNNER_|GITHUB_TOKEN$|ARTIFACTS_BUCKET$)|_SECRET_ARN$/
 
 /**
  * Git hooks are off for everything the job runs. The template ships husky hooks (conventional
@@ -59,12 +60,21 @@ export const exec = (
 		child.on('close', code => resolve({ code: code ?? -1, stdout, stderr }))
 	})
 
-/** Like `exec` but throws with the captured output on a non-zero exit */
+/**
+ * `user:password@` in any URL becomes `***@` — the error messages of `execOrThrow` end up in job
+ * events, the job row and the logs, and `git push https://x-access-token:<token>@…` (M5) must
+ * never leak the org token that way.
+ */
+export const redactUrlCredentials = (text: string) => text.replace(/\/\/[^\s/@]+@/g, '//***@')
+
+/** Like `exec` but throws with the captured output on a non-zero exit (URL credentials redacted) */
 export const execOrThrow = async (command: string, args: string[], options: ExecOptions) => {
 	const result = await exec(command, args, options)
 	if (result.code !== 0) {
 		throw new Error(
-			`${command} ${args.join(' ')} failed (${result.code}) in ${options.cwd}:\n${tail(result.stderr || result.stdout)}`
+			redactUrlCredentials(
+				`${command} ${args.join(' ')} failed (${result.code}) in ${options.cwd}:\n${tail(result.stderr || result.stdout)}`
+			)
 		)
 	}
 	return result

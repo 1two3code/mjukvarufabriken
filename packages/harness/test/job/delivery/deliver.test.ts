@@ -8,6 +8,7 @@ import { deliver } from '#job/delivery/deliver.ts'
 import { createFakeGitHubClient } from '#job/delivery/github.ts'
 import { createLiveDeliveryClients } from '#job/delivery/index.ts'
 import { createFakeProseWriter } from '#job/delivery/prose.ts'
+import { pushBranch } from '#job/delivery/github.ts'
 import { exec } from '#job/exec.ts'
 
 import type { GateReport, NewJobEvent, Spec } from '@mf/models'
@@ -218,7 +219,7 @@ describe('deliver', () => {
 		// App Runner + site
 		expect(deploy.deployments).toEqual([
 			{
-				serviceName: 'mf-gym-booking-11111111',
+				serviceName: 'mf-11111111-gym-booking',
 				repositoryUrl: 'https://github.com/mjukvaruhuset/gym-booking',
 				branch: 'main',
 			},
@@ -245,7 +246,7 @@ describe('deliver', () => {
 			jobId: '11111111-2222-3333-4444-555555555555',
 			repositoryUrl: 'https://github.com/mjukvaruhuset/gym-booking',
 			transferPending: false,
-			deployUrl: 'https://mf-gym-booking-11111111.eu-north-1.awsapprunner.com',
+			deployUrl: 'https://mf-11111111-gym-booking.eu-north-1.awsapprunner.com',
 			siteUrl: `https://mf-artifacts-test.s3.eu-north-1.amazonaws.com/${prefix}site/index.html`,
 			deliverableKey: prefix,
 			files: [
@@ -278,6 +279,82 @@ describe('deliver', () => {
 			url: 'https://github.com/mjukvaruhuset/gym',
 			reason: 'transfer pending: no customer GitHub login',
 		})
+	})
+
+	it('Reports why the transfer is pending when the invitation fails (the login exists)', async () => {
+		// Arrange
+		const { clients } = createClients({ github: createFakeGitHubClient('addCollaborator') })
+		const input = createInput(repoDir)
+
+		// Act
+		const outcome = await deliver(input, clients)
+
+		// Assert — not "no customer GitHub login": the admin must re-check the login, not ask for one
+		expect(outcome.ok).toBe(true)
+		expect(outcome.deliverable?.transferPending).toBe(true)
+		expect(outcome.steps[1]).toEqual({
+			step: 'repo',
+			ok: true,
+			url: 'https://github.com/mjukvaruhuset/gym-booking',
+			reason: 'transfer pending: adding octocat as admin failed: fake: addCollaborator failed',
+		})
+		expect(input.events.find(event => event.type === 'log')?.payload.message).toMatch(
+			/adding octocat as admin failed/
+		)
+	})
+
+	it('Fails closed when the docs cannot be committed — nothing is pushed without them', async () => {
+		// Arrange — a stale index.lock (a session killed mid-git) makes `git add` exit 128
+		await writeFile(join(repoDir, '.git', 'index.lock'), '')
+		const { github, clients } = createClients()
+		const input = createInput(repoDir)
+
+		// Act
+		const outcome = await deliver(input, clients)
+
+		// Assert
+		expect(outcome.ok).toBe(false)
+		expect(outcome.reason).toMatch(/^handover docs failed: git add -A failed \(128\)/)
+		expect(outcome.steps).toEqual([])
+		expect(github.pushes).toEqual([])
+	})
+
+	it('Writes the preview IdP into apprunner.yaml when configured', async () => {
+		// Arrange
+		const { clients } = createClients({
+			previewAuth: {
+				issuer: 'https://api.mjukvaruhuset.se',
+				jwksUrl: 'https://api.mjukvaruhuset.se/.well-known/jwks.json',
+				audience: 'preview',
+			},
+		})
+
+		// Act
+		await deliver(createInput(repoDir), clients)
+
+		// Assert
+		const config = await readFile(join(repoDir, 'apprunner.yaml'), 'utf8')
+		expect(config).toContain('name: AUTH_ISSUER\n      value: "https://api.mjukvaruhuset.se"')
+		expect(config).toContain(
+			'name: AUTH_JWKS_URL\n      value: "https://api.mjukvaruhuset.se/.well-known/jwks.json"'
+		)
+	})
+
+	it('Never puts the GitHub token into the error of a failed push', async () => {
+		// Arrange — pushing to a clone URL that does not exist fails fast
+		const cloneUrl = 'https://github.com/mjukvaruhuset/does-not-exist.git'
+		const token = 'ghp_SECRET_TOKEN_VALUE'
+
+		// Act
+		const error = await pushBranch(repoDir, cloneUrl, 'main', token).then(
+			() => new Error('push unexpectedly succeeded'),
+			e => e as Error
+		)
+
+		// Assert
+		expect(error.message).toContain(`git push main → ${cloneUrl} failed`)
+		expect(error.message).not.toContain(token)
+		expect(error.message).not.toContain('x-access-token')
 	})
 
 	it('Still delivers when the deploy fails: deployUrl null + a notify event for the admins', async () => {
@@ -327,22 +404,6 @@ describe('deliver', () => {
 		])
 		expect(deploy.deployments).toEqual([])
 		expect(artifacts.objects.size).toBe(0)
-	})
-
-	it('Keeps the repo delivered but flags the transfer when the invitation fails', async () => {
-		// Arrange
-		const { clients } = createClients({ github: createFakeGitHubClient('addCollaborator') })
-		const input = createInput(repoDir)
-
-		// Act
-		const outcome = await deliver(input, clients)
-
-		// Assert
-		expect(outcome.ok).toBe(true)
-		expect(outcome.deliverable?.transferPending).toBe(true)
-		expect(input.events.find(event => event.type === 'log')?.payload.message).toMatch(
-			/add collaborator failed/
-		)
 	})
 
 	it('Fails when the bundle upload fails', async () => {
@@ -421,14 +482,14 @@ describe('deliver', () => {
 				'[dry-run] github: create private repo mjukvaruhuset/gym-booking',
 				'[dry-run] github: push main → https://github.com/mjukvaruhuset/gym-booking.git',
 				'[dry-run] github: add octocat as admin on mjukvaruhuset/gym-booking',
-				'[dry-run] app runner: create service mf-gym-booking-11111111 from https://github.com/mjukvaruhuset/gym-booking#main',
+				'[dry-run] app runner: create service mf-11111111-gym-booking from https://github.com/mjukvaruhuset/gym-booking#main',
 				expect.stringMatching(
 					/^\[dry-run\] s3: put s3:\/\/mf-artifacts-dev\/deliverables\/.*\/repo\.zip \(application\/zip, \d+ bytes\)$/
 				),
 			])
 		)
 		expect(outcome.deliverable?.deployUrl).toBe(
-			'https://mf-gym-booking-11111111.eu-north-1.awsapprunner.com'
+			'https://mf-11111111-gym-booking.eu-north-1.awsapprunner.com'
 		)
 	})
 

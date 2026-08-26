@@ -16,7 +16,7 @@ import {
 } from './github.ts'
 import { createFakeProseWriter, createLiveProseWriter } from './prose.ts'
 
-import type { DeliveryClients } from './types.ts'
+import type { DeliveryClients, PreviewAuth } from './types.ts'
 
 export * from './appRunner.ts'
 export * from './artifacts.ts'
@@ -58,6 +58,11 @@ export type LiveDeliveryOptions = {
 	/** `APPRUNNER_CONNECTION_ARN` — without it the deploy step reports a reason and `deployUrl` null */
 	appRunnerConnectionArn?: string
 	appRunnerInstanceRoleArn?: string
+	/**
+	 * `PREVIEW_AUTH_ISSUER` (+ optional `PREVIEW_AUTH_JWKS_URL`, `PREVIEW_AUTH_AUDIENCE`) — the
+	 * IdP the preview api verifies tokens against; without it the deploy step is not attempted
+	 */
+	previewAuth?: PreviewAuth
 	/** `ARTIFACTS_BUCKET` + region */
 	artifactsBucket?: string
 	region?: string
@@ -81,6 +86,7 @@ export const createLiveDeliveryClients = ({
 	githubOrg = process.env.GITHUB_ORG || defaultGitHubOrg,
 	appRunnerConnectionArn,
 	appRunnerInstanceRoleArn,
+	previewAuth,
 	artifactsBucket,
 	region = process.env.AWS_REGION || 'eu-north-1',
 	workerModel,
@@ -96,6 +102,7 @@ export const createLiveDeliveryClients = ({
 				? createLiveProseWriter({ model: workerModel })
 				: undefined,
 			githubOrg,
+			previewAuth,
 			dryRun: true,
 		}
 	}
@@ -107,12 +114,14 @@ export const createLiveDeliveryClients = ({
 					push: notConfigured('GITHUB_TOKEN'),
 					addCollaborator: notConfigured('GITHUB_TOKEN'),
 				},
-		deploy: appRunnerConnectionArn
-			? createAppRunnerDeployClient({
-					connectionArn: appRunnerConnectionArn,
-					instanceRoleArn: appRunnerInstanceRoleArn,
-				})
-			: { deployFromRepo: notConfigured('APPRUNNER_CONNECTION_ARN') },
+		deploy: !appRunnerConnectionArn
+			? { deployFromRepo: notConfigured('APPRUNNER_CONNECTION_ARN') }
+			: !previewAuth
+				? { deployFromRepo: notConfigured('PREVIEW_AUTH_ISSUER') }
+				: createAppRunnerDeployClient({
+						connectionArn: appRunnerConnectionArn,
+						instanceRoleArn: appRunnerInstanceRoleArn,
+					}),
 		artifacts: artifactsBucket
 			? createS3ArtifactStore(artifactsBucket, region)
 			: {
@@ -122,6 +131,7 @@ export const createLiveDeliveryClients = ({
 				},
 		prose: createLiveProseWriter({ model: workerModel }),
 		githubOrg,
+		previewAuth,
 	}
 }
 
