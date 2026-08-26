@@ -1,0 +1,70 @@
+/* MARK: Layout */
+.log {
+	display: flex;
+	flex-direction: column;
+	gap: var(--spacing-xs);
+
+	padding: var(--spacing-s);
+	border: var(--border-width-xs) solid var(--divider-color);
+	border-radius: var(--border-radius-base);
+
+	background: var(--content-background);
+}
+
+.title {
+	margin: 0;
+}
+
+.empty {
+	margin: 0;
+	color: var(--secondary-text-color);
+}
+
+.list {
+	display: flex;
+	flex-direction: column;
+	gap: var(--spacing-xxs);
+
+	margin: 0;
+	padding: 0;
+
+	list-style: none;
+}
+
+/* MARK: Items */
+.item {
+	display: grid;
+	grid-template-columns: max-content max-content 1fr;
+	gap: var(--spacing-xs);
+	align-items: baseline;
+
+	padding: var(--spacing-xxs) var(--spacing-xs);
+	border-left: 0.3rem solid var(--divider-color);
+}
+
+.time {
+	composes: composable-caption-font from global;
+	color: var(--secondary-text-color);
+}
+
+.type {
+	composes: composable-caption-font from global;
+	font-family: monospace;
+}
+
+.text {
+	overflow-wrap: anywhere;
+	white-space: pre-wrap;
+}
+
+.success {
+	border-left-color: var(--success);
+}
+
+.info {
+	border-left-color: var(--info);
+}
+
+.error {
+	border-left-color: var(--error);
+}

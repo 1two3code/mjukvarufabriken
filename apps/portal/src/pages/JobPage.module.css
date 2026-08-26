@@ -1,0 +1,30 @@
+.intro {
+	color: var(--secondary-text-color);
+}
+
+.layout {
+	display: grid;
+	grid-template-columns: minmax(0, 3fr) minmax(0, 2fr);
+	gap: var(--spacing-base);
+	align-items: start;
+}
+
+.side {
+	display: flex;
+	flex-direction: column;
+	gap: var(--spacing-s);
+}
+
+.empty {
+	color: var(--secondary-text-color);
+}
+
+.error {
+	color: var(--error);
+}
+
+@media (width <= 900px) {
+	.layout {
+		grid-template-columns: 1fr;
+	}
+}

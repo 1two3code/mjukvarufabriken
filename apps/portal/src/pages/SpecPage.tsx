@@ -4,6 +4,7 @@ import { useTranslation } from 'react-i18next'
 import { useParams } from 'react-router-dom'
 
 import { useGetSpecQuery } from '#/features/spec/specApiSlice.ts'
+import { StartBuildButton } from '#/features/jobs/StartBuildButton.tsx'
 import { FreezeButton } from '#/features/spec/FreezeButton.tsx'
 import { SpecChat } from '#/features/spec/SpecChat.tsx'
 import { SpecPreview } from '#/features/spec/SpecPreview.tsx'
@@ -27,6 +28,7 @@ export function SpecPage() {
 				<aside className={styles.side}>
 					<SpecPreview draft={draft} />
 					<FreezeButton draft={draft} />
+					<StartBuildButton draft={draft} />
 				</aside>
 			</div>
 		</>

@@ -1,7 +1,8 @@
 import { CfnOutput, Duration, RemovalPolicy, Stack } from 'aws-cdk-lib'
-import { SecurityGroup, SubnetType, Vpc } from 'aws-cdk-lib/aws-ec2'
+import { Peer, Port, SecurityGroup, SubnetType, Vpc } from 'aws-cdk-lib/aws-ec2'
 import {
 	Cluster,
+	ContainerDependencyCondition,
 	ContainerImage,
 	CpuArchitecture,
 	FargateTaskDefinition,
@@ -28,6 +29,8 @@ import type { EnvironmentConfig } from './config.ts'
 
 export interface ResourcesStackProps extends StackProps {
 	environment: EnvironmentConfig
+	/** Absolute path to the repository root (Docker build context for the job images) */
+	repositoryRoot: string
 }
 
 /** Application secrets that are filled in manually (see README "Secrets") */
@@ -64,7 +67,7 @@ export class ResourcesStack extends Stack {
 	constructor(scope: Construct, id: string, props: ResourcesStackProps) {
 		super(scope, id, props)
 
-		const { environment } = props
+		const { environment, repositoryRoot } = props
 		const isLive = environment.name === 'live'
 		const removalPolicy = isLive ? RemovalPolicy.RETAIN : RemovalPolicy.DESTROY
 
@@ -158,13 +161,23 @@ export class ResourcesStack extends Stack {
 			clusterName: `mf-jobs-${environment.name}`,
 		})
 
-		// TODO(M3): egress allowlist — restrict to npm, GitHub and Anthropic only.
-		// Egress is wide open for now so the placeholder image can be pulled and tested.
+		// Job security group. Egress: 443/80 to anywhere (the proxy sidecar + AWS APIs) and Postgres.
+		// Fargate sidecars share the task ENI, so this SG cannot tell proxy traffic from a process
+		// that ignores HTTPS_PROXY — the domain allowlist is enforced by the sidecar (see
+		// apps/job/proxy); a hard fence needs a proxy in its own task/SG (TODO-EXTERNAL.md).
 		this.jobSecurityGroup = new SecurityGroup(this, 'JobSecurityGroup', {
 			vpc: this.vpc,
-			description: 'Build job tasks (TODO M3: egress allowlist)',
-			allowAllOutbound: true,
+			description: 'Build job tasks: 443/80 out via the egress proxy sidecar, Postgres',
+			allowAllOutbound: false,
 		})
+		this.jobSecurityGroup.addEgressRule(Peer.anyIpv4(), Port.tcp(443), 'https (proxy + AWS APIs)')
+		this.jobSecurityGroup.addEgressRule(Peer.anyIpv4(), Port.tcp(80), 'http (registry redirects)')
+		this.jobSecurityGroup.addEgressRule(this.databaseSecurityGroup, Port.tcp(5432), 'postgres')
+		this.databaseSecurityGroup.addIngressRule(
+			this.jobSecurityGroup,
+			Port.tcp(5432),
+			'build jobs to postgres'
+		)
 
 		const jobLogGroup = new LogGroup(this, 'JobLogGroup', {
 			logGroupName: `/mf/${environment.name}/jobs`,
@@ -181,20 +194,50 @@ export class ResourcesStack extends Stack {
 				operatingSystemFamily: OperatingSystemFamily.LINUX,
 			},
 		})
-		this.jobTaskDefinition.addContainer('job', {
-			// Placeholder until the harness image exists (M3)
-			image: ContainerImage.fromRegistry('public.ecr.aws/docker/library/node:24-alpine'),
-			command: ['node', '-e', 'console.log("mf-job placeholder")'],
+
+		// Egress allowlist sidecar: tinyproxy, FilterDefaultDeny, domains in apps/job/proxy/filter
+		// (npm, GitHub, Anthropic). Shares localhost with the job container (awsvpc).
+		const proxyPort = 8888
+		const proxy = this.jobTaskDefinition.addContainer('egress-proxy', {
+			image: ContainerImage.fromAsset(`${repositoryRoot}/apps/job/proxy`),
+			essential: true,
+			memoryReservationMiB: 64,
+			logging: LogDrivers.awsLogs({ logGroup: jobLogGroup, streamPrefix: 'proxy' }),
+			healthCheck: {
+				command: ['CMD-SHELL', `nc -z 127.0.0.1 ${proxyPort} || exit 1`],
+				interval: Duration.seconds(10),
+				retries: 3,
+				startPeriod: Duration.seconds(5),
+			},
+		})
+
+		// The job container: apps/job/Dockerfile (harness + golden template). `JOB_ID` is set per
+		// run by the api's ecs:RunTask override. Only the AWS control plane and the database bypass
+		// the proxy (NO_PROXY); everything else must pass the allowlist.
+		const job = this.jobTaskDefinition.addContainer('job', {
+			image: ContainerImage.fromAsset(repositoryRoot, { file: 'apps/job/Dockerfile' }),
+			essential: true,
 			logging: LogDrivers.awsLogs({ logGroup: jobLogGroup, streamPrefix: 'job' }),
 			environment: {
 				ENV: environment.name,
 				ARTIFACTS_BUCKET: this.artifactsBucket.bucketName,
+				DATABASE_SECRET_ARN: this.databaseSecret.secretArn,
 				ANTHROPIC_API_KEY_SECRET_ARN: this.secrets['anthropic-api-key'].secretArn,
 				GITHUB_TOKEN_SECRET_ARN: this.secrets['github-token'].secretArn,
+				HTTP_PROXY: `http://127.0.0.1:${proxyPort}`,
+				HTTPS_PROXY: `http://127.0.0.1:${proxyPort}`,
+				NO_PROXY: '127.0.0.1,localhost,169.254.170.2,169.254.169.254,.amazonaws.com',
+				NODE_USE_ENV_PROXY: '1',
 			},
 		})
-		// Job task role: read the two build secrets, write artifacts. Nothing else — never the
-		// database secret or Stripe keys (no customer secrets inside the sandbox).
+		job.addContainerDependencies({
+			container: proxy,
+			condition: ContainerDependencyCondition.HEALTHY,
+		})
+
+		// Job task role: the database (job row + events), the two build secrets, write artifacts.
+		// Never Stripe keys or the auth signing key — no customer secrets inside the sandbox.
+		this.databaseSecret.grantRead(this.jobTaskDefinition.taskRole)
 		this.secrets['anthropic-api-key'].grantRead(this.jobTaskDefinition.taskRole)
 		this.secrets['github-token'].grantRead(this.jobTaskDefinition.taskRole)
 		this.artifactsBucket.grantWrite(this.jobTaskDefinition.taskRole)

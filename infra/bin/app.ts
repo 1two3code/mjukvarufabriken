@@ -13,7 +13,12 @@ for (const environment of config.environments) {
 		: undefined
 
 	// Resources first — the web stack references its VPC, table and bucket
-	const resources = new ResourcesStack(app, `resources-${environment.name}`, { env, environment })
+	const repositoryRoot = createRelativePath(import.meta.url, '../..')
+	const resources = new ResourcesStack(app, `resources-${environment.name}`, {
+		env,
+		environment,
+		repositoryRoot,
+	})
 
 	const web = new WebStack(app, `${config.serviceName}-${environment.name}`, {
 		env,
@@ -24,7 +29,7 @@ for (const environment of config.environments) {
 			import.meta.url,
 			`../../apps/portal/dist/${environment.name}`
 		),
-		repositoryRoot: createRelativePath(import.meta.url, '../..'),
+		repositoryRoot,
 	})
 
 	for (const stack of [resources, web]) {

@@ -17,3 +17,5 @@ Start these NOW; none of them block building the software.
 | Domain mjukvaruhuset.se — check availability, buy | registrar | hours | site live |
 | BankID integration (via a broker e.g. Criipto/Signicat) | broker | weeks | later, not v1 |
 | Trademark check on "Mjukvaruhuset" (PRV) | you | days | brand risk |
+| Hard network egress fence for build jobs: Fargate sidecars share the task ENI, so the tinyproxy allowlist is app-level (HTTPS_PROXY). A proxy in its own task/SG + VPC endpoints for Secrets Manager/S3 gives a real fence (~10 USD/month) — decide before pilots | you | hours | untrusted-code isolation |
+| Anthropic: Claude Agent SDK usage terms / org rate limits for parallel workers (2–4 sessions per job) | Anthropic | days | parallel jobs |

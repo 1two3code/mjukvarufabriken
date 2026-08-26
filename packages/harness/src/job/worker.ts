@@ -5,6 +5,7 @@ import { query } from '@anthropic-ai/claude-agent-sdk'
 
 import { exec, git, tail } from './exec.ts'
 import { renderSpecForPlanning } from './planner.ts'
+import { totalTokens } from './types.ts'
 
 import type { Options, SDKMessage } from '@anthropic-ai/claude-agent-sdk'
 import type { Plan, Spec, Task } from '@mf/models'
@@ -78,6 +79,7 @@ const findNodeModules = async (root: string): Promise<string[]> => {
 export const shareNodeModules = async (repoDir: string, targetDir: string) => {
 	for (const source of await findNodeModules(repoDir)) {
 		const target = join(targetDir, relative(repoDir, source))
+		if (await exists(target)) continue
 		await mkdir(dirname(target), { recursive: true })
 		await exec('cp', ['-al', source, target], { cwd: repoDir })
 	}
@@ -192,18 +194,12 @@ export const runSession = async ({
 		for await (const message of query({ prompt, options })) {
 			const usage = messageUsage(message)
 			if (usage) {
-				streamed += usage.inputTokens + usage.outputTokens
-				streamed += (usage.cacheReadInputTokens ?? 0) + (usage.cacheCreationInputTokens ?? 0)
+				streamed += totalTokens(usage)
 				onUsage(usage)
 			}
 			if (message.type === 'result') {
 				reported = Object.values(message.modelUsage ?? {}).reduce(
-					(sum, entry) =>
-						sum +
-						entry.inputTokens +
-						entry.outputTokens +
-						entry.cacheReadInputTokens +
-						entry.cacheCreationInputTokens,
+					(sum, entry) => sum + totalTokens(entry),
 					0
 				)
 				ok = message.subtype === 'success' && !message.is_error
@@ -264,8 +260,7 @@ export const runTask = async ({
 	const { dir, branch } = await createWorktree(repoDir, task, signal)
 	let tokens = 0
 	const count = (usage: TokenUsage) => {
-		tokens += usage.inputTokens + usage.outputTokens
-		tokens += (usage.cacheReadInputTokens ?? 0) + (usage.cacheCreationInputTokens ?? 0)
+		tokens += totalTokens(usage)
 		onUsage(usage)
 	}
 	const systemPrompt = workerSystemPrompt(spec, plan, task)

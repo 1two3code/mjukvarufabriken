@@ -1,6 +1,7 @@
 import { topologicalOrder } from './dag.ts'
 import { exec, git, tail } from './exec.ts'
 import { renderSpecForPlanning } from './planner.ts'
+import { totalTokens } from './types.ts'
 import { repoConventions, runSession } from './worker.ts'
 
 import type { Plan, Spec, Task } from '@mf/models'
@@ -86,8 +87,7 @@ export const mergeTask = async ({
 		prompt: `Resolve the merge conflicts in: ${files.join(', ')}. Then run lint + tests and git add the files.`,
 		signal,
 		onUsage: usage => {
-			tokens += usage.inputTokens + usage.outputTokens
-			tokens += (usage.cacheReadInputTokens ?? 0) + (usage.cacheCreationInputTokens ?? 0)
+			tokens += totalTokens(usage)
 			onUsage(usage)
 		},
 		model,

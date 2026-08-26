@@ -21,11 +21,20 @@ export type TokenUsage = {
 	cacheCreationInputTokens?: number
 }
 
+/**
+ * Cache reads count at 10 % — the same weight Anthropic bills them at. Every agent turn re-reads
+ * its whole cached context, so counting them 1:1 would exhaust any budget in a handful of turns
+ * without reflecting cost.
+ */
+export const cacheReadWeight = 0.1
+
 export const totalTokens = (usage: TokenUsage) =>
-	usage.inputTokens +
-	usage.outputTokens +
-	(usage.cacheReadInputTokens ?? 0) +
-	(usage.cacheCreationInputTokens ?? 0)
+	Math.round(
+		usage.inputTokens +
+			usage.outputTokens +
+			(usage.cacheCreationInputTokens ?? 0) +
+			(usage.cacheReadInputTokens ?? 0) * cacheReadWeight
+	)
 
 export type TaskOutcome = {
 	ok: boolean

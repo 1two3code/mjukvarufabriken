@@ -1,0 +1,84 @@
+/* MARK: Layout */
+.card {
+	display: flex;
+	flex-direction: column;
+	gap: var(--spacing-s);
+
+	padding: var(--spacing-s);
+	border: var(--border-width-xs) solid var(--divider-color);
+	border-radius: var(--border-radius-base);
+
+	background: var(--content-background);
+}
+
+.header {
+	display: flex;
+	gap: var(--spacing-xs);
+	align-items: center;
+	justify-content: space-between;
+}
+
+.title {
+	margin: 0;
+}
+
+/* MARK: Status */
+.status {
+	composes: composable-subheader-font from global;
+	padding: var(--spacing-xxs) var(--spacing-xs);
+	border-radius: var(--border-radius-xs);
+	color: var(--inverted-text-color);
+}
+
+.neutral {
+	background: var(--secondary-text-color);
+}
+
+.active {
+	background: var(--info);
+}
+
+.success {
+	background: var(--success);
+}
+
+.error {
+	background: var(--error);
+}
+
+/* MARK: Facts */
+.facts {
+	display: grid;
+	grid-template-columns: max-content 1fr;
+	gap: var(--spacing-xxs) var(--spacing-s);
+	margin: 0;
+}
+
+.label {
+	color: var(--secondary-text-color);
+}
+
+.value {
+	margin: 0;
+}
+
+.progress {
+	display: block;
+	width: 100%;
+	margin-top: var(--spacing-xxs);
+}
+
+.reason {
+	margin: 0;
+	padding: var(--spacing-xs);
+	border-left: 0.3rem solid var(--error);
+
+	white-space: pre-wrap;
+
+	background: var(--secondary-button-color);
+}
+
+.actions {
+	display: flex;
+	justify-content: flex-end;
+}

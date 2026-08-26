@@ -1,4 +1,4 @@
-import { cp, mkdir, rm, stat } from 'node:fs/promises'
+import { cp, mkdir, rm, stat, writeFile } from 'node:fs/promises'
 import { join } from 'node:path'
 
 import { exec, git } from '@mf/harness'
@@ -9,6 +9,21 @@ const gitIdentity = {
 	GIT_COMMITTER_NAME: 'Mjukvaruhuset build',
 	GIT_COMMITTER_EMAIL: 'build@mjukvaruhuset.se',
 }
+
+/** The template sits inside our monorepo and inherits its .gitignore — the customer repo needs its own */
+const defaultGitignore = `node_modules
+dist
+dist-ssr
+coverage
+cdk.out
+*.log
+*.local
+.env
+.env.*
+!.env.example
+!apps/app/.env*
+.DS_Store
+`
 
 const exists = (path: string) =>
 	stat(path).then(
@@ -24,12 +39,18 @@ const exists = (path: string) =>
  */
 export const seedRepo = async (templateDir: string, workDir: string, jobId: string) => {
 	const repoDir = join(workDir, 'repo')
+	const gitDir = join(templateDir, '.git')
 	await rm(workDir, { recursive: true, force: true })
 	await mkdir(workDir, { recursive: true })
 	await cp(templateDir, repoDir, {
 		recursive: true,
-		filter: source => !source.includes(`${templateDir}/.git`),
+		// Skip only a nested .git directory — not .gitignore and friends
+		filter: source => source !== gitDir && !source.startsWith(`${gitDir}/`),
 	})
+
+	if (!(await exists(join(repoDir, '.gitignore')))) {
+		await writeFile(join(repoDir, '.gitignore'), defaultGitignore)
+	}
 
 	const env = gitIdentity
 	await git(['init', '-q', '-b', 'main'], { cwd: repoDir, env })
