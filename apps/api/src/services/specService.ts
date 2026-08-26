@@ -3,7 +3,6 @@ import { createSpecEngine, estimatePrice } from '@mf/harness'
 import { isSpecComplete } from '@mf/models'
 
 import { EntityInvalid, EntityNotFound } from '#/lib/entityError.ts'
-import { storeCollections } from '#/plugins/store.ts'
 
 import type { FastifyInstance, FastifyPluginAsync } from 'fastify'
 import type { BackendSession, ChatMessage, SpecDraft } from '@mf/models'
@@ -24,8 +23,6 @@ declare module 'fastify' {
 	}
 }
 
-const collection = storeCollections.specs
-
 export const createEmptyDraft = (orderId: string, orgId?: string): SpecDraft => ({
 	orderId,
 	orgId,
@@ -42,11 +39,11 @@ const chatMessage = (role: ChatMessage['role'], content: string): ChatMessage =>
 })
 
 const plugin: FastifyPluginAsync = async app => {
-	const { store, anthropic, secrets } = app
+	const { db, anthropic, secrets } = app
 	const engine = createSpecEngine({ client: anthropic, model: secrets.specModel })
 
 	const get: FastifyInstance['specService']['get'] = async (orderId, session) => {
-		const existing = await store.get<SpecDraft>(collection, orderId)
+		const existing = await db.orders.get(orderId)
 		if (existing) {
 			if (session.role !== 'admin' && existing.orgId !== session.orgId) {
 				throw new EntityNotFound('spec', orderId)
@@ -54,8 +51,7 @@ const plugin: FastifyPluginAsync = async app => {
 			return existing
 		}
 		const created = createEmptyDraft(orderId, session.orgId)
-		await store.put(collection, orderId, created)
-		return created
+		return db.orders.upsert(created, session.userId)
 	}
 
 	app.decorate('specService', {
@@ -78,8 +74,10 @@ const plugin: FastifyPluginAsync = async app => {
 					chatMessage('assistant', turn.assistantMessage),
 				],
 			}
-			await store.put(collection, orderId, updated)
-			return updated
+			// The engine call takes seconds: a freeze that landed meanwhile must win, not be undone
+			const stored = await db.orders.updateUnlessFrozen(updated)
+			if (!stored) throw new EntityInvalid('spec', orderId)
+			return stored
 		},
 		freeze: async (orderId, session) => {
 			const draft = await get(orderId, session)
@@ -95,13 +93,12 @@ const plugin: FastifyPluginAsync = async app => {
 				priceSek: price.priceSek,
 				frozenAt: new Date().toISOString(),
 			}
-			await store.put(collection, orderId, frozen)
-			return frozen
+			return db.orders.upsert(frozen)
 		},
 	})
 }
 
 export default fp(plugin, {
 	name: '#internal/specService',
-	dependencies: ['#internal/store', '#internal/anthropic', '#internal/secrets'],
+	dependencies: ['#internal/db', '#internal/anthropic', '#internal/secrets'],
 })

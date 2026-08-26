@@ -2,7 +2,11 @@ import { decodeProtectedHeader, jwtVerify } from 'jose'
 
 import { EntityInvalid } from '#/lib/entityError.ts'
 import { createMockUser } from '#/services/__mocks__/userService.ts'
-import { magicLinkRateLimit, magicLinkTtlMinutes } from '#/services/authService.ts'
+import {
+	magicLinkRateLimit,
+	magicLinkTtlMinutes,
+	pruneIntervalMs,
+} from '#/services/authService.ts'
 import { hashToken } from '#/services/authService.utils.ts'
 
 import type { FastifyInstance } from 'fastify'
@@ -21,11 +25,32 @@ describe('Auth Service', () => {
 	}
 
 	beforeEach(async () => {
-		app = await createTestApp({ skipMock: ['#/services/authService.ts', '#/plugins/store.ts'] })
+		app = await createTestApp({ skipMock: '#/services/authService.ts' })
 	})
 
 	afterEach(() => {
 		vi.useRealTimers()
+	})
+
+	describe('housekeeping', () => {
+		it('Prunes expired links and tokens at boot and then on an interval', async () => {
+			// Arrange
+			vi.useFakeTimers({ toFake: ['Date', 'setInterval', 'clearInterval'] })
+			app = await createTestApp({ skipMock: '#/services/authService.ts' })
+			const prune = vi.spyOn(app.db.auth, 'prune')
+			await app.db.auth.insertMagicLink({
+				tokenHash: 'stale',
+				email,
+				expiresAt: new Date(Date.now() - 8 * 24 * 60 * 60 * 1000),
+			})
+
+			// Act
+			await vi.advanceTimersByTimeAsync(pruneIntervalMs)
+
+			// Assert
+			expect(prune).toHaveBeenCalledTimes(1)
+			await expect(app.db.auth.getMagicLink('stale')).resolves.toBeUndefined()
+		})
 	})
 
 	describe('requestMagicLink', () => {
@@ -44,8 +69,9 @@ describe('Auth Service', () => {
 					text: expect.stringContaining(`${app.secrets.portalUrl}/auth/callback?token=${token}`),
 				})
 			)
-			await expect(app.store.get('magicLinks', token)).resolves.toBeUndefined()
-			await expect(app.store.get('magicLinks', hashToken(token))).resolves.toEqual({
+			await expect(app.db.auth.getMagicLink(token)).resolves.toBeUndefined()
+			await expect(app.db.auth.getMagicLink(hashToken(token))).resolves.toEqual({
+				tokenHash: hashToken(token),
 				email,
 				createdAt: '2026-08-26T10:00:00.000Z',
 				expiresAt: `2026-08-26T10:${magicLinkTtlMinutes}:00.000Z`,
@@ -99,10 +125,12 @@ describe('Auth Service', () => {
 			})
 			expect(payload.exp! - payload.iat!).toBe(60 * 60)
 			expect(pair.refreshToken).toMatch(/^[A-Za-z0-9_-]{40,}$/)
-			await expect(app.store.get('refreshTokens', hashToken(pair.refreshToken))).resolves.toEqual({
+			await expect(app.db.auth.consumeRefreshToken(hashToken(pair.refreshToken))).resolves.toEqual({
+				tokenHash: hashToken(pair.refreshToken),
 				userId: user.id,
 				createdAt: expect.any(String),
 				expiresAt: expect.any(String),
+				revokedAt: expect.any(String),
 			})
 		})
 

@@ -3,7 +3,6 @@ import { SignJWT } from 'jose'
 
 import { EntityInvalid } from '#/lib/entityError.ts'
 import { authAlgorithm } from '#/plugins/authKeys.utils.ts'
-import { storeCollections } from '#/plugins/store.ts'
 import {
 	addDays,
 	addMinutes,
@@ -41,30 +40,14 @@ export const magicLinkTtlMinutes = 15
 export const magicLinkRateLimit = { max: 3, windowMinutes: 10 } as const
 export const accessTokenTtl = '1h'
 export const refreshTokenTtlDays = 30
-
-/** Stored per magic link, keyed by the sha256 of the token */
-export type StoredMagicLink = {
-	email: string
-	createdAt: string
-	expiresAt: string
-	usedAt?: string
-}
-
-/** Stored per refresh token, keyed by the sha256 of the token */
-export type StoredRefreshToken = {
-	userId: string
-	createdAt: string
-	expiresAt: string
-}
+/** Expired links and rotated tokens are pruned at boot and then hourly */
+export const pruneIntervalMs = 60 * 60 * 1000
 
 const plugin: FastifyPluginAsync = async app => {
-	const { store, secrets, authKeys, email: mailer, userService } = app
+	const { db, secrets, authKeys, email: mailer, userService } = app
 
-	const countRecentLinks = async (email: string, now: Date) => {
-		const since = addMinutes(now, -magicLinkRateLimit.windowMinutes)
-		const links = await store.list<StoredMagicLink>(storeCollections.magicLinks)
-		return links.filter(link => link.email === email && new Date(link.createdAt) > since).length
-	}
+	const countRecentLinks = (email: string, now: Date) =>
+		db.auth.countMagicLinksSince(email, addMinutes(now, -magicLinkRateLimit.windowMinutes))
 
 	const signAccessToken = (user: User) =>
 		new SignJWT({ email: user.email, name: user.name, role: user.role, orgId: user.orgId })
@@ -79,13 +62,23 @@ const plugin: FastifyPluginAsync = async app => {
 	const issueTokenPair = async (user: User): Promise<TokenPair> => {
 		const now = new Date()
 		const refreshToken = generateToken()
-		const stored: StoredRefreshToken = {
+		await db.auth.insertRefreshToken({
+			tokenHash: hashToken(refreshToken),
 			userId: user.id,
-			createdAt: now.toISOString(),
-			expiresAt: addDays(now, refreshTokenTtlDays).toISOString(),
-		}
-		await store.put(storeCollections.refreshTokens, hashToken(refreshToken), stored)
+			expiresAt: addDays(now, refreshTokenTtlDays),
+		})
 		return { token: await signAccessToken(user), refreshToken }
+	}
+
+	// Housekeeping: nothing else deletes magic_links / refresh_tokens rows (every request and
+	// every refresh inserts one). Failures are logged, never fatal.
+	const prune = () =>
+		db.auth.prune().catch((error: Error) => app.log.warn({ err: error }, 'Auth prune failed'))
+	if (db.available) {
+		await prune()
+		const timer = setInterval(prune, pruneIntervalMs)
+		timer.unref()
+		app.addHook('onClose', () => clearInterval(timer))
 	}
 
 	app.decorate('authService', {
@@ -99,37 +92,28 @@ const plugin: FastifyPluginAsync = async app => {
 			}
 
 			const token = generateToken()
-			const link: StoredMagicLink = {
+			await db.auth.insertMagicLink({
+				tokenHash: hashToken(token),
 				email,
-				createdAt: now.toISOString(),
-				expiresAt: addMinutes(now, magicLinkTtlMinutes).toISOString(),
-			}
-			await store.put(storeCollections.magicLinks, hashToken(token), link)
+				expiresAt: addMinutes(now, magicLinkTtlMinutes),
+			})
 
 			const url = buildMagicLink(secrets.portalUrl, token)
 			await mailer.send({ to: email, ...magicLinkEmail(url, secrets.portalUrl) })
 		},
 
 		verifyMagicLink: async token => {
-			const hash = hashToken(token)
-			const link = await store.get<StoredMagicLink>(storeCollections.magicLinks, hash)
-			if (!link || link.usedAt || isExpired(link.expiresAt)) {
-				throw new EntityInvalid('magicLink')
-			}
-			await store.put(storeCollections.magicLinks, hash, {
-				...link,
-				usedAt: new Date().toISOString(),
-			})
+			// Consuming is atomic (unknown/used → undefined); an expired link is consumed too
+			const link = await db.auth.consumeMagicLink(hashToken(token))
+			if (!link || isExpired(link.expiresAt)) throw new EntityInvalid('magicLink')
 
 			const user = await userService.findOrCreateByEmail(link.email)
 			return issueTokenPair(user)
 		},
 
 		refresh: async refreshToken => {
-			const hash = hashToken(refreshToken)
-			const stored = await store.get<StoredRefreshToken>(storeCollections.refreshTokens, hash)
-			// Rotation: the presented token is consumed whether or not it is still valid
-			await store.delete(storeCollections.refreshTokens, hash)
+			// Rotation: the presented token is revoked whether or not it is still valid
+			const stored = await db.auth.consumeRefreshToken(hashToken(refreshToken))
 			if (!stored || isExpired(stored.expiresAt)) throw new EntityInvalid('refreshToken')
 
 			const user = await userService.get(stored.userId)
@@ -137,7 +121,7 @@ const plugin: FastifyPluginAsync = async app => {
 		},
 
 		logout: async refreshToken => {
-			await store.delete(storeCollections.refreshTokens, hashToken(refreshToken))
+			await db.auth.revokeRefreshToken(hashToken(refreshToken))
 		},
 	})
 }
@@ -145,7 +129,7 @@ const plugin: FastifyPluginAsync = async app => {
 export default fp(plugin, {
 	name: '#internal/authService',
 	dependencies: [
-		'#internal/store',
+		'#internal/db',
 		'#internal/secrets',
 		'#internal/authKeys',
 		'#internal/email',

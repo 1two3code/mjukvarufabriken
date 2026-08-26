@@ -8,7 +8,7 @@ describe('User Service', () => {
 	let app: FastifyInstance
 
 	beforeEach(async () => {
-		app = await createTestApp({ skipMock: ['#/services/userService.ts', '#/plugins/store.ts'] })
+		app = await createTestApp({ skipMock: '#/services/userService.ts' })
 	})
 
 	describe('orgNameFromEmail', () => {
@@ -46,11 +46,38 @@ describe('User Service', () => {
 
 			// Act
 			const second = await app.userService.findOrCreateByEmail('ANNA@acme.se')
-			const orgs = await app.store.list('orgs')
+			const orgs = await app.db.users.listOrgs()
 
 			// Assert
 			expect(second).toEqual(first)
 			expect(orgs).toHaveLength(1)
+		})
+
+		it('Returns the winner when two first sign-ins for the same email race', async () => {
+			// Arrange — both requests miss the lookup before either has inserted
+			const findByEmail = vi.spyOn(app.db.users, 'findByEmail')
+			findByEmail.mockResolvedValueOnce(undefined).mockResolvedValueOnce(undefined)
+
+			// Act
+			const [first, second] = await Promise.all([
+				app.userService.findOrCreateByEmail('anna@acme.se'),
+				app.userService.findOrCreateByEmail('anna@acme.se'),
+			])
+			const orgs = await app.db.users.listOrgs()
+
+			// Assert — one user, one org, no 23505 leaking out as a 500
+			expect(second).toEqual(first)
+			expect(orgs).toHaveLength(1)
+		})
+
+		it('Rethrows insert failures that are not a unique violation', async () => {
+			// Arrange
+			vi.spyOn(app.db.users, 'insertWithOrg').mockRejectedValue(new Error('connection reset'))
+
+			// Act & Assert
+			await expect(app.userService.findOrCreateByEmail('anna@acme.se')).rejects.toThrow(
+				'connection reset'
+			)
 		})
 
 		it('Grants the admin role to emails in AUTH_ADMIN_EMAILS', async () => {
@@ -70,10 +97,8 @@ describe('User Service', () => {
 	describe('get / getOrg', () => {
 		it('Returns stored entities and throws EntityNotFound otherwise', async () => {
 			// Arrange
-			const user = createMockUser()
-			const org = createMockOrg()
-			await app.store.put('users', user.id, user)
-			await app.store.put('orgs', org.id, org)
+			const org = await app.db.users.insertOrg({ name: createMockOrg().name })
+			const user = await app.db.users.insert({ ...createMockUser(), orgId: org.id })
 
 			// Act & Assert
 			await expect(app.userService.get(user.id)).resolves.toEqual(user)

@@ -1,53 +1,40 @@
 import fp from 'fastify-plugin'
 import { GetSecretValueCommand, SecretsManagerClient } from '@aws-sdk/client-secrets-manager'
 import {
-	appendEvent,
 	connectionStringFromSecret,
 	createDb,
-	getJob,
-	insertJob,
-	listEvents,
-	listJobs,
+	createMemoryRepositories,
+	createPostgresRepositories,
 	migrate,
-	updateJob,
 } from '@mf/db'
+import { tryCatch } from '@mf/utils/function'
 
-import type { FastifyInstance, FastifyPluginAsync } from 'fastify'
-import type { DatabaseSecret, Db, JobUpdate, NewJob } from '@mf/db'
-import type { Job, JobEvent, NewJobEvent } from '@mf/models'
+import type { FastifyPluginAsync } from 'fastify'
+import type { DatabaseSecret, Repositories } from '@mf/db'
 
 declare module 'fastify' {
 	interface FastifyInstance {
 		/**
-		 * Postgres via @mf/db. `available` is false when neither `DATABASE_URL` nor
-		 * `DATABASE_SECRET_ARN` is set — the api still boots and job routes fail per request.
-		 * Only the job tables live here so far; orders/specs/users move over in M6.
+		 * The repositories from @mf/db (`jobs`, `orders`, `users`, `auth`). Postgres-backed when
+		 * `DATABASE_URL` or `DATABASE_SECRET_ARN` is set, otherwise the in-memory implementation
+		 * (local dev without docker, tests) — same interface, everything lost on restart.
 		 */
-		db: {
+		db: Repositories & {
+			/** False only when a database is configured but cannot be used (see `error`) */
 			available: boolean
-			/** Set when a database is configured but its migrations failed — /health reports 503 */
+			backend: 'postgres' | 'memory'
+			/**
+			 * Set when a database is configured but cannot be used (secret unresolvable, migrations
+			 * failed) — /health reports 503
+			 */
 			error?: string
-			jobs: {
-				insert: (job: NewJob) => Promise<Job>
-				get: (id: string) => Promise<Job | undefined>
-				list: (filter?: { orderId?: string; orgId?: string }) => Promise<Job[]>
-				update: (id: string, update: JobUpdate) => Promise<Job | undefined>
-				appendEvent: (jobId: string, event: NewJobEvent) => Promise<JobEvent>
-				listEvents: (jobId: string, afterId?: number) => Promise<JobEvent[]>
-			}
 		}
 	}
 }
 
-export class DatabaseNotConfigured extends Error {
-	constructor() {
-		super('Database is not configured (DATABASE_URL / DATABASE_SECRET_ARN)')
-	}
-}
-
 export class DatabaseUnavailable extends Error {
-	constructor(cause: Error) {
-		super(`Database unavailable: migrations failed (${cause.message})`, { cause })
+	constructor(reason: 'migrations failed' | 'secret unresolvable', cause: Error) {
+		super(`Database unavailable: ${reason} (${cause.message})`, { cause })
 	}
 }
 
@@ -65,40 +52,64 @@ const resolveConnectionString = async () => {
 	}
 }
 
-const createJobsRepository = (db: Db) => ({
-	insert: (job: NewJob) => insertJob(db, job),
-	get: (id: string) => getJob(db, id),
-	list: (filter?: { orderId?: string; orgId?: string }) => listJobs(db, filter),
-	update: (id: string, update: JobUpdate) => updateJob(db, id, update),
-	appendEvent: (jobId: string, event: NewJobEvent) => appendEvent(db, jobId, event),
-	listEvents: (jobId: string, afterId?: number) => listEvents(db, jobId, afterId),
-})
-
-/** Every repository call rejects with the given error */
-const unavailableRepository = (error: () => Error): FastifyInstance['db']['jobs'] => {
+/** Every repository method rejects with the given error */
+const unavailableRepositories = (error: () => Error): Repositories => {
 	const reject = () => Promise.reject(error())
+	const repository = <T extends object>(keys: (keyof T)[]) =>
+		Object.fromEntries(keys.map(key => [key, reject])) as T
 	return {
-		insert: reject,
-		get: reject,
-		list: reject,
-		update: reject,
-		appendEvent: reject,
-		listEvents: reject,
+		jobs: repository(['insert', 'get', 'list', 'update', 'appendEvent', 'listEvents']),
+		orders: repository(['get', 'list', 'upsert', 'updateUnlessFrozen']),
+		users: repository([
+			'get',
+			'findByEmail',
+			'insert',
+			'insertWithOrg',
+			'getOrg',
+			'insertOrg',
+			'listOrgs',
+		]),
+		auth: repository([
+			'insertMagicLink',
+			'getMagicLink',
+			'consumeMagicLink',
+			'countMagicLinksSince',
+			'insertRefreshToken',
+			'consumeRefreshToken',
+			'revokeRefreshToken',
+			'prune',
+		]),
 	}
 }
 
-const plugin: FastifyPluginAsync = async app => {
-	const connectionString = await resolveConnectionString().catch(error => {
-		app.log.warn({ err: error }, 'Could not resolve the database secret')
-		return undefined
+/** Decorates `app.db` with repositories that reject, so the failure surfaces on every call */
+const decorateUnavailable = (
+	app: Parameters<FastifyPluginAsync>[0],
+	reason: 'migrations failed' | 'secret unresolvable',
+	cause: Error
+) => {
+	app.decorate('db', {
+		available: false,
+		backend: 'postgres',
+		error: cause.message,
+		...unavailableRepositories(() => new DatabaseUnavailable(reason, cause)),
 	})
+}
+
+const plugin: FastifyPluginAsync = async app => {
+	// A configured but unreadable secret is a failure, never a reason to fall back to memory:
+	// a task running on RAM behind a healthy ALB would lose logins and specs at the next restart
+	const [secretError, connectionString] = await tryCatch(resolveConnectionString())
+	if (secretError) {
+		app.log.error({ err: secretError }, 'Could not resolve the database secret — database unavailable')
+		return decorateUnavailable(app, 'secret unresolvable', secretError)
+	}
 
 	if (!connectionString) {
-		app.log.warn('Database not configured — job routes unavailable')
-		app.decorate('db', {
-			available: false,
-			jobs: unavailableRepository(() => new DatabaseNotConfigured()),
-		})
+		app.log.warn(
+			'Database not configured (DATABASE_URL / DATABASE_SECRET_ARN) — using the in-memory repositories, data is lost on restart'
+		)
+		app.decorate('db', { available: true, backend: 'memory', ...createMemoryRepositories() })
 		return
 	}
 
@@ -106,21 +117,17 @@ const plugin: FastifyPluginAsync = async app => {
 	app.addHook('onClose', () => db.close())
 	// RDS lives in isolated subnets, so the api applies pending migrations itself at boot
 	// (idempotent, serialised by an advisory lock, tracked in schema_migrations). A failure is
-	// never masked: the repository becomes unavailable and /health reports 503, so a rollout
-	// with a broken migration cannot pass as healthy while every job route 500s.
+	// never masked: the repositories become unavailable and /health reports 503, so a rollout
+	// with a broken migration cannot pass as healthy while every route 500s.
 	try {
 		const result = await migrate(db)
 		if (result.applied.length) app.log.info({ applied: result.applied }, 'Migrations applied')
 	} catch (error) {
 		app.log.error({ err: error }, 'Could not run database migrations — database unavailable')
-		app.decorate('db', {
-			available: false,
-			error: (error as Error).message,
-			jobs: unavailableRepository(() => new DatabaseUnavailable(error as Error)),
-		})
-		return
+		return decorateUnavailable(app, 'migrations failed', error as Error)
 	}
-	app.decorate('db', { available: true, jobs: createJobsRepository(db) })
+	app.log.info('Database: Postgres (migrations up to date)')
+	app.decorate('db', { available: true, backend: 'postgres', ...createPostgresRepositories(db) })
 }
 
 export default fp(plugin, { name: '#internal/db', dependencies: ['#internal/secrets'] })

@@ -1,7 +1,7 @@
 import fp from 'fastify-plugin'
+import { tryCatch } from '@mf/utils/function'
 
 import { EntityNotFound } from '#/lib/entityError.ts'
-import { storeCollections } from '#/plugins/store.ts'
 import { isAdminEmail, normalizeEmail, orgNameFromEmail } from '#/services/userService.utils.ts'
 
 import type { FastifyPluginAsync } from 'fastify'
@@ -22,29 +22,21 @@ declare module 'fastify' {
 	}
 }
 
+const isUniqueViolation = (error: unknown) => (error as { code?: string }).code === '23505'
+
 const plugin: FastifyPluginAsync = async app => {
-	const { store, secrets } = app
+	const { db, secrets } = app
 
-	const findByEmail = async (email: string) => {
-		const normalized = normalizeEmail(email)
-		const users = await store.list<User>(storeCollections.users)
-		return users.find(user => user.email === normalized)
-	}
-
-	const createOrg = async (name: string) => {
-		const org: Org = { id: crypto.randomUUID(), name, createdAt: new Date().toISOString() }
-		await store.put(storeCollections.orgs, org.id, org)
-		return org
-	}
+	const findByEmail = (email: string) => db.users.findByEmail(normalizeEmail(email))
 
 	app.decorate('userService', {
 		get: async id => {
-			const user = await store.get<User>(storeCollections.users, id)
+			const user = await db.users.get(id)
 			if (!user) throw new EntityNotFound('user', id)
 			return user
 		},
 		getOrg: async id => {
-			const org = await store.get<Org>(storeCollections.orgs, id)
+			const org = await db.users.getOrg(id)
 			if (!org) throw new EntityNotFound('org', id)
 			return org
 		},
@@ -54,21 +46,27 @@ const plugin: FastifyPluginAsync = async app => {
 			if (existing) return existing
 
 			const normalized = normalizeEmail(email)
-			const org = await createOrg(orgNameFromEmail(normalized))
-			const user: User = {
-				id: crypto.randomUUID(),
-				email: normalized,
-				role: isAdminEmail(normalized, secrets.authAdminEmails) ? 'admin' : 'user',
-				orgId: org.id,
-				createdAt: new Date().toISOString(),
-			}
-			await store.put(storeCollections.users, user.id, user)
-			return user
+			const [error, created] = await tryCatch(
+				db.users.insertWithOrg(
+					{
+						email: normalized,
+						role: isAdminEmail(normalized, secrets.authAdminEmails) ? 'admin' : 'user',
+					},
+					{ name: orgNameFromEmail(normalized) }
+				)
+			)
+			if (!error) return created
+			// Two first sign-ins for the same email raced (two magic links, a retried verify):
+			// the other one won, so return what it created
+			if (!isUniqueViolation(error)) throw error
+			const winner = await findByEmail(normalized)
+			if (!winner) throw error
+			return winner
 		},
 	})
 }
 
 export default fp(plugin, {
 	name: '#internal/userService',
-	dependencies: ['#internal/store', '#internal/secrets'],
+	dependencies: ['#internal/db', '#internal/secrets'],
 })

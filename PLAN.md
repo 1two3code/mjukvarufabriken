@@ -36,7 +36,7 @@ Everything that needs someone else's approval lives in TODO-EXTERNAL.md and is N
 - [x] Spec chat → structured spec (JSON schema: goal, users, features, non-goals, acceptance criteria, stack constraints) — 2026-08-26 (`SpecSchema` in @mf/models; `@mf/harness` spec engine = one forced strict tool call per turn, model `claude-sonnet-5` via `SPEC_MODEL`; api `/bff/orders/:orderId/spec`; portal `/orders/:orderId/spec`)
 - [x] Clarification loop: agent asks questions until spec passes a completeness check — 2026-08-26 (`isSpecComplete` deterministic; unit tests drive question → answer → complete with a fake client. Live-model behaviour UNVERIFIED until `ANTHROPIC_API_KEY` is set — run `npm run spec:demo`)
 - [x] Price estimator from spec (size class S/M/L → fixed price) — 2026-08-26 (`priceEstimator.ts`, keyword rules sv+en, 10 unit tests)
-- [x] Spec frozen + signed off in portal before build — 2026-08-26 (freeze route requires completeness, fixes size + price + `frozenAt`; portal confirm dialog; in-memory store — Postgres in M3/M6)
+- [x] Spec frozen + signed off in portal before build — 2026-08-26 (freeze route requires completeness, fixes size + price + `frozenAt`; portal confirm dialog; drafts persisted in Postgres `orders` since 2026-08-27 — `packages/db/migrations/0004`, in-memory fallback without `DATABASE_URL`)
 
 ### M3 — Orchestrator + sandbox
 - [ ] Job = container on Fargate, receives spec + budget, no customer secrets inside — code + image + infra deployed to dev 2026-08-26 (`apps/job`, job image + egress-proxy sidecar in `resources-dev`), but NO Fargate run through the api yet — run `scratchpad/dev-e2e.sh` flow or `POST /bff/orders/:id/jobs` on dev to verify
@@ -57,9 +57,10 @@ Everything that needs someone else's approval lives in TODO-EXTERNAL.md and is N
 - [ ] Deliverable bundle in S3 (repo zip, docs, test report)
 
 ### M6 — Portal + payment
-- [x] Magic-link auth, org/user model — 2026-08-26, login verified end-to-end on dev by Hasse (pulled forward; in-memory store until Postgres. Api is its own EdDSA token issuer: `/bff/auth/{magic-link,verify,refresh,logout}`, `/.well-known/jwks.json`; `User`/`Org` models, org named after email domain, admins via `AUTH_ADMIN_EMAILS`; portal email form → `/auth/callback`; infra: `auth-jwt-private-key` secret, SES identity + DKIM, dev uses the `log` email transport until SES production access)
+- [x] Magic-link auth, org/user model — 2026-08-26, login verified end-to-end on dev by Hasse (pulled forward; users/orgs/magic links/refresh tokens persisted in Postgres since 2026-08-27 — `0004_orders_users_auth.sql`, in-memory fallback without `DATABASE_URL`. Api is its own EdDSA token issuer: `/bff/auth/{magic-link,verify,refresh,logout}`, `/.well-known/jwks.json`; `User`/`Org` models, org named after email domain, admins via `AUTH_ADMIN_EMAILS`; portal email form → `/auth/callback`; infra: `auth-jwt-private-key` secret, SES identity + DKIM, dev uses the `log` email transport until SES production access)
 - [ ] Sign in with GitHub (decided 2026-08-26): OAuth App → `/bff/auth/github` + callback issuing the same EdDSA session tokens, `githubId`/`githubLogin` on `User`, account linking by verified email; magic link stays as fallback. Doubles as the customer's GitHub identity for M5 repo transfer. Same plugin shape later for Google / BankID. Needs the OAuth App client id/secret (TODO-EXTERNAL)
 - [ ] Order flow: new order → spec chat → freeze → Stripe deposit → build → deliver → Stripe balance
+  - 2026-08-27 (persistence review): `orders.id` is a client-chosen text key in a global namespace (`specService.get` creates the row for the first org that asks; the portal's shared `demo` id therefore belongs to whichever org opens it first, and the param has no format/length limit). Fix belongs to this box: the api mints order ids (uuid, `POST /bff/orders`), the portal stops using `demo`, and `jobs_one_active_per_order` keeps working unchanged.
 - [ ] Live job progress, deliverables, invoices (Stripe-hosted), token usage
 - [ ] Admin view: all jobs, budgets, kill switch
 

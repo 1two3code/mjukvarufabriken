@@ -16,7 +16,20 @@ declare module 'fastify' {
 	}
 }
 
-const collection = 'items'
+/**
+ * The Item demo is a pattern reference (see apps/portal), not a product entity, so it keeps
+ * a tiny in-memory map instead of a Postgres table. Lost on restart.
+ */
+const createItemStore = () => {
+	const items = new Map<string, Item>()
+	return {
+		get: async (id: string) => structuredClone(items.get(id)),
+		list: async () => [...items.values()].map(item => structuredClone(item)),
+		put: async (item: Item) => {
+			items.set(item.id, structuredClone(item))
+		},
+	}
+}
 
 const matchesFilter = (item: Item, filter: ItemQuery['GetItems']) => {
 	const matchesStatus = !filter.status || item.status === filter.status
@@ -26,7 +39,7 @@ const matchesFilter = (item: Item, filter: ItemQuery['GetItems']) => {
 }
 
 const plugin: FastifyPluginAsync = async app => {
-	const { store } = app
+	const store = createItemStore()
 
 	app.decorate('itemService', {
 		create: async item => {
@@ -36,24 +49,24 @@ const plugin: FastifyPluginAsync = async app => {
 				status: 'draft',
 				createdAt: new Date().toISOString(),
 			}
-			await store.put(collection, newItem.id, newItem)
+			await store.put(newItem)
 			return newItem.id
 		},
 		find: async filter => {
-			const items = await store.list<Item>(collection)
+			const items = await store.list()
 			if (!filter) return items
 			return items.filter(item => matchesFilter(item, filter))
 		},
 		get: async id => {
-			const item = await store.get<Item>(collection, id)
+			const item = await store.get(id)
 			if (!item) throw new EntityNotFound('item', id)
 			return item
 		},
 		update: async (id, updates) => {
 			const item = await app.itemService.get(id)
-			await store.put(collection, id, { ...item, ...updates })
+			await store.put({ ...item, ...updates })
 		},
 	})
 }
 
-export default fp(plugin, { name: '#internal/itemService', dependencies: ['#internal/store'] })
+export default fp(plugin, { name: '#internal/itemService' })

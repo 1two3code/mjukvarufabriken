@@ -1,5 +1,3 @@
-import { DatabaseNotConfigured } from '#/plugins/db.ts'
-
 import type { FastifyInstance } from 'fastify'
 import type * as mfDb from '@mf/db'
 
@@ -33,18 +31,29 @@ describe('Db plugin (db)', () => {
 		await app?.close()
 	})
 
-	it('Boots without a database and rejects every repository call', async () => {
+	it('Falls back to the in-memory repositories without a database', async () => {
 		// Arrange
 		vi.stubEnv('DATABASE_URL', '')
 		vi.stubEnv('DATABASE_SECRET_ARN', '')
 
 		// Act
 		app = await createTestApp({ skipMock: '#/plugins/db.ts' })
+		const org = await app.db.users.insertOrg({ name: 'acme.se' })
+		const draft = await app.db.orders.upsert({
+			orderId: 'order-1',
+			orgId: org.id,
+			status: 'drafting',
+			spec: {},
+			messages: [],
+			openQuestions: [],
+		})
 
 		// Assert
-		expect(app.db.available).toBe(false)
-		await expect(app.db.jobs.get('job-1')).rejects.toBeInstanceOf(DatabaseNotConfigured)
-		await expect(app.db.jobs.list()).rejects.toBeInstanceOf(DatabaseNotConfigured)
+		expect(app.db.available).toBe(true)
+		expect(app.db.backend).toBe('memory')
+		expect(migrateMock).not.toHaveBeenCalled()
+		await expect(app.db.orders.get('order-1')).resolves.toEqual(draft)
+		await expect(app.db.jobs.list()).resolves.toEqual([])
 	})
 
 	it('Creates a client from DATABASE_URL (lazy connection)', async () => {
@@ -56,6 +65,7 @@ describe('Db plugin (db)', () => {
 
 		// Assert
 		expect(app.db.available).toBe(true)
+		expect(app.db.backend).toBe('postgres')
 		expect(app.db.error).toBeUndefined()
 		expect(migrateMock).toHaveBeenCalledTimes(1)
 		expect(sendMock).not.toHaveBeenCalled()
@@ -72,6 +82,7 @@ describe('Db plugin (db)', () => {
 		// Assert
 		expect(app.db.available).toBe(false)
 		expect(app.db.error).toMatch(/syntax error/)
+		await expect(app.db.orders.get('order-1')).rejects.toThrow(/Database unavailable/)
 		const error = await app.db.jobs.get('job-1').catch((cause: Error) => cause)
 		expect(error).toMatchObject({
 			name: 'Error',
@@ -101,7 +112,7 @@ describe('Db plugin (db)', () => {
 		expect(sendMock).toHaveBeenCalledTimes(1)
 	})
 
-	it('Degrades to unavailable when the secret cannot be read', async () => {
+	it('Is unavailable (never silently in memory) when the configured secret cannot be read', async () => {
 		// Arrange
 		vi.stubEnv('DATABASE_URL', '')
 		vi.stubEnv('DATABASE_SECRET_ARN', 'arn:aws:secretsmanager:eu-north-1:1:secret:rds')
@@ -110,7 +121,17 @@ describe('Db plugin (db)', () => {
 		// Act
 		app = await createTestApp({ skipMock: '#/plugins/db.ts' })
 
-		// Assert
+		// Assert — a memory fallback here would pass health checks and lose every login and spec
 		expect(app.db.available).toBe(false)
+		expect(app.db.backend).toBe('postgres')
+		expect(app.db.error).toBe('AccessDenied')
+		expect(migrateMock).not.toHaveBeenCalled()
+		await expect(app.db.orders.get('order-1')).rejects.toThrow(
+			'Database unavailable: secret unresolvable (AccessDenied)'
+		)
+		await expect(
+			app.db.auth.insertMagicLink({ tokenHash: 'h', email: 'a@x.se', expiresAt: new Date() })
+		).rejects.toThrow(/Database unavailable/)
+		await expect(app.db.users.findByEmail('a@x.se')).rejects.toThrow(/Database unavailable/)
 	})
 })
