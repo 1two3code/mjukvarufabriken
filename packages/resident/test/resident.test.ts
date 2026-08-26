@@ -85,12 +85,15 @@ type SetupOptions = FakePortOptions & {
 	monthlyTokens?: number
 	taskTokens?: number
 	pausedByEnv?: boolean
+	/** Leave the models unset (the harness defaults apply) */
+	defaultModels?: boolean
 }
 
 const setup = ({
 	issues = [],
 	monthlyTokens = 100_000,
 	pausedByEnv,
+	defaultModels = false,
 	...portOptions
 }: SetupOptions = {}) => {
 	const store = createMemoryObjectStore()
@@ -110,8 +113,8 @@ const setup = ({
 		monthlyTokens,
 		task: { maxTokens: 10_000, maxDurationMinutes: 60, maxWorkers: 2 },
 		pausedByEnv,
-		planModel: 'claude-opus-4-1',
-		workerModel: 'claude-sonnet-5',
+		planModel: defaultModels ? undefined : 'claude-opus-4-1',
+		workerModel: defaultModels ? undefined : 'claude-sonnet-5',
 		killPollMs: 5,
 		now: () => now,
 		log: () => {},
@@ -210,6 +213,7 @@ describe('resident', () => {
 			detail: { count: 2, files: ['src/search.ts', 'src/search.test.ts'] },
 		})
 		expect(entries.find(entry => entry.type === 'command_run')?.detail).toEqual({
+			by: 'verify-gate',
 			commands: ['npm run lint', 'npm test'],
 			ok: true,
 			summary: 'lint + test green',
@@ -366,6 +370,120 @@ describe('resident', () => {
 		usageReporter.fail = true
 		await expect(resident.flushUsage()).resolves.toBeUndefined()
 		expect(store.objects.has(usageKey('2026-09-03'))).toBe(true)
+	})
+
+	it('Retries an issue once resident:failed is removed, and re-queues one stranded as resident:running', async () => {
+		// Arrange: #3 fails; #9 was left `resident:running` by a crashed resident
+		const { resident, github } = setup({
+			issues: [issue(3), issue(9, ['resident', 'resident:running'])],
+			fail: 'gate',
+		})
+		await resident.start()
+
+		// Act
+		const added = await resident.pollIssues()
+		const failed = await resident.runNext()
+
+		// Assert: the stranded issue is queued (label cleared, audited), and nothing twice
+		expect(added.map(task => task.issueNumber)).toEqual([3, 9])
+		expect(github.issues[1]!.labels).toEqual(['resident'])
+		expect(
+			(await resident.audit.read('2026-09-03')).find(entry => entry.type === 'task_requeued')
+				?.detail
+		).toEqual({ reason: 'stranded', issueNumber: 9 })
+		expect(failed!.issueNumber).toBe(3)
+		expect(await resident.pollIssues()).toEqual([])
+
+		// The customer removes `resident:failed` from #3: it is picked up again without a restart
+		github.issues[0]!.labels = ['resident']
+		expect((await resident.pollIssues()).map(task => task.issueNumber)).toEqual([3])
+		expect((await resident.status()).queued).toBe(2)
+	})
+
+	it('Stopping re-queues the task in flight instead of failing it, and resolves once it is out', async () => {
+		// Arrange
+		const { resident, github, auditTypes } = setup({ issues: [issue(4)], hold: true })
+		await resident.start()
+		await resident.pollIssues()
+		const run = resident.runNext()
+		while (!(await resident.status()).running) await new Promise(resolve => setTimeout(resolve, 1))
+
+		// Act
+		await resident.stop()
+		const task = await run
+
+		// Assert: back in the queue, label cleared, no failure comment, nothing new starts
+		expect(task).toMatchObject({ status: 'queued', issueNumber: 4 })
+		expect(github.issues[0]!.labels).toEqual(['resident'])
+		expect(github.comments).toEqual([])
+		expect(github.pullRequests).toEqual([])
+		expect(await auditTypes()).toContain('task_requeued')
+		expect(await auditTypes()).not.toContain('task_failed')
+		expect(await resident.runNext()).toBeUndefined()
+	})
+
+	it('Does not wedge when the usage meter cannot read the day: the task still runs and usage flushes later', async () => {
+		// Arrange: the usage object is unreadable when the task starts (the audit log uses put only for a new day)
+		const { resident, store, usageReporter } = setup()
+		await resident.start()
+		await resident.addTask({ title: 'Task', description: 'x' })
+		store.failing = 'get'
+
+		// Act
+		const task = await resident.runNext()
+		await expect(resident.flushUsage()).resolves.toBeUndefined()
+		store.failing = undefined
+		await resident.addTask({ title: 'Next', description: 'y' })
+		const next = await resident.runNext()
+		await resident.flushUsage()
+
+		// Assert: the first task failed cleanly, the resident was not wedged, the day is metered
+		expect(task!.status).toBe('failed')
+		expect(task!.reason).toContain('get usage/2026-09-03.json failed')
+		expect(next!.status).toBe('done')
+		expect((await resident.status()).running).toBeUndefined()
+		expect(usageReporter.records.at(-1)?.tasks).toEqual({
+			started: 1,
+			succeeded: 1,
+			failed: 0,
+			pullRequestsOpened: 1,
+		})
+	})
+
+	it('Pauses (fail closed) when an audit line cannot be written, and keeps the line for later', async () => {
+		// Arrange
+		const { resident, store, ports } = setup()
+		await resident.start()
+		await resident.addTask({ title: 'Task', description: 'x' })
+		store.failing = 'put'
+
+		// Act
+		const task = await resident.runNext()
+
+		// Assert: the task did not run, the resident is paused, the entries arrive once the store is back
+		expect(vi.mocked(ports.plan)).not.toHaveBeenCalled()
+		expect(task!.status).toBe('failed')
+		expect(resident.paused).toBe(true)
+		store.failing = undefined
+		await resident.audit.append('resumed', { by: 'test' })
+		expect((await resident.audit.read('2026-09-03')).map(entry => entry.type)).toEqual([
+			'resident_started',
+			'task_queued',
+			'task_started',
+			'task_failed',
+			'resumed',
+		])
+	})
+
+	it('Attributes usage to the harness default models when none are configured', async () => {
+		const { resident, store } = setup({ defaultModels: true })
+		await resident.start()
+		await resident.addTask({ title: 'Task', description: 'x' })
+		await resident.runNext()
+		await resident.flushUsage()
+		const record = JSON.parse(store.objects.get(usageKey('2026-09-03'))!)
+		expect(Object.keys(record.tokensByModel)).toEqual(['claude-sonnet-5'])
+		expect(record.tokensByModel['claude-sonnet-5'].budgetTokens).toBe(1550)
 	})
 
 	it('Keeps the audit object per day', async () => {

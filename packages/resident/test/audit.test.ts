@@ -65,6 +65,38 @@ describe('audit log', () => {
 		expect(entries.map(entry => entry.type)).toEqual(['paused', 'resumed'])
 		expect(await audit.read('2026-01-01')).toEqual([])
 	})
+
+	it('Rejects an append the store refuses, reports it, and writes the entry with the next one', async () => {
+		// Arrange
+		const store = createMemoryObjectStore()
+		const failures: string[] = []
+		const audit = createAuditLog({
+			store,
+			now: () => start,
+			onError: (error, entry) => failures.push(`${entry.type}: ${error.message}`),
+		})
+
+		// Act: the day object cannot be read, then cannot be written, then the store is back
+		store.failing = 'get'
+		await expect(audit.append('task_started', {}, 'a')).rejects.toThrow('get audit/')
+		expect(audit.unwritten()).toBe(1)
+		store.failing = 'put'
+		await expect(audit.append('planned', {}, 'a')).rejects.toThrow('put audit/')
+		expect(audit.unwritten()).toBe(0)
+		store.failing = undefined
+		await audit.append('pr_opened', {}, 'a')
+
+		// Assert: nothing was dropped, in order, and both failures were reported
+		expect(parseAuditLines(store.objects.get(auditKey('2026-09-03'))).map(e => e.type)).toEqual([
+			'task_started',
+			'planned',
+			'pr_opened',
+		])
+		expect(failures).toEqual([
+			'task_started: fake store: get audit/2026-09-03.jsonl failed',
+			'planned: fake store: put audit/2026-09-03.jsonl failed',
+		])
+	})
 })
 
 describe('monthly cap', () => {

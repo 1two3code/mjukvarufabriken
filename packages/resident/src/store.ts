@@ -54,17 +54,28 @@ export const createS3ObjectStore = (bucket: string, region?: string): ObjectStor
 	}
 }
 
-export type MemoryObjectStore = ObjectStore & { objects: Map<string, string> }
+export type MemoryObjectStore = ObjectStore & {
+	objects: Map<string, string>
+	/** Tests: while set, every `get` / `put` rejects (an S3 outage) */
+	failing?: 'get' | 'put' | 'all'
+}
 
 /** In-memory store for tests and `RESIDENT_DRY_RUN` (nothing survives a restart) */
 export const createMemoryObjectStore = (): MemoryObjectStore => {
 	const objects = new Map<string, string>()
-	return {
+	const fails = (operation: 'get' | 'put') =>
+		store.failing === operation || store.failing === 'all'
+	const store: MemoryObjectStore = {
 		objects,
-		get: async key => objects.get(key),
+		get: async key => {
+			if (fails('get')) throw new Error(`fake store: get ${key} failed`)
+			return objects.get(key)
+		},
 		put: async (key, body) => {
+			if (fails('put')) throw new Error(`fake store: put ${key} failed`)
 			objects.set(key, body)
 		},
 		list: async prefix => [...objects.keys()].filter(key => key.startsWith(prefix)).sort(),
 	}
+	return store
 }

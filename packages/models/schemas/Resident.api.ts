@@ -92,6 +92,7 @@ export const residentAuditType = [
 	'tokens',
 	'task_finished',
 	'task_failed',
+	'task_requeued',
 	'pr_opened',
 	'usage_reported',
 ] as const

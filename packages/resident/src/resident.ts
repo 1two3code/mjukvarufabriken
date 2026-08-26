@@ -1,7 +1,7 @@
 import { rm } from 'node:fs/promises'
 import { join } from 'node:path'
 
-import { exec, git, runJob } from '@mf/harness'
+import { exec, git, resolvePlanModel, resolveWorkerModel, runJob } from '@mf/harness'
 
 import { createAuditLog } from '#/audit.ts'
 import { createMonthlyCap } from '#/cap.ts'
@@ -57,8 +57,6 @@ export type ResidentOptions = {
 	log?: (message: string, extra?: Record<string, unknown>) => void
 }
 
-const unknownModel = 'unknown'
-
 /**
  * The resident: a queue of tasks (issues labelled `resident`, or `POST /tasks`) built one at a
  * time through the `@mf/harness` orchestrator in a fresh clone, each ending in a pull request.
@@ -84,21 +82,14 @@ export const createResident = ({
 	log = (message, extra) =>
 		console.log(JSON.stringify({ time: new Date().toISOString(), message, ...extra })),
 }: ResidentOptions) => {
-	const audit = createAuditLog({
-		store,
-		now,
-		log: entry => log(`audit ${entry.type}`, { taskId: entry.taskId, ...entry.detail }),
-	})
-	const cap = createMonthlyCap({ store, maxTokens: monthlyTokens, now })
-	const meter = createUsageMeter({ store, now })
-
 	const tasks: ResidentTask[] = []
-	const seenIssues = new Set<number>()
 	let paused = pausedByEnv
 	let running: ResidentTask | undefined
 	let capReachedAnnounced = false
 	/** Shutdown in progress: no new task, the running one is aborted (not persisted, unlike `paused`) */
 	let stopped = false
+	/** The build in flight, so a stop can wait for it to wind down */
+	let building: Promise<void> = Promise.resolve()
 
 	const iso = () => new Date(now()).toISOString()
 	const queued = () => tasks.filter(task => task.status === 'queued')
@@ -106,6 +97,27 @@ export const createResident = ({
 	// MARK: Pause
 
 	const persistPaused = () => store.put(pausedKey, JSON.stringify({ paused, changedAt: iso() }))
+
+	/**
+	 * Fail closed: an action whose audit line cannot be written is the last one — the resident
+	 * pauses (the kill switch aborts the task in flight) until someone resumes it. The entry
+	 * stays in memory and goes out with the next successful write.
+	 */
+	const auditWriteFailed = (error: Error, entry: { type: string }) => {
+		log('audit write failed — pausing', { type: entry.type, error: error.message })
+		if (paused) return
+		paused = true
+		void persistPaused().catch(() => {})
+	}
+
+	const audit = createAuditLog({
+		store,
+		now,
+		log: entry => log(`audit ${entry.type}`, { taskId: entry.taskId, ...entry.detail }),
+		onError: auditWriteFailed,
+	})
+	const cap = createMonthlyCap({ store, maxTokens: monthlyTokens, now })
+	const meter = createUsageMeter({ store, now })
 
 	const setPaused = async (next: boolean, by: string) => {
 		if (paused === next) return paused
@@ -127,7 +139,16 @@ export const createResident = ({
 		return task
 	}
 
-	/** Issues labelled `resident` that the resident has not touched yet */
+	/** The issue has a task of this process that is not over (queued, running, or done = PR opened) */
+	const hasLiveTask = (issueNumber: number) =>
+		tasks.some(task => task.issueNumber === issueNumber && task.status !== 'failed')
+
+	/**
+	 * Issues labelled `resident` that are not queued/running/done here and carry no
+	 * `resident:done` / `resident:failed` label (removing `resident:failed` retries the issue).
+	 * An issue still labelled `resident:running` without a task in this process was interrupted
+	 * by a crash or a stop: it is re-queued, so nothing is stranded behind a label.
+	 */
 	const pollIssues = async () => {
 		let issues
 		try {
@@ -138,35 +159,48 @@ export const createResident = ({
 		}
 		const fresh = issues.filter(
 			issue =>
-				!seenIssues.has(issue.number) &&
+				!hasLiveTask(issue.number) &&
 				!issue.labels.some(label =>
-					[residentLabels.running, residentLabels.done, residentLabels.failed].includes(
-						label as never
-					)
+					[residentLabels.done, residentLabels.failed].includes(label as never)
 				)
 		)
 		const added: ResidentTask[] = []
 		for (const issue of fresh) {
-			seenIssues.add(issue.number)
-			added.push(await enqueue(taskFromIssue(issue, now)))
+			const task = await enqueue(taskFromIssue(issue, now))
+			if (issue.labels.includes(residentLabels.running)) {
+				await audit.append(
+					'task_requeued',
+					{ reason: 'stranded', issueNumber: issue.number },
+					task.id
+				)
+				await github
+					.removeLabel(issue.number, residentLabels.running)
+					.catch(error => log('labelling issue failed', { error: (error as Error).message }))
+			}
+			added.push(task)
 		}
 		return added
 	}
 
 	// MARK: Build
 
-	const attribute = (model: string | undefined) => model || unknownModel
-
-	/** Ports with usage attributed to a model for the meter (the planner and the workers differ) */
+	/**
+	 * Ports with usage attributed to a model for the meter (the planner and the workers differ).
+	 * Unset models resolve the way the harness resolves them, so billing follows its defaults.
+	 */
 	const meteredPorts = (): OrchestratorPorts => {
 		const metered =
 			(model: string, onUsage: (usage: TokenUsage) => void) =>
 			(usage: TokenUsage): void => {
-				void meter.addTokens(model, usage)
+				meter
+					.addTokens(model, usage)
+					.catch(error => log('metering failed', { error: (error as Error).message }))
 				onUsage(usage)
 			}
-		const plan = (onUsage: (usage: TokenUsage) => void) => metered(attribute(planModel), onUsage)
-		const work = (onUsage: (usage: TokenUsage) => void) => metered(attribute(workerModel), onUsage)
+		const plan = (onUsage: (usage: TokenUsage) => void) =>
+			metered(resolvePlanModel(planModel), onUsage)
+		const work = (onUsage: (usage: TokenUsage) => void) =>
+			metered(resolveWorkerModel(workerModel), onUsage)
 		return {
 			plan: input => ports.plan({ ...input, onUsage: plan(input.onUsage) }),
 			runTask: input => ports.runTask({ ...input, onUsage: work(input.onUsage) }),
@@ -203,10 +237,16 @@ export const createResident = ({
 				return audit.append('worker', { event: type, ...payload }, task.id)
 			case 'gate': {
 				const report = payload as unknown as GateReport
+				// The gate's own commands; what the worker sessions run is not visible here
 				if (report.name === 'verify') {
 					await audit.append(
 						'command_run',
-						{ commands: ['npm run lint', 'npm test'], ok: report.ok, summary: report.summary },
+						{
+							by: 'verify-gate',
+							commands: ['npm run lint', 'npm test'],
+							ok: report.ok,
+							summary: report.summary,
+						},
 						task.id
 					)
 				}
@@ -279,26 +319,37 @@ export const createResident = ({
 		}
 	}
 
+	/** A task the stop interrupted goes back to the queue (the issue is re-polled after the restart) */
+	const requeue = async (task: ResidentTask) => {
+		task.status = 'queued'
+		task.reason = undefined
+		await audit.append('task_requeued', { reason: 'stopping', tokens: task.tokensUsed }, task.id)
+		if (task.issueNumber) {
+			await github
+				.removeLabel(task.issueNumber, residentLabels.running)
+				.catch(error => log('labelling issue failed', { error: (error as Error).message }))
+		}
+	}
+
 	const build = async (task: ResidentTask) => {
 		const remaining = await cap.remaining()
 		const maxTokens = Math.min(taskBudget.maxTokens, remaining)
 		task.status = 'running'
 		running = task
-		await meter.count('started')
-		await audit.append(
-			'task_started',
-			{ title: task.title, issueNumber: task.issueNumber, budgetTokens: maxTokens },
-			task.id
-		)
-		if (task.issueNumber) {
-			await github
-				.addLabels(task.issueNumber, [residentLabels.running])
-				.catch(error => log('labelling issue failed', { error: (error as Error).message }))
-		}
-
 		let tokensSeen = 0
 		const controller = new AbortController()
 		try {
+			await meter.count('started')
+			await audit.append(
+				'task_started',
+				{ title: task.title, issueNumber: task.issueNumber, budgetTokens: maxTokens },
+				task.id
+			)
+			if (task.issueNumber) {
+				await github
+					.addLabels(task.issueNumber, [residentLabels.running])
+					.catch(error => log('labelling issue failed', { error: (error as Error).message }))
+			}
 			const checkout = await workspace.prepare(task, controller.signal)
 			const outcome = await runJob(
 				{
@@ -339,6 +390,10 @@ export const createResident = ({
 			)
 			task.tokensUsed = outcome.tokensUsed
 
+			if (stopped && outcome.status === 'killed') {
+				await requeue(task)
+				return
+			}
 			if (outcome.status !== 'delivered') {
 				task.reason = outcome.reason ?? outcome.status
 				await finishTask(task, 'failed', {
@@ -379,7 +434,9 @@ export const createResident = ({
 			})
 		} catch (error) {
 			task.reason = (error as Error).message
-			await finishTask(task, 'failed', { reason: task.reason, tokens: task.tokensUsed })
+			await finishTask(task, 'failed', { reason: task.reason, tokens: task.tokensUsed }).catch(
+				failure => log('finishing task failed', { error: (failure as Error).message })
+			)
 		} finally {
 			running = undefined
 			await workspace.cleanup(task).catch(() => {})
@@ -406,26 +463,33 @@ export const createResident = ({
 			return undefined
 		}
 		capReachedAnnounced = false
-		await build(next)
+		building = build(next)
+		await building
 		return next
 	}
 
 	// MARK: Metering
 
-	/** Writes every touched day's record to the bucket and the factory; keeps the failures for the next round */
+	/** Writes every touched day's record to the bucket and the factory; a day that fails is retried next round */
 	const flushUsage = async () => {
 		const used = await cap.used()
 		for (const day of meter.days()) {
-			const record = buildUsageRecord({
-				installationId,
-				repository,
-				day,
-				usage: await meter.read(day),
-				monthlyCap: { tokens: monthlyTokens, usedTokens: used },
-				prices,
-				now,
-			})
-			await store.put(usageKey(day), JSON.stringify(record, null, '\t'))
+			let record
+			try {
+				record = buildUsageRecord({
+					installationId,
+					repository,
+					day,
+					usage: await meter.read(day),
+					monthlyCap: { tokens: monthlyTokens, usedTokens: used },
+					prices,
+					now,
+				})
+				await store.put(usageKey(day), JSON.stringify(record, null, '\t'))
+			} catch (error) {
+				log('writing usage failed', { day, error: (error as Error).message })
+				continue
+			}
 			try {
 				const response = await usageReporter.report(record)
 				if (response) {
@@ -479,8 +543,10 @@ export const createResident = ({
 		get paused() {
 			return paused
 		},
-		stop: () => {
+		/** No new task; the one in flight is aborted through the kill switch and re-queued. Resolves once it is */
+		stop: async () => {
 			stopped = true
+			await building.catch(() => {})
 		},
 		pause: (by = 'api') => setPaused(true, by),
 		resume: (by = 'api') => setPaused(false, by),

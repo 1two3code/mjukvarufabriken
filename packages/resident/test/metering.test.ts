@@ -139,4 +139,20 @@ describe('usage meter', () => {
 			(await restarted.read('2026-09-03')).tokensByModel['claude-opus-4-1']?.budgetTokens
 		).toBe(3)
 	})
+
+	it('Forgets a day whose read failed, so the next report loads it again', async () => {
+		// Arrange: the first touch of the day hits an S3 outage
+		const store = createMemoryObjectStore()
+		const meter = createUsageMeter({ store, now: () => noon })
+		store.failing = 'get'
+
+		// Act
+		await expect(meter.count('started')).rejects.toThrow('get usage/2026-09-03.json failed')
+		store.failing = undefined
+		await meter.count('started')
+
+		// Assert: the day is counted, not poisoned by the cached rejection
+		expect((await meter.read('2026-09-03')).tasks.started).toBe(1)
+		expect(meter.days()).toEqual(['2026-09-03'])
+	})
 })

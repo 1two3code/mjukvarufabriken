@@ -120,13 +120,20 @@ log('resident listening', {
 	monthlyTokens: config.monthlyTokens,
 })
 
+const sleep = (ms: number) => new Promise(resolve => setTimeout(resolve, ms))
+
+/** ECS gives the container `stopTimeout` (120 s) between SIGTERM and SIGKILL; leave a margin */
+const stopGraceMs = 100_000
+
 let stopping = false
+let tickInFlight: Promise<void> = Promise.resolve()
 const stop = async (signal: string) => {
 	if (stopping) return
 	stopping = true
 	log('stopping', { signal })
-	// A task in flight is aborted through the kill switch; the last usage record is flushed
-	resident.stop()
+	// The task in flight is aborted through the kill switch and re-queued (its issue keeps the
+	// `resident` label, loses `resident:running`), then the day's usage and audit lines are flushed
+	await Promise.race([resident.stop().then(() => tickInFlight), sleep(stopGraceMs)])
 	await resident.flushUsage().catch(() => {})
 	await resident.audit.flush()
 	await server.close()
@@ -135,12 +142,10 @@ const stop = async (signal: string) => {
 process.on('SIGTERM', () => void stop('SIGTERM'))
 process.on('SIGINT', () => void stop('SIGINT'))
 
-const sleep = (ms: number) => new Promise(resolve => setTimeout(resolve, ms))
 while (!stopping) {
-	try {
-		await resident.tick()
-	} catch (error) {
+	tickInFlight = resident.tick().catch((error: unknown) => {
 		log('tick failed', { error: (error as Error).message })
-	}
+	})
+	await tickInFlight
 	await sleep(config.pollIntervalMs)
 }

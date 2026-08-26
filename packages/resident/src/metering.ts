@@ -126,6 +126,11 @@ export const createUsageMeter = ({ store, now = Date.now }: UsageMeterOptions) =
 			.then(stored =>
 				stored ? dayUsageFromRecord(JSON.parse(stored) as ResidentUsageRecord) : emptyDayUsage()
 			)
+			.catch((error: unknown) => {
+				// A failed read must not poison the day: the next call loads again
+				if (days.get(day) === loading) days.delete(day)
+				throw error
+			})
 		days.set(day, loading)
 		return loading
 	}

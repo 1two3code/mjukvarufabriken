@@ -50,12 +50,19 @@ const readSecret = async (arn: string) => {
 	}
 }
 
-/** Raw string, or a single-key JSON object (how the CDK placeholders are created) */
+/** The key the CDK stack puts into every secret it generates as a placeholder (`infra/resident`) */
+export const placeholderSecretKey = 'placeholder'
+
+/**
+ * Raw string, or a single-key JSON object. A JSON object carrying `placeholder` is the value the
+ * CDK stack generated at deploy time and the customer has not replaced yet: not configured.
+ */
 export const parseSecretString = (value: string) => {
 	const trimmed = value.trim()
 	if (!trimmed.startsWith('{')) return trimmed
 	try {
 		const parsed = JSON.parse(trimmed) as Record<string, unknown>
+		if (placeholderSecretKey in parsed) return ''
 		const values = Object.values(parsed)
 		return values.length === 1 && typeof values[0] === 'string' ? values[0].trim() : trimmed
 	} catch {

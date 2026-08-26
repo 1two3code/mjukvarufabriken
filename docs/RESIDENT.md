@@ -25,7 +25,10 @@ POST /tasks {title, description} ┴─▶ queue ─▶ fresh clone ─▶ @mf/h
   criteria the gates prove (without a checklist the title is the one criterion).
 - **Labels** on the issue track progress: `resident` (queue) → `resident:running` →
   `resident:done` (with a comment linking the PR) or `resident:failed` (with the reason). An
-  issue that already carries a `resident:*` label is never picked up again.
+  issue carrying `resident:done` / `resident:failed` is not picked up again; remove
+  `resident:failed` to retry it (no restart needed). An issue still labelled `resident:running`
+  when the resident has no such task in flight (a crash, a redeploy) is re-queued on the next
+  poll (`task_requeued`), so nothing is stranded behind a label.
 - **Hard monthly token cap** (`RESIDENT_MONTHLY_TOKENS`, budget-weighted tokens, cache reads
   at 10 %): the month counter lives in the bucket (`months/<YYYY-MM>.json`), each task starts
   with a budget of `min(RESIDENT_TASK_TOKENS, what the month has left)` and the harness aborts it
@@ -38,10 +41,14 @@ POST /tasks {title, description} ┴─▶ queue ─▶ fresh clone ─▶ @mf/h
   written before the next action starts, and also in the container log. Types:
   `resident_started`, `paused`, `resumed`, `cap_reached`, `task_queued`, `task_started`,
   `planned` (the plan's steps), `worker` (each harness task started/finished/failed/merged),
-  `command_run` (the verify gate's `npm run lint` + `npm test`), `gate` (each M4 gate with
+  `command_run` (`by: verify-gate` — the gate's own `npm run lint` + `npm test`; commands the
+  worker sessions run are not visible to the resident, see below), `gate` (each M4 gate with
   tokens and summary), `tokens` (running totals), `files_changed` (paths the build touched),
-  `pr_opened`, `task_finished` / `task_failed`, `usage_reported`. `GET /audit?day=YYYY-MM-DD`
-  returns a day.
+  `pr_opened`, `task_finished` / `task_failed` / `task_requeued`, `usage_reported`.
+  `GET /audit?day=YYYY-MM-DD` returns a day. **Fail closed**: an audit line that cannot be
+  written to the bucket rejects the action, pauses the resident (the task in flight is aborted)
+  and is logged; the line stays in memory and goes out with the next successful write after a
+  `POST /resume`.
 - **Metering**: one record per UTC day (`usage/<day>.json` in the bucket, `ResidentUsageRecord`):
   tokens by model (all buckets + the budget-weighted total), task counts, and a cost estimate at
   Anthropic list price × 1.5. The same record is `POST`ed to the factory
@@ -64,19 +71,29 @@ All endpoints but `/health` require `Authorization: Bearer <admin-token>`.
 
 ### Security model
 
-- The container holds four secrets, read from Secrets Manager at start-up and then wiped from
-  its environment: the customer's Anthropic key, a GitHub token, the factory bearer, the admin
-  token. Worker sessions and the repo's own scripts inherit the sandboxed environment of
-  `@mf/harness` (`sandboxEnv` strips `*_SECRET_ARN`, `AWS_*`, `GITHUB_TOKEN`, `JOB_TOKEN`, …).
+- The container holds four secrets, read from Secrets Manager at start-up (only their ARNs are
+  in the task definition — nothing is injected by ECS, because the initial environment of pid 1
+  stays readable from `/proc` for the worker sessions, which share the container and its uid)
+  and then wiped from its environment: the customer's Anthropic key, a GitHub token, the
+  factory bearer, the admin token. Worker sessions and the repo's own scripts inherit the
+  sandboxed environment of `@mf/harness` (`sandboxEnv` strips `*_SECRET_ARN`, `AWS_*`,
+  `GITHUB_TOKEN`, `JOB_TOKEN`, …). Residual risk: the ECS task-role credential endpoint
+  (`AWS_CONTAINER_CREDENTIALS_RELATIVE_URI`) is in pid 1's environment and reachable from the
+  container, so a prompt-injected worker could obtain the task role — which is limited to
+  reading the four secrets and reading/putting (never deleting) the versioned bucket. Running
+  worker sessions under a separate uid is on the list below.
+- Until the customer fills a secret it holds a JSON placeholder the resident recognises as "not
+  configured" (a bare random string would pass for a credential): no GitHub token → the service
+  refuses to start with a clear message, no factory token → usage records stay in the bucket.
 - The GitHub token is used in the URL of the one `git clone` / `git push` process and for the
   REST calls; `origin` is reset to the plain URL right after the clone so the token never lands
   in `.git/config` inside the workspace the model sees.
-- The task role can read exactly those four secrets, read/write exactly the audit bucket, and
-  use ECS Exec — nothing else in the customer's account. The service is scoped to one repository
+- The task role can read exactly those four secrets, read and put (not delete) in exactly the
+  audit bucket, and use ECS Exec — nothing else in the customer's account. The service is scoped to one repository
   by `GITHUB_REPOSITORY`; the customer should issue a fine-grained token limited to that repo.
 - The control api is reachable only inside the VPC by default (`aws ecs execute-command` →
-  `wget` from the container, see below). `-c exposeApi=true` puts it behind a public ALB
-  (plain http; add an ACM certificate before using that with real traffic).
+  `wget` from the container, see below). `-c exposeApi=true -c certificateArn=<ACM arn>` puts it
+  behind a public ALB, HTTPS only (port 80 redirects); without a certificate the synth fails.
 
 ## Deploy (customer account)
 
@@ -135,9 +152,11 @@ Docker: `docker build -f packages/resident/Dockerfile .`
 | Remove | `npx cdk destroy -c repository=acme/shop` — the bucket (audit trail, usage records) is retained |
 | Lower the cap mid-month | redeploy with `-c monthlyTokens=…`; the month counter is kept, so a cap below what is already used stops the resident immediately |
 
-A stop (`SIGTERM`, deploy, scale to 0) aborts the running task through the kill switch, flushes
-the day's usage record and audit lines, and exits; the interrupted issue keeps
-`resident:running` and is not retried automatically — remove that label to re-queue it.
+A stop (`SIGTERM`, deploy, scale to 0) aborts the running task through the kill switch (within
+~10 s, inside the 120 s ECS stop timeout), re-queues it (`task_requeued`, `resident:running`
+removed so the issue is picked up again after the restart), flushes the day's usage record and
+audit lines, and exits. A plain crash leaves `resident:running` on the issue; the next poll
+re-queues it.
 
 ## Cost model
 
@@ -165,6 +184,7 @@ Paid by the customer directly:
   durable record. Issues survive a restart (re-polled), `POST /tasks` entries do not.
 - A per-file / per-command hook inside worker sessions: `files_changed` is the diff of the build,
   `command_run` covers the verify gate; commands the model runs inside its session are in the
-  Agent SDK transcript, not in the audit log.
+  Agent SDK transcript, not in the audit log (needs a PreToolUse hook in `@mf/harness`).
+- A separate uid for worker sessions (see the security model).
 - The image is built and pushed from the deploying machine; a published image in a registry
   would make the customer deploy Docker-free.
