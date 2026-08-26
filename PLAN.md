@@ -39,10 +39,10 @@ Everything that needs someone else's approval lives in TODO-EXTERNAL.md and is N
 - [x] Spec frozen + signed off in portal before build — 2026-08-26 (freeze route requires completeness, fixes size + price + `frozenAt`; portal confirm dialog; in-memory store — Postgres in M3/M6)
 
 ### M3 — Orchestrator + sandbox
-- [ ] Job = container on Fargate, receives spec + budget, no customer secrets inside
-- [ ] Plan → task DAG → parallel Agent SDK workers in git worktrees → merge
-- [ ] Hard token budget per job, kill switch, egress allowlist (npm, github, anthropic only)
-- [ ] Progress events streamed to DB (portal shows them live)
+- [ ] Job = container on Fargate, receives spec + budget, no customer secrets inside — PENDING FARGATE RUN
+- [x] Plan → task DAG → parallel Agent SDK workers in git worktrees → merge — 2026-08-26 (`@mf/harness` job/: planner = one strict tool call `PLAN_MODEL` claude-sonnet-5, Zod `Plan`/`Task` in @mf/models, pure dag.ts, worker = Agent SDK `query()` per task in `git worktree` task/<id> with hard-linked node_modules + lint/test gate + one repair session, merge in DAG order with one conflict-repair session then fail closed; 30 unit tests with fakes)
+- [x] Hard token budget per job, kill switch, egress allowlist (npm, github, anthropic only) — 2026-08-26 (`BudgetTracker`: every message's usage summed, cache reads at 10 %, first breach aborts all sessions via shared AbortController, `maxDurationMinutes` too; `POST /bff/admin/jobs/:id/kill` → status killed + ecs:StopTask, job polls its row every 10 s; tinyproxy sidecar `apps/job/proxy` with FilterDefaultDeny — verified in docker compose: example.com blocked, npm/GitHub/Anthropic pass, no direct route)
+- [x] Progress events streamed to DB (portal shows them live) — 2026-08-26 (`@mf/db` postgres driver + `migrate` + job repositories, `0002_jobs_task_arn`; api `db`/`ecs` plugins + `jobService` + 6 routes, 30 api tests; portal `/orders/:orderId/job` polls `events?after=` every 3 s, Start build on frozen spec, admin kill button)
 
 ### M4 — QA gates
 - [ ] Tests generated from acceptance criteria and must pass

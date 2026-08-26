@@ -167,7 +167,8 @@ export class ResourcesStack extends Stack {
 		// apps/job/proxy); a hard fence needs a proxy in its own task/SG (TODO-EXTERNAL.md).
 		this.jobSecurityGroup = new SecurityGroup(this, 'JobSecurityGroup', {
 			vpc: this.vpc,
-			description: 'Build job tasks: 443/80 out via the egress proxy sidecar, Postgres',
+			// Description kept verbatim from M1: changing it replaces the SG, whose id mf-dev imports
+			description: 'Build job tasks (TODO M3: egress allowlist)',
 			allowAllOutbound: false,
 		})
 		this.jobSecurityGroup.addEgressRule(Peer.anyIpv4(), Port.tcp(443), 'https (proxy + AWS APIs)')
