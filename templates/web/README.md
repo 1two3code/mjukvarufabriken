@@ -6,7 +6,8 @@ A React 19 + Fastify 5 monorepo template with shared Zod models, RBAC, and AWS C
 
 ## Project structure
 
-- [`infra`](infra/README.md): AWS CDK app (S3 + CloudFront for the app, ECS Fargate for the api). Not part of the workspaces.
+- [`infra`](infra/README.md): AWS CDK app — `resources-<env>` (VPC, DynamoDB, S3, optional OpenSearch) and `web-<env>` (S3 + CloudFront app, ECS Fargate api). Not part of the workspaces.
+- `.github/workflows`: `ci.yml` (lint, test, build, synth on PRs and main) and `deploy.yml` (OIDC deploy to dev, then live with environment approval).
 - **apps**
 	- [`@template/api`](apps/api/README.md): Fastify BFF.
 	- `@template/app`: React SPA (Vite).
@@ -38,6 +39,10 @@ npm run start:dev
 - `clean` / `clean:output`: remove `node_modules`/lock files, respectively build output.
 
 Run a script in one workspace with `-w`: `npm run start:dev -w @template/app` (package name or path — the bare folder name does not resolve).
+
+## Deploying
+
+See [`infra/README.md`](infra/README.md). Short version: bootstrap CDK in the account, configure the `dev`/`live` GitHub environments (`AWS_DEPLOY_ROLE_ARN` secret, `AWS_ACCOUNT_ID`/`AWS_REGION` vars), push to `main`.
 
 ## Git hooks
 

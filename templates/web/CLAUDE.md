@@ -17,7 +17,8 @@ It is an npm workspaces monorepo written entirely in TypeScript (ESM, `"type": "
 - **Frontend**: React 19 (React Compiler enabled), Vite 8, Redux Toolkit + RTK Query, `react-router-dom` v7, i18next.
 - **Backend**: Fastify 5, `fastify-type-provider-zod`, `jose` for JWT verification.
 - **Schemas**: Zod 4.
-- **Infrastructure**: AWS CDK v2 (S3 + CloudFront for the app, ECS Fargate for the api).
+- **Infrastructure**: AWS CDK v2 (S3 + CloudFront for the app, ECS Fargate for the api, a resources stack for VPC/DynamoDB/S3/optional OpenSearch).
+- **CI/CD**: GitHub Actions (`.github/workflows/ci.yml` on PRs/main; `deploy.yml` deploys dev → live via OIDC).
 
 ## Repository layout
 
@@ -29,7 +30,8 @@ It is an npm workspaces monorepo written entirely in TypeScript (ESM, `"type": "
 │   ├── access-control/  # RBAC roles, permissions, permission-check helpers
 │   ├── models/          # Zod schemas + inferred types for every domain entity (shared app↔api)
 │   └── utils/           # Pure helpers, subpath exports (@template/utils/function, /date, /object)
-├── infra/               # AWS CDK app, one stack per environment (NOT an npm workspace)
+├── infra/               # AWS CDK app: resources-<env> + web-<env> stacks (NOT an npm workspace)
+├── .github/workflows/   # ci.yml (lint/test/build/synth), deploy.yml + deploy-environment.yml (OIDC → cdk deploy)
 ├── vitest.config.ts     # Root config — projects (@template/api, @template/utils) + coverage
 ├── eslint.config.mjs    # Root ESLint flat config (extended by workspaces)
 ├── tsconfig.json        # Root tsconfig (extended by workspaces)
@@ -113,7 +115,7 @@ Zod 4 schemas in `schemas/`, re-exported from `index.ts`. Files ending in `.api.
 
 ### Infrastructure (`infra/`)
 
-Plain `aws-cdk-lib` constructs, one `WebStack` per environment from `lib/config.ts`. No account numbers in git — they come from `CDK_DEFAULT_ACCOUNT`/`CDK_DEFAULT_REGION`; without them the stacks are environment-agnostic so `cdk synth` runs offline (build the app first).
+Plain `aws-cdk-lib` constructs, two stacks per environment from `lib/config.ts`: `ResourcesStack` (VPC, DynamoDB `items` table, attachments bucket, opt-in OpenSearch — deploy first, RETAINed in live) and `WebStack` (app + api, consumes the resources stack directly and grants the task role least-privilege access; env vars `ITEMS_TABLE`, `ATTACHMENTS_BUCKET`, `OPENSEARCH_ENDPOINT` are passed to the api for when the `store` plugin is swapped for a real client). Custom domains are optional (`domain` in config: pre-issued ACM certs + Route 53 zone). No account numbers in git — they come from `CDK_DEFAULT_ACCOUNT`/`CDK_DEFAULT_REGION`; without them the stacks are environment-agnostic so `cdk synth` runs offline (build the app first). Nothing pre-existing is required in the account beyond `cdk bootstrap`.
 
 ## Conventions
 

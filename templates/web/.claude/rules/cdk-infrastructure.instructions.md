@@ -13,16 +13,19 @@ paths:
 
 - `bin/app.ts` — CDK entry point; iterates over `config.environments` and instantiates one set of stacks per environment.
 - `lib/config.ts` — `EnvironmentConfig` (`name`, `account`, `region`, `domain`) and the `config` object. Never hard-code account numbers in stacks.
+- `lib/resources-stack.ts` — `ResourcesStack`: VPC, DynamoDB tables, buckets, optional OpenSearch. Long-lived, `RETAIN` in live, deployed first.
+- `lib/web-stack.ts` — `WebStack`: app hosting + api service. Takes the `ResourcesStack` instance as a prop and references its constructs directly (CDK creates the cross-stack exports).
 - `lib/*-stack.ts` — one file per stack, `PascalCaseStack` class, named export.
 
 ## Stack naming
 
-`<service>-<environment>` (e.g. `web-dev`, `web-live`). Tag every stack with `Service` and `Environment` via `Tags.of(stack).add(...)`.
+`<service>-<environment>` (e.g. `resources-dev`, `web-live`). Tag every stack with `Service` and `Environment` via `Tags.of(stack).add(...)`.
 
 ## Hosting
 
 - **App**: S3 bucket (private, `BlockPublicAccess.BLOCK_ALL`) fronted by CloudFront with an Origin Access Control, SPA fallback (403/404 → `/index.html` 200) and a `ResponseHeadersPolicy` with strict security headers. Deploy the built bundle with `BucketDeployment` from `apps/app/dist/<mode>`.
-- **API**: `ApplicationLoadBalancedFargateService` from `aws-cdk-lib/aws-ecs-patterns`, image built from `apps/api/Dockerfile` with the repository root as build context. Health check path is `/health`. Pass configuration as container `environment` variables that match the `secrets` plugin.
+- **API**: `ApplicationLoadBalancedFargateService` from `aws-cdk-lib/aws-ecs-patterns` in the resources VPC, image built from `apps/api/Dockerfile` with the repository root as build context. Health check path is `/health`. Pass configuration as container `environment` variables that match the `secrets` plugin; grant the task role access with `grant*` helpers on the resources-stack constructs.
+- **Domains**: optional. Certificates are issued out-of-band and referenced by ARN (CloudFront's must be in us-east-1); hosted zones are referenced by id/name — never `fromLookup`, so synth stays offline.
 
 ## Cross-stack references
 
