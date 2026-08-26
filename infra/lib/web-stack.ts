@@ -163,7 +163,9 @@ export class WebStack extends Stack {
 					DATABASE_SECRET_ARN: resources.databaseSecret.secretArn,
 					ARTIFACTS_BUCKET: resources.artifactsBucket.bucketName,
 					JOBS_CLUSTER_ARN: resources.jobsCluster.clusterArn,
-					JOB_TASK_DEFINITION_ARN: resources.jobTaskDefinition.taskDefinitionArn,
+					// Family, not ARN: RunTask resolves the latest revision and there is no cross-stack
+					// export that changes on every job image rebuild
+					JOB_TASK_DEFINITION_ARN: resources.jobTaskDefinition.family,
 					JOB_SUBNET_IDS: jobSubnets.subnetIds.join(','),
 					JOB_SECURITY_GROUP_ID: resources.jobSecurityGroup.securityGroupId,
 					ANTHROPIC_API_KEY_SECRET_ARN: resources.secrets['anthropic-api-key'].secretArn,
@@ -215,7 +217,13 @@ export class WebStack extends Stack {
 		taskRole.addToPrincipalPolicy(
 			new PolicyStatement({
 				actions: ['ecs:RunTask'],
-				resources: [jobTaskDefinition.taskDefinitionArn],
+				resources: [
+					this.formatArn({
+						service: 'ecs',
+						resource: 'task-definition',
+						resourceName: `${jobTaskDefinition.family}:*`,
+					}),
+				],
 				conditions: { ArnEquals: { 'ecs:cluster': jobsCluster.clusterArn } },
 			})
 		)
