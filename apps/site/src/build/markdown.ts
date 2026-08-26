@@ -20,7 +20,17 @@ const headingPattern = /^(#{1,2}) (.+)$/
 
 const isFence = (line: string) => line.startsWith('```')
 
-const render = (markdown: string) => marked.parse(markdown, { async: false, gfm: true })
+const escapeHtml = (text: string) =>
+	text.replaceAll('&', '&amp;').replaceAll('<', '&lt;').replaceAll('>', '&gt;')
+
+/**
+ * Raw HTML in the Markdown source is shown as text, never shipped as markup: the legal drafts
+ * are pasted in from outside the repo and end up in every visitor's browser via innerHTML.
+ */
+const renderer = new marked.Renderer()
+renderer.html = ({ text }) => escapeHtml(text)
+
+const render = (markdown: string) => marked.parse(markdown, { async: false, gfm: true, renderer })
 
 /**
  * Splits a Markdown document at its level 1 and 2 headings. Text before the first heading

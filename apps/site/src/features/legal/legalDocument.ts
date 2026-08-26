@@ -29,8 +29,17 @@ export const legalPartSections = (part: LegalPart, sections = villkorWebb.sectio
 	const rest = sections.slice(start + 1)
 	const end = rest.findIndex(section => section.level === 1)
 	const body = end === -1 ? rest : rest.slice(0, end)
-	return [sections[start]!, ...body.filter(section => !isEnglishSummary(section))]
+	// The page renders its own <h1>; the part's title is dropped so there is one per page
+	return [
+		withoutH1(sections[start]!),
+		...body.filter(section => !isEnglishSummary(section)),
+	].filter(section => section.html.trim())
 }
+
+const withoutH1 = (section: MarkdownSection): MarkdownSection => ({
+	...section,
+	html: section.html.replace(/<h1>[^]*?<\/h1>\n?/, ''),
+})
 
 const isAnyPartHeading = (section: MarkdownSection) =>
 	(Object.keys(partHeadings) as LegalPart[]).some(part => isPartHeading(section, part))
@@ -39,7 +48,7 @@ const isAnyPartHeading = (section: MarkdownSection) =>
 export const legalPreambleSections = (sections = villkorWebb.sections) => {
 	const end = sections.findIndex(isAnyPartHeading)
 	return (end === -1 ? sections : sections.slice(0, end))
-		.map(section => ({ ...section, html: section.html.replace(/<h1>[^]*?<\/h1>\n?/, '') }))
+		.map(withoutH1)
 		.filter(section => section.html.trim())
 }
 
