@@ -5,8 +5,15 @@
  * (`npm run job:dev -- <id>`) and on Fargate.
  */
 import Anthropic from '@anthropic-ai/sdk'
-import { appendEvent, createDb, getJob, migrate, updateJob } from '@mf/db'
-import { createLivePorts, exec, runJob } from '@mf/harness'
+import { appendEvent, createDb, getJob, getOrder, migrate, updateJob } from '@mf/db'
+import {
+	appNameOf,
+	createLiveDeliveryClients,
+	createLivePorts,
+	exec,
+	runJob,
+	slugify,
+} from '@mf/harness'
 import { isActiveJobStatus } from '@mf/models'
 
 import { loadConfig } from '#/config.ts'
@@ -19,8 +26,16 @@ const log = (message: string, extra?: Record<string, unknown>) =>
 
 const config = await loadConfig(process.argv.slice(2))
 // The worker sessions and the repo's own scripts inherit the environment (minus what
-// @mf/harness' sandboxEnv strips); the database and secret locations are only needed here.
-for (const key of ['DATABASE_URL', 'DATABASE_SECRET_ARN', 'ANTHROPIC_API_KEY_SECRET_ARN']) {
+// @mf/harness' sandboxEnv strips); the database, secret locations and the GitHub token are
+// only needed here (the token lives in config and is handed to the Octokit client, never to
+// the environment the model-driven sandbox sees).
+for (const key of [
+	'DATABASE_URL',
+	'DATABASE_SECRET_ARN',
+	'ANTHROPIC_API_KEY_SECRET_ARN',
+	'GITHUB_TOKEN',
+	'GITHUB_TOKEN_SECRET_ARN',
+]) {
 	delete process.env[key]
 }
 process.env.ANTHROPIC_API_KEY = config.anthropicApiKey
@@ -72,6 +87,22 @@ const trackPhase = async (event: NewJobEvent) => {
 	}
 }
 
+/**
+ * Where the build is delivered (M5): repo `mjukvaruhuset/<app>-<job prefix>` and the customer's
+ * GitHub login from the order when M6 has stored one (`customerGithubLogin`; until then the
+ * repo stays "transfer pending" and an admin adds the customer by hand).
+ */
+const deliveryTarget = async () => {
+	const order = (await getOrder(db, job.orderId).catch(() => undefined)) as
+		{ customerGithubLogin?: string } | undefined
+	const appName = appNameOf(job.spec.goal)
+	return {
+		slug: `${slugify(appName).slice(0, 50)}-${jobId.slice(0, 8)}`,
+		appName,
+		customerGithubLogin: order?.customerGithubLogin || undefined,
+	}
+}
+
 /** Any crash after the row went active must leave a terminal status behind, never a stuck job */
 const fail = async (reason: string) => {
 	log('job crashed', { jobId, reason })
@@ -97,7 +128,10 @@ try {
 		client: new Anthropic({ apiKey: config.anthropicApiKey }),
 		planModel: config.planModel,
 		workerModel: config.workerModel,
+		delivery: createLiveDeliveryClients({ ...config.delivery, workerModel: config.workerModel }),
 	})
+	const delivery = await deliveryTarget()
+	log('delivery target', { jobId, ...delivery, dryRun: config.delivery.dryRun })
 
 	const outcome = await runJob(
 		{
@@ -107,6 +141,7 @@ try {
 			gateWaivers: job.gateWaivers,
 			repoDir,
 			seedCommit,
+			delivery,
 		},
 		{
 			ports,
@@ -133,6 +168,7 @@ try {
 		plan: outcome.plan,
 		reason: outcome.reason,
 		gates: outcome.gates,
+		repositoryUrl: outcome.deliverable?.repositoryUrl,
 		finishedAt: new Date(),
 	})
 	if (!finalRow) {
@@ -147,6 +183,9 @@ try {
 		jobId,
 		status,
 		tokensUsed: outcome.tokensUsed,
+		repositoryUrl: outcome.deliverable?.repositoryUrl,
+		deployUrl: outcome.deliverable?.deployUrl,
+		deliverableKey: outcome.deliverable?.deliverableKey,
 		gates: outcome.gates.map(gate => `${gate.name}:${gate.ok ? 'ok' : 'failed'}`),
 	})
 	await db.close()

@@ -1,10 +1,19 @@
 import fp from 'fastify-plugin'
-import { isActiveJobStatus, SpecSchema } from '@mf/models'
+import { DeliveryEventPayloadSchema, isActiveJobStatus, SpecSchema } from '@mf/models'
 
 import { EntityInvalid, EntityNotFound } from '#/lib/entityError.ts'
+import { defaultDownloadExpirySeconds } from '#/plugins/s3.ts'
 
 import type { FastifyInstance, FastifyPluginAsync } from 'fastify'
-import type { BackendSession, Job, JobBudget, JobEvent, SizeClass } from '@mf/models'
+import type {
+	BackendSession,
+	Deliverable,
+	DeliverablesResponse,
+	Job,
+	JobBudget,
+	JobEvent,
+	SizeClass,
+} from '@mf/models'
 
 declare module 'fastify' {
 	interface FastifyInstance {
@@ -18,6 +27,11 @@ declare module 'fastify' {
 			/** Admin kill switch: marks the row killed and stops the Fargate task */
 			kill: (jobId: string) => Promise<Job>
 			listAll: () => Promise<Job[]>
+			/**
+			 * The delivered bundle with presigned download links (org-scoped). `EntityNotFound`
+			 * until the job's `bundle` delivery step has succeeded.
+			 */
+			getDeliverables: (jobId: string, session: BackendSession) => Promise<DeliverablesResponse>
 		}
 	}
 }
@@ -72,8 +86,28 @@ export const redactEventsForCustomer = (events: JobEvent[]): JobEvent[] =>
 			return { ...event, payload }
 		})
 
+/**
+ * The delivery record lives in the last successful `bundle` delivery event (the job writes
+ * events only; no job column for it). Undefined until the job delivered.
+ */
+export const deliverableFromEvents = (events: JobEvent[]): Deliverable | undefined => {
+	for (const event of events.toReversed()) {
+		if (event.type !== 'delivery') continue
+		const parsed = DeliveryEventPayloadSchema.safeParse(event.payload)
+		if (
+			parsed.success &&
+			parsed.data.step === 'bundle' &&
+			parsed.data.ok &&
+			parsed.data.deliverable
+		) {
+			return parsed.data.deliverable
+		}
+	}
+	return undefined
+}
+
 const plugin: FastifyPluginAsync = async app => {
-	const { db, ecs, specService } = app
+	const { db, ecs, s3, specService } = app
 
 	const scoped = (job: Job | undefined, session: BackendSession, id: string) => {
 		if (!job || (!isAdmin(session) && job.orgId !== session.orgId)) {
@@ -152,10 +186,24 @@ const plugin: FastifyPluginAsync = async app => {
 			return killed
 		},
 		listAll: () => db.jobs.list(),
+		getDeliverables: async (jobId, session) => {
+			await get(jobId, session)
+			const deliverable = deliverableFromEvents(await db.jobs.listEvents(jobId))
+			if (!deliverable) throw new EntityNotFound('deliverables', jobId)
+			const expiresAt = new Date(Date.now() + defaultDownloadExpirySeconds * 1000).toISOString()
+			const files = await Promise.all(
+				deliverable.files.map(async file => ({
+					...file,
+					url: await s3.presignDownload(file.key, defaultDownloadExpirySeconds),
+					expiresAt,
+				}))
+			)
+			return { ...deliverable, files }
+		},
 	})
 }
 
 export default fp(plugin, {
 	name: '#internal/jobService',
-	dependencies: ['#internal/db', '#internal/ecs', '#internal/specService'],
+	dependencies: ['#internal/db', '#internal/ecs', '#internal/s3', '#internal/specService'],
 })

@@ -14,6 +14,19 @@ export type JobConfig = {
 	planModel?: string
 	workerModel?: string
 	env: string
+	/** M5 delivery (all optional: a missing value fails the delivery step, never the build) */
+	delivery: {
+		/** `GITHUB_TOKEN` or resolved from `GITHUB_TOKEN_SECRET_ARN`; undefined for an empty placeholder */
+		githubToken?: string
+		githubOrg?: string
+		/** `APPRUNNER_CONNECTION_ARN` — the App Runner GitHub connection (TODO-EXTERNAL) */
+		appRunnerConnectionArn?: string
+		appRunnerInstanceRoleArn?: string
+		/** `ARTIFACTS_BUCKET` — bundle + SPA build destination */
+		artifactsBucket?: string
+		/** `DELIVERY_DRY_RUN=1`: log the GitHub / App Runner / S3 calls instead of making them */
+		dryRun: boolean
+	}
 }
 
 const readSecret = async (arn: string) => {
@@ -51,6 +64,15 @@ const resolveAnthropicKey = async () => {
 	return key
 }
 
+/** Optional secret: env value, else Secrets Manager via the ARN, else undefined (empty placeholder too) */
+const resolveOptionalSecret = async (envName: string, arnEnvName: string) => {
+	const fromEnv = process.env[envName]?.trim()
+	if (fromEnv) return fromEnv
+	const arn = process.env[arnEnvName]
+	if (!arn) return undefined
+	return parseSecretString(await readSecret(arn)) || undefined
+}
+
 /**
  * Only the job id, the database and the Anthropic key are needed — no customer secrets are
  * ever passed into the container. `JOB_ID` comes from the api's `ecs:RunTask` override or the
@@ -68,5 +90,13 @@ export const loadConfig = async (argv: string[]): Promise<JobConfig> => {
 		planModel: process.env.PLAN_MODEL || undefined,
 		workerModel: process.env.WORKER_MODEL || undefined,
 		env: process.env.ENV || 'local',
+		delivery: {
+			githubToken: await resolveOptionalSecret('GITHUB_TOKEN', 'GITHUB_TOKEN_SECRET_ARN'),
+			githubOrg: process.env.GITHUB_ORG || undefined,
+			appRunnerConnectionArn: process.env.APPRUNNER_CONNECTION_ARN || undefined,
+			appRunnerInstanceRoleArn: process.env.APPRUNNER_INSTANCE_ROLE_ARN || undefined,
+			artifactsBucket: process.env.ARTIFACTS_BUCKET || undefined,
+			dryRun: ['1', 'true'].includes(process.env.DELIVERY_DRY_RUN ?? ''),
+		},
 	}
 }
