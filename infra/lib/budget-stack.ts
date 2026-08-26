@@ -7,8 +7,8 @@ import type { EnvironmentConfig } from './config.ts'
 
 type BudgetStackProps = StackProps & {
 	environment: EnvironmentConfig
-	/** ARN of the `mf-alerts-<env>` topic in the ops stack (its policy lets budgets.amazonaws.com publish) */
-	alertsTopicArn: string
+	/** The `mf-alerts-<env>` topic of the ops stack (its policy lets budgets.amazonaws.com publish) */
+	alertsTopic: { region: string; name: string }
 }
 
 /**
@@ -19,11 +19,13 @@ type BudgetStackProps = StackProps & {
  * until then the filtered spend reads 0.
  */
 export class BudgetStack extends Stack {
-	constructor(scope: Construct, id: string, { environment, alertsTopicArn, ...props }: BudgetStackProps) {
+	constructor(scope: Construct, id: string, { environment, alertsTopic, ...props }: BudgetStackProps) {
 		super(scope, id, props)
 		this.templateOptions.description = `Monthly cost budget (${environment.name})`
 
-		const subscribers = [{ subscriptionType: 'SNS', address: alertsTopicArn }]
+		// Same account, other region: the account id resolves at deploy time, the region is fixed
+		const topicArn = `arn:${this.partition}:sns:${alertsTopic.region}:${this.account}:${alertsTopic.name}`
+		const subscribers = [{ subscriptionType: 'SNS', address: topicArn }]
 		new CfnBudget(this, 'MonthlyBudget', {
 			budget: {
 				budgetName: `mf-${environment.name}-monthly`,

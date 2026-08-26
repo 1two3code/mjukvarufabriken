@@ -41,7 +41,10 @@ for (const environment of config.environments) {
 	const budget = new BudgetStack(app, `budget-${environment.name}`, {
 		env: { ...env, region: 'us-east-1' },
 		environment,
-		alertsTopicArn: `arn:aws:sns:${environment.region}:${environment.account ?? process.env.CDK_DEFAULT_ACCOUNT}:mf-alerts-${environment.name}`,
+		alertsTopic: {
+			region: environment.region ?? process.env.CDK_DEFAULT_REGION ?? 'eu-north-1',
+			name: `mf-alerts-${environment.name}`,
+		},
 	})
 	budget.addDependency(ops)
 

@@ -6,7 +6,7 @@ import { Match } from 'aws-cdk-lib/assertions'
 import { synthEnvironment } from './helpers.ts'
 
 describe('OpsStack', () => {
-	const { ops, environment } = synthEnvironment('dev')
+	const { ops, budget, environment } = synthEnvironment('dev')
 
 	it('creates the alerts topic with an e-mail subscription per admin', () => {
 		ops.hasResourceProperties('AWS::SNS::Topic', { TopicName: 'mf-alerts-dev' })
@@ -55,14 +55,9 @@ describe('OpsStack', () => {
 		}
 	})
 
-	it('creates the budget only after the topic policy exists', () => {
-		const [policyId] = Object.keys(ops.findResources('AWS::SNS::TopicPolicy'))
-		const [budget] = Object.values(ops.findResources('AWS::Budgets::Budget'))
-		assert.ok(policyId && budget)
-		assert.ok(
-			(budget.DependsOn as string[] | undefined)?.includes(policyId),
-			`budget must DependsOn the topic policy (${policyId}), got ${JSON.stringify(budget.DependsOn)}`
-		)
+	it('keeps the budget out of this stack (Budgets only exist in us-east-1) but lets it publish', () => {
+		ops.resourceCountIs('AWS::Budgets::Budget', 0)
+		ops.resourceCountIs('AWS::SNS::TopicPolicy', 1)
 	})
 
 	it('derives failed-job and token-burn metrics from the job log lines', () => {
@@ -153,8 +148,8 @@ describe('OpsStack', () => {
 		}
 	})
 
-	it('creates a monthly budget with 80 % actual and 100 % forecasted notifications', () => {
-		ops.hasResourceProperties('AWS::Budgets::Budget', {
+	it('creates a monthly budget (us-east-1 stack) with 80 % actual and 100 % forecasted notifications to the alerts topic', () => {
+		budget.hasResourceProperties('AWS::Budgets::Budget', {
 			Budget: {
 				BudgetName: 'mf-dev-monthly',
 				BudgetType: 'COST',
@@ -165,7 +160,12 @@ describe('OpsStack', () => {
 			NotificationsWithSubscribers: [
 				Match.objectLike({
 					Notification: Match.objectLike({ NotificationType: 'ACTUAL', Threshold: 80 }),
-					Subscribers: [Match.objectLike({ SubscriptionType: 'SNS' })],
+					Subscribers: [
+						Match.objectLike({
+							SubscriptionType: 'SNS',
+							Address: { 'Fn::Join': ['', Match.arrayWith([':sns:eu-north-1:', ':mf-alerts-dev'])] },
+						}),
+					],
 				}),
 				Match.objectLike({
 					Notification: Match.objectLike({ NotificationType: 'FORECASTED', Threshold: 100 }),

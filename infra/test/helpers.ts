@@ -7,6 +7,7 @@ import { Template } from 'aws-cdk-lib/assertions'
 
 import { config } from '../lib/config.ts'
 import { createRelativePath } from '../lib/helpers.ts'
+import { BudgetStack } from '../lib/budget-stack.ts'
 import { OpsStack } from '../lib/ops-stack.ts'
 import { ResourcesStack } from '../lib/resources-stack.ts'
 import { WebStack } from '../lib/web-stack.ts'
@@ -34,10 +35,16 @@ export const synthEnvironment = (name: EnvironmentName) => {
 		repositoryRoot,
 	})
 	const ops = new OpsStack(app, `ops-${name}`, { environment, resources, web })
+	const budget = new BudgetStack(app, `budget-${name}`, {
+		env: { region: 'us-east-1' },
+		environment,
+		alertsTopic: { region: 'eu-north-1', name: `mf-alerts-${name}` },
+	})
 	return {
 		environment,
 		resources: Template.fromStack(resources),
 		web: Template.fromStack(web),
 		ops: Template.fromStack(ops),
+		budget: Template.fromStack(budget),
 	}
 }

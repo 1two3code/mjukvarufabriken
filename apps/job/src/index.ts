@@ -99,17 +99,16 @@ const trackPhase = async (event: NewJobEvent) => {
 }
 
 /**
- * Where the build is delivered (M5): repo `mjukvaruhuset/<app>-<job prefix>`. The job only sees
- * its own report view (no order row), so the customer's GitHub login is not known here yet —
- * the repo stays "transfer pending" and an admin adds the customer by hand until the order
- * model carries a `customerGithubLogin` the api can expose through the report view.
+ * Where the build is delivered (M5): repo `mjukvaruhuset/<app>-<job prefix>`. The customer's
+ * GitHub login comes from the report view (the api resolves it from the order's creator once
+ * they signed in with GitHub); without it the repo stays "transfer pending".
  */
 const deliveryTarget = () => {
 	const appName = appNameOf(job.spec.goal)
 	return {
 		slug: `${slugify(appName).slice(0, 50)}-${jobId.slice(0, 8)}`,
 		appName,
-		customerGithubLogin: undefined,
+		customerGithubLogin: job.customerGithubLogin,
 	}
 }
 
