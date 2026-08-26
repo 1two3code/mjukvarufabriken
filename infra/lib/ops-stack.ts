@@ -1,5 +1,4 @@
 import { Duration, Stack } from 'aws-cdk-lib'
-import { CfnBudget } from 'aws-cdk-lib/aws-budgets'
 import {
 	Alarm,
 	AnomalyDetectionAlarm,
@@ -71,7 +70,6 @@ export class OpsStack extends Stack {
 				},
 			})
 		)
-		const topicPolicy = this.topic.node.findChild('Policy')
 
 		const notify = new SnsAction(this.topic)
 		const createAlarm = (alarm: Alarm) => {
@@ -237,41 +235,7 @@ export class OpsStack extends Stack {
 			})
 		)
 
-		// MARK: Budget — monthly cost of everything tagged Environment=<env> (the `Environment`
-		// cost-allocation tag must be activated once under Billing, TODO-EXTERNAL; until then the
-		// filtered spend reads 0). 80 % actual and 100 % forecasted both go to the topic.
-		// Budgets checks at create time that the topic lets budgets.amazonaws.com publish, so the
-		// budget must wait for the topic *policy* — CloudFormation only orders it after the topic.
-		const subscribers = [{ subscriptionType: 'SNS', address: this.topic.topicArn }]
-		const budget = new CfnBudget(this, 'MonthlyBudget', {
-			budget: {
-				budgetName: `mf-${environment.name}-monthly`,
-				budgetType: 'COST',
-				timeUnit: 'MONTHLY',
-				budgetLimit: { amount: alerts.monthlyBudgetUsd, unit: 'USD' },
-				costFilters: { TagKeyValue: [`user:Environment$${environment.name}`] },
-			},
-			notificationsWithSubscribers: [
-				{
-					notification: {
-						notificationType: 'ACTUAL',
-						comparisonOperator: 'GREATER_THAN',
-						threshold: 80,
-						thresholdType: 'PERCENTAGE',
-					},
-					subscribers,
-				},
-				{
-					notification: {
-						notificationType: 'FORECASTED',
-						comparisonOperator: 'GREATER_THAN',
-						threshold: 100,
-						thresholdType: 'PERCENTAGE',
-					},
-					subscribers,
-				},
-			],
-		})
-		budget.node.addDependency(topicPolicy)
+		// The monthly cost budget lives in `budget-<env>` (us-east-1, see budget-stack.ts) and
+		// publishes to this topic; the policy above is what lets budgets.amazonaws.com do that.
 	}
 }

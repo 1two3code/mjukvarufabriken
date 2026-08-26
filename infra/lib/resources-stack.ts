@@ -266,6 +266,7 @@ export class ResourcesStack extends Stack {
 				ANTHROPIC_API_KEY_SECRET_ARN: this.secrets['anthropic-api-key'].secretArn,
 				// M5 delivery: GitHub push + App Runner preview + bundle upload
 				GITHUB_TOKEN_SECRET_ARN: this.secrets['github-token'].secretArn,
+				...(environment.jobs.deliveryDryRun ? { DELIVERY_DRY_RUN: '1' } : {}),
 				APPRUNNER_INSTANCE_ROLE_ARN: this.appRunnerInstanceRole.roleArn,
 				...(environment.appRunner
 					? { APPRUNNER_CONNECTION_ARN: environment.appRunner.connectionArn }

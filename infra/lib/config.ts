@@ -47,7 +47,12 @@ export type EnvironmentConfig = {
 		backupRetentionDays: number
 	}
 	/** Fargate sizing for build-job tasks (M3) */
-	jobs: { cpu: number; memoryMiB: number }
+	jobs: {
+		cpu: number
+		memoryMiB: number
+		/** M5: log GitHub / App Runner / S3 delivery calls instead of making them (until the org + connection exist) */
+		deliveryDryRun?: boolean
+	}
 	/**
 	 * M5 delivery: the App Runner GitHub connection (created once in the console, then
 	 * "complete handshake" with the `mjukvaruhuset` org — TODO-EXTERNAL). Without it the job
@@ -110,7 +115,7 @@ export const config: Config = {
 				allocatedStorageGb: 20,
 				backupRetentionDays: 7,
 			},
-			jobs: { cpu: 2048, memoryMiB: 4096 },
+			jobs: { cpu: 2048, memoryMiB: 4096, deliveryDryRun: true },
 			alerts: {
 				jobTokensThreshold: 20_000_000,
 				monthlyBudgetUsd: 150,

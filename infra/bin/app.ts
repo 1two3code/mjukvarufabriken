@@ -2,6 +2,7 @@ import { App, Tags } from 'aws-cdk-lib'
 
 import { config } from '../lib/config.ts'
 import { createRelativePath } from '../lib/helpers.ts'
+import { BudgetStack } from '../lib/budget-stack.ts'
 import { OpsStack } from '../lib/ops-stack.ts'
 import { ResourcesStack } from '../lib/resources-stack.ts'
 import { WebStack } from '../lib/web-stack.ts'
@@ -36,7 +37,15 @@ for (const environment of config.environments) {
 	// Alarms + budget last: reads the log groups, ALB, RDS and NAT gateway of the two above
 	const ops = new OpsStack(app, `ops-${environment.name}`, { env, environment, resources, web })
 
-	for (const stack of [resources, web, ops]) {
+	// Budgets only exist in us-east-1; the topic ARN is passed as a plain string (no cross-region export)
+	const budget = new BudgetStack(app, `budget-${environment.name}`, {
+		env: { ...env, region: 'us-east-1' },
+		environment,
+		alertsTopicArn: `arn:aws:sns:${environment.region}:${environment.account ?? process.env.CDK_DEFAULT_ACCOUNT}:mf-alerts-${environment.name}`,
+	})
+	budget.addDependency(ops)
+
+	for (const stack of [resources, web, ops, budget]) {
 		Tags.of(stack).add('Service', config.serviceName)
 		Tags.of(stack).add('Environment', environment.name)
 	}
