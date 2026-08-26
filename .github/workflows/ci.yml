@@ -24,11 +24,13 @@ jobs:
           cache-dependency-path: |
             package-lock.json
             infra/package-lock.json
+            infra/resident/package-lock.json
 
       - name: Install
         run: |
           npm ci
           npm ci --prefix infra
+          npm ci --prefix infra/resident
 
       - name: Lint
         run: npm run lint
@@ -42,6 +44,7 @@ jobs:
         run: |
           npm audit --audit-level=high
           npm audit --audit-level=high --prefix infra
+          npm audit --audit-level=high --prefix infra/resident
 
       - name: Test (with coverage)
         run: npm run coverage
@@ -63,6 +66,15 @@ jobs:
       - name: Infra tests
         working-directory: infra
         run: npm test
+
+      # The customer-side CDK app (packages/resident's deploy template): its own lockfile, type
+      # check, synth with the sample context and template assertions
+      - name: Resident infra lint, synth, tests
+        working-directory: infra/resident
+        run: |
+          npm run lint
+          npx cdk synth --quiet --context repository=example/repo --context installationId=inst-ci
+          npm test
 
       - uses: actions/upload-artifact@v4
         with:

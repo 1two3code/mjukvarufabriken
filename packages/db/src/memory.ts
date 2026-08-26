@@ -52,7 +52,19 @@ export class UniqueViolation extends Error {
 	}
 }
 
-export const createMemoryRepositories = (): Repositories => {
+/** Upper bound on tracked keys per scope; beyond it the oldest keys are evicted (memory guard) */
+export const memoryRateLimitMaxKeys = 10_000
+/** Hits older than this are dropped on every `record` — longer than any window a service counts over */
+export const memoryRateLimitRetentionMs = 60 * 60 * 1000
+
+export type MemoryRepositories = Repositories & {
+	rateLimits: Repositories['rateLimits'] & {
+		/** Number of tracked keys in the scope (for tests) */
+		size: (scope: string) => number
+	}
+}
+
+export const createMemoryRepositories = (): MemoryRepositories => {
 	const jobs = new Map<string, Job>()
 	const events: JobEvent[] = []
 	/** report token hash → job id (the hash is never part of the `Job` model) */
@@ -71,6 +83,12 @@ export const createMemoryRepositories = (): Repositories => {
 	const usage = new Map<string, ResidentUsageRecord>()
 	/** `installationId/month` → report */
 	const usageReports = new Map<string, ResidentUsageReport>()
+	/** scope → key → hit times (ms); keys are kept in insertion order for eviction */
+	const rateLimits = new Map<string, Map<string, number[]>>()
+	/** scope → when the retention sweep last ran (ms), so it runs at most once a minute */
+	const rateLimitSweptAt = new Map<string, number>()
+	/** When the auth sweep last ran (ms), so it runs at most once a minute */
+	let authSweptAt = 0
 
 	const byCreatedDesc = <T extends { createdAt: string }>(items: T[]) =>
 		items.sort((a, b) => b.createdAt.localeCompare(a.createdAt))
@@ -173,6 +191,43 @@ export const createMemoryRepositories = (): Repositories => {
 				pullRequestsOpened: sum(record => record.tasks.pullRequestsOpened),
 			},
 			monthlyCap: clone(latest.monthlyCap),
+	// MARK: Auth helpers
+	/** Drops expired links and expired or long-revoked tokens — the same rule as `pruneAuth` */
+	const sweepAuth = () => {
+		const cutoff = Date.now()
+		const weekAgo = cutoff - 7 * 24 * 60 * 60 * 1000
+		for (const [hash, link] of magicLinks) {
+			if (Date.parse(link.expiresAt) < weekAgo) magicLinks.delete(hash)
+		}
+		for (const [hash, token] of refreshTokens) {
+			const revokedAt = token.revokedAt ? Date.parse(token.revokedAt) : undefined
+			if (
+				Date.parse(token.expiresAt) < cutoff ||
+				(revokedAt !== undefined && revokedAt < weekAgo)
+			) {
+				refreshTokens.delete(hash)
+			}
+		}
+	}
+	/** Nothing schedules `auth.prune()` on the memory backend, so inserts sweep (at most once a
+	 * minute) — otherwise every unclicked link and every rotated token would live forever */
+	const sweepAuthIfDue = () => {
+		const now = Date.now()
+		if (now - authSweptAt < 60_000) return
+		authSweptAt = now
+		sweepAuth()
+	}
+
+	// MARK: Rate limits helpers
+	/** Drops hits at or before `since` and keys left without any, so the map only holds keys
+	 * with hits inside the retention */
+	const sweepRateLimits = (scope: string, since: number) => {
+		const keys = rateLimits.get(scope)
+		if (!keys) return
+		for (const [key, times] of keys) {
+			const recent = times.filter(time => time > since)
+			if (recent.length) keys.set(key, recent)
+			else keys.delete(key)
 		}
 	}
 
@@ -402,6 +457,7 @@ export const createMemoryRepositories = (): Repositories => {
 
 		auth: {
 			insertMagicLink: async link => {
+				sweepAuthIfDue()
 				const created: MagicLink = {
 					tokenHash: link.tokenHash,
 					email: link.email,
@@ -425,6 +481,7 @@ export const createMemoryRepositories = (): Repositories => {
 						link.email === email && link.purpose === 'email' && new Date(link.createdAt) > since
 				).length,
 			insertRefreshToken: async token => {
+				sweepAuthIfDue()
 				const created: RefreshToken = {
 					tokenHash: token.tokenHash,
 					userId: token.userId,
@@ -444,22 +501,41 @@ export const createMemoryRepositories = (): Repositories => {
 				const token = refreshTokens.get(tokenHash)
 				if (token && !token.revokedAt) token.revokedAt = now()
 			},
-			prune: async () => {
-				const cutoff = Date.now()
-				const weekAgo = cutoff - 7 * 24 * 60 * 60 * 1000
-				for (const [hash, link] of magicLinks) {
-					if (Date.parse(link.expiresAt) < weekAgo) magicLinks.delete(hash)
+			prune: async () => sweepAuth(),
+		},
+
+		rateLimits: {
+			count: async (scope, key, since) => {
+				const keys = rateLimits.get(scope)
+				if (!keys) return 0
+				const recent = (times: number[]) => times.filter(time => time > since.getTime()).length
+				if (key !== undefined) return recent(keys.get(key) ?? [])
+				let total = 0
+				for (const times of keys.values()) total += recent(times)
+				return total
+			},
+			record: async (scope, key, at = new Date()) => {
+				const now = at.getTime()
+				if (now - (rateLimitSweptAt.get(scope) ?? 0) > 60_000) {
+					sweepRateLimits(scope, now - memoryRateLimitRetentionMs)
+					rateLimitSweptAt.set(scope, now)
 				}
-				for (const [hash, token] of refreshTokens) {
-					const revokedAt = token.revokedAt ? Date.parse(token.revokedAt) : undefined
-					if (
-						Date.parse(token.expiresAt) < cutoff ||
-						(revokedAt !== undefined && revokedAt < weekAgo)
-					) {
-						refreshTokens.delete(hash)
-					}
+				const keys = rateLimits.get(scope) ?? new Map<string, number[]>()
+				rateLimits.set(scope, keys)
+				// Re-insert so the key moves to the end: Map iteration order == insertion order
+				const times = keys.get(key) ?? []
+				keys.delete(key)
+				keys.set(key, [...times, at.getTime()])
+				while (keys.size > memoryRateLimitMaxKeys) {
+					const oldest = keys.keys().next().value
+					if (oldest === undefined) break
+					keys.delete(oldest)
 				}
 			},
+			prune: async before => {
+				for (const scope of rateLimits.keys()) sweepRateLimits(scope, before.getTime())
+			},
+			size: scope => rateLimits.get(scope)?.size ?? 0,
 		},
 
 		resident: {

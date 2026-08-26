@@ -2,6 +2,7 @@ import fp from 'fastify-plugin'
 import { SignJWT } from 'jose'
 
 import { EntityInvalid } from '#/lib/entityError.ts'
+import { scheduleHousekeeping } from '#/lib/housekeeping.ts'
 import { authAlgorithm } from '#/plugins/authKeys.utils.ts'
 import {
 	addDays,
@@ -58,8 +59,6 @@ export const magicLinkRateLimit = { max: 3, windowMinutes: 10 } as const
 export const loginLinkTtlMinutes = 2
 export const accessTokenTtl = '1h'
 export const refreshTokenTtlDays = 30
-/** Expired links and rotated tokens are pruned at boot and then hourly */
-export const pruneIntervalMs = 60 * 60 * 1000
 
 const plugin: FastifyPluginAsync = async app => {
 	const { db, secrets, authKeys, email: mailer, userService } = app
@@ -89,15 +88,9 @@ const plugin: FastifyPluginAsync = async app => {
 	}
 
 	// Housekeeping: nothing else deletes magic_links / refresh_tokens rows (every request and
-	// every refresh inserts one). Failures are logged, never fatal.
-	const prune = () =>
-		db.auth.prune().catch((error: Error) => app.log.warn({ err: error }, 'Auth prune failed'))
-	if (db.available) {
-		await prune()
-		const timer = setInterval(prune, pruneIntervalMs)
-		timer.unref()
-		app.addHook('onClose', () => clearInterval(timer))
-	}
+	// every refresh inserts one). Shortly after boot, then hourly with jitter, Postgres only — the
+	// memory repository sweeps itself on insert.
+	scheduleHousekeeping(app, 'Auth prune', () => db.auth.prune())
 
 	app.decorate('authService', {
 		requestMagicLink: async rawEmail => {

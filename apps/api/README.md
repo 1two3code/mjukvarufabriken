@@ -13,7 +13,7 @@ Fastify 5 BFF, executed directly by Node (no build step) and tested with Vitest.
 ## Folder structure
 
 - `src/plugins` — infrastructure singletons decorated on the Fastify instance (`secrets`, `db`, `authKeys`, `auth`, `email`, `anthropic`, `accessControl`, `errorHandling`).
-- `src/services` — business logic; a facade over the data plugins.
+- `src/services` — business logic; a facade over the data plugins. `specService.get` never creates a draft: orders come from `POST /bff/orders`, an unknown order id is 404.
 - `src/routes` — the BFF surface under `/bff/*`, auto-loaded, files named by action.
 - `src/lib` — internal helpers that aren't tied to a single plugin or service (domain error classes).
 - `test/` — mirrors `src/` one-to-one. `createTestApp()` and `networkMock` are globals.
@@ -35,4 +35,6 @@ Access tokens are EdDSA (Ed25519) JWTs, 1 h, claims `sub` (user id), `email`, `n
 
 Environment: `AUTH_JWT_PRIVATE_KEY` (JSON JWK) or `AUTH_JWT_PRIVATE_KEY_SECRET_ARN` (generate with `node scripts/gen-auth-key.mjs`; without either an ephemeral key is used and a warning logged), `AUTH_ISSUER`, `AUTH_AUDIENCE`, `AUTH_ADMIN_EMAILS` (comma list → role `admin`), `PORTAL_URL`, `EMAIL_TRANSPORT` (`log` prints the link in the log — the default outside live; `ses` sends via SES v2), `AUTH_EMAIL_FROM`. See `.env.example`.
 
-Storage is Postgres via `app.db` (`users`, `orgs`, `magic_links`, `refresh_tokens` — see `packages/db`). Without `DATABASE_URL` / `DATABASE_SECRET_ARN` the api boots on the in-memory repositories and logs it: everything then resets on restart. A configured secret that cannot be read is a failure, not a fallback: `app.db.available` is false, every repository call rejects and `/health` returns 503. `authService` prunes expired magic links and rotated refresh tokens at boot and hourly.
+Storage is Postgres via `app.db` (`users`, `orgs`, `magic_links`, `refresh_tokens` — see `packages/db`). Without `DATABASE_URL` / `DATABASE_SECRET_ARN` the api boots on the in-memory repositories and logs it: everything then resets on restart. A configured secret that cannot be read is a failure, not a fallback: `app.db.available` is false, every repository call rejects and `/health` returns 503. Housekeeping (`src/lib/housekeeping.ts`) runs only on Postgres: `authService` prunes expired magic links and rotated refresh tokens and `contactService` prunes contact-form hits older than the window, each shortly after boot and then hourly with a random 0–5 min jitter so tasks started together do not prune at once; the first run is never awaited during registration. On the memory backend the repositories sweep themselves on insert.
+
+Rate limits: the magic-link limiter counts `magic_links` rows per email; the contact-form limiter (per ip and a global ceiling per window) counts `rate_limits` rows, so every api task shares the same counts. Both record the attempt *before* sending the email. When the database is configured but unavailable the contact form keeps working on a process-local limiter (logged as a warning) instead of failing — it only needs the mailer.

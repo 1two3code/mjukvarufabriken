@@ -252,6 +252,18 @@ export type ResidentRepository = {
 	 * for the in-flight timeout
 	 */
 	releaseUsageReport: (installationId: string, month: string, identifier: string) => Promise<void>
+/**
+ * Sliding-window counters shared by every api task: one hit per row, scoped by feature
+ * (`contact`) and keyed by the client (ip). Counting without a key gives the global total for
+ * the scope. The memory implementation caps the number of keys it tracks and sweeps old hits
+ * on every call; Postgres relies on the hourly `prune`.
+ */
+export type RateLimitsRepository = {
+	/** Hits for `scope` (and `key` when given) strictly after `since` */
+	count: (scope: string, key: string | undefined, since: Date) => Promise<number>
+	record: (scope: string, key: string, at?: Date) => Promise<void>
+	/** Housekeeping: drops hits older than `before` */
+	prune: (before: Date) => Promise<void>
 }
 
 export type Repositories = {
@@ -260,4 +272,5 @@ export type Repositories = {
 	users: UsersRepository
 	auth: AuthRepository
 	resident: ResidentRepository
+	rateLimits: RateLimitsRepository
 }

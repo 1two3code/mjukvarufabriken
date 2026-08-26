@@ -28,13 +28,19 @@ describe('Spec Service', () => {
 	})
 
 	describe('get', () => {
-		it('Creates and stores an empty draft on first access', async () => {
-			// Act
-			const draft = await app.specService.get('order-9', user)
+		it('Is not found for an unknown order id and never creates a draft', async () => {
+			// Arrange
+			vi.spyOn(app.db.orders, 'upsert')
 
-			// Assert
-			expect(draft).toEqual(createEmptyDraft('order-9', 'org-1'))
-			await expect(app.db.orders.get('order-9')).resolves.toEqual(draft)
+			// Act / Assert
+			await expect(app.specService.get('order-9', user)).rejects.toBeInstanceOf(EntityNotFound)
+			await expect(app.specService.get('order-9', admin)).rejects.toBeInstanceOf(EntityNotFound)
+			await expect(app.specService.sendMessage('order-9', 'hi', user)).rejects.toBeInstanceOf(
+				EntityNotFound
+			)
+			await expect(app.specService.freeze('order-9', user)).rejects.toBeInstanceOf(EntityNotFound)
+			expect(app.db.orders.upsert).not.toHaveBeenCalled()
+			await expect(app.db.orders.get('order-9')).resolves.toBeUndefined()
 		})
 
 		it("Hides another org's draft as not found, but admins see it", async () => {
