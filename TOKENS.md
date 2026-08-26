@@ -44,3 +44,6 @@ Format: date | milestone | session tokens (in/out) | notes
 | 2026-08-27 | overnight wave 5 licence-gate | subagent | n/a | licence gate + THIRD-PARTY-LICENCES.md; merged clean, 786 tests green |
 | 2026-08-27 | overnight wave 5 portal-polish | subagent | n/a | legal pages, /admin/resident, portal vitest; merged clean, 818 tests green; integration fix: licence gate label sv/en |
 | 2026-08-27 | overnight wave 5 ci-and-deploy | subagent | n/a | coverage threshold, bootstrap guard, budget stack in deploy; merged clean, infra 23 tests green |
+| 2026-08-27 | overnight wave 4 (workflow) | ~1.99M | n/a | 21 agents / 45 min: GitHub sign-in (env-gated), resident usage billing + RDS verify-full, db-backed rate limits + prune, legal drafts; 586 → 677 tests |
+| 2026-08-27 | overnight wave 5 (workflow) | ~1.82M | n/a | 21 agents / 48 min: two-uid sandbox, licence gate, portal legal/admin/order polish + route smoke, CI/deploy bootstrap guard + README; 677 → 818 tests |
+| 2026-08-27 | overnight main session | ~250k | ~35k | budget stack → us-east-1 + bootstrap, parameter-property boot crash fix + lint rule, 4 deploys, worktree cleanup |
