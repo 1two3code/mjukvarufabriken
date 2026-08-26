@@ -2,13 +2,16 @@ import { CfnOutput, Duration, RemovalPolicy, Stack } from 'aws-cdk-lib'
 import { Certificate } from 'aws-cdk-lib/aws-certificatemanager'
 import {
 	AllowedMethods,
+	CachePolicy,
 	Distribution,
 	HeadersFrameOption,
 	HeadersReferrerPolicy,
+	OriginProtocolPolicy,
+	OriginRequestPolicy,
 	ResponseHeadersPolicy,
 	ViewerProtocolPolicy,
 } from 'aws-cdk-lib/aws-cloudfront'
-import { S3BucketOrigin } from 'aws-cdk-lib/aws-cloudfront-origins'
+import { HttpOrigin, S3BucketOrigin } from 'aws-cdk-lib/aws-cloudfront-origins'
 import { Port, SecurityGroup, SubnetType } from 'aws-cdk-lib/aws-ec2'
 import { Cluster, ContainerImage } from 'aws-cdk-lib/aws-ecs'
 import { ApplicationLoadBalancedFargateService } from 'aws-cdk-lib/aws-ecs-patterns'
@@ -209,6 +212,21 @@ export class WebStack extends Stack {
 		jobTaskDefinition.obtainExecutionRole().grantPassRole(taskRole)
 
 		// MARK: DNS
+		// MARK: Same-origin API — CloudFront forwards /bff/* on both SPAs to the ALB (no CORS needed)
+		const apiOrigin = domain
+			? new HttpOrigin(domain.apiDomainName)
+			: new HttpOrigin(api.loadBalancer.loadBalancerDnsName, {
+					protocolPolicy: OriginProtocolPolicy.HTTP_ONLY,
+				})
+		for (const { distribution } of [site, portal]) {
+			distribution.addBehavior('/bff/*', apiOrigin, {
+				viewerProtocolPolicy: ViewerProtocolPolicy.HTTPS_ONLY,
+				allowedMethods: AllowedMethods.ALLOW_ALL,
+				cachePolicy: CachePolicy.CACHING_DISABLED,
+				originRequestPolicy: OriginRequestPolicy.ALL_VIEWER_EXCEPT_HOST_HEADER,
+			})
+		}
+
 		if (domain && hostedZone) {
 			new ARecord(this, 'SiteRecord', {
 				zone: hostedZone,

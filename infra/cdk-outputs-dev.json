@@ -26,9 +26,9 @@
   },
   "mf-dev": {
     "ApiLoadBalancerDNSB0038DD0": "mf-dev-ApiLB-kU4OO4hSzwOB-551124632.eu-north-1.elb.amazonaws.com",
-    "ApiUrl": "http://mf-dev-ApiLB-kU4OO4hSzwOB-551124632.eu-north-1.elb.amazonaws.com",
-    "PortalUrl": "https://d1lbp13fkx02sn.cloudfront.net",
-    "ApiServiceURL135D4FCA": "http://mf-dev-ApiLB-kU4OO4hSzwOB-551124632.eu-north-1.elb.amazonaws.com",
-    "SiteUrl": "https://d3dg6babl9jw7l.cloudfront.net"
+    "ApiUrl": "https://api.dev.mjukvaruhuset.se",
+    "PortalUrl": "https://portal.dev.mjukvaruhuset.se",
+    "ApiServiceURL135D4FCA": "https://mf-dev-ApiLB-kU4OO4hSzwOB-551124632.eu-north-1.elb.amazonaws.com",
+    "SiteUrl": "https://dev.mjukvaruhuset.se"
   }
 }

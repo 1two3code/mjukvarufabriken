@@ -22,7 +22,12 @@ export default defineConfig({
 		i18nHotReload(),
 		react({ babel: { plugins: [['babel-plugin-react-compiler']] } }),
 	],
-	server: { open: true, port: 5175 },
+	server: {
+		open: true,
+		port: 5175,
+		// Same-origin /bff in every mode; locally it is proxied to the api
+		proxy: { '/bff': 'http://localhost:5174' },
+	},
 	preview: { port: 5175 },
 	build: {
 		chunkSizeWarningLimit: 1024,

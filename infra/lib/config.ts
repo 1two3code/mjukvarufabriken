@@ -67,6 +67,18 @@ export const config: Config = {
 			account,
 			region,
 			auth,
+			domain: {
+				siteDomainName: 'dev.mjukvaruhuset.se',
+				portalDomainName: 'portal.dev.mjukvaruhuset.se',
+				apiDomainName: 'api.dev.mjukvaruhuset.se',
+				hostedZoneId: 'Z002863610X79ZE1B3K8F',
+				hostedZoneName: 'mjukvaruhuset.se',
+				// Issued 2026-08-26 via `aws acm request-certificate`, DNS-validated in the hosted zone
+				cloudFrontCertificateArn:
+					'arn:aws:acm:us-east-1:814967776290:certificate/093f6dc9-f3e2-4a9e-8f49-d9de89cb3248',
+				apiCertificateArn:
+					'arn:aws:acm:eu-north-1:814967776290:certificate/97331410-b5f7-4193-994e-59a9618b2091',
+			},
 			// db.t4g.micro ≈ 15 USD/month; smallest burstable Postgres instance
 			database: {
 				instanceType: InstanceType.of(InstanceClass.T4G, InstanceSize.MICRO),

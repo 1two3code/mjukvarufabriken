@@ -68,6 +68,8 @@ Then point `VITE_API_URL` in `apps/portal/.env.dev` (and `apps/site/.env.dev`) a
 
 | env | deployed | site | portal | api |
 |---|---|---|---|---|
-| dev | 2026-08-26 | https://d3dg6babl9jw7l.cloudfront.net | https://d1lbp13fkx02sn.cloudfront.net | http://mf-dev-ApiLB-kU4OO4hSzwOB-551124632.eu-north-1.elb.amazonaws.com |
+| dev | 2026-08-26 | https://dev.mjukvaruhuset.se | https://portal.dev.mjukvaruhuset.se | https://api.dev.mjukvaruhuset.se |
 
 Deploy with `infra/scripts/deploy.sh <env> [stacks]` (reads AWS creds from the root `.env`).
+
+Both SPA distributions forward `/bff/*` to the api ALB, so the apps use `VITE_API_URL=/bff` in every mode (locally Vite proxies `/bff` to `:5174`). ACM certs for dev were requested with `aws acm request-certificate` (us-east-1 for CloudFront, eu-north-1 for the ALB) and DNS-validated in the `mjukvaruhuset.se` hosted zone; ARNs live in `lib/config.ts`. For `live`, repeat with `mjukvaruhuset.se` + `portal.mjukvaruhuset.se` and `api.mjukvaruhuset.se`.
