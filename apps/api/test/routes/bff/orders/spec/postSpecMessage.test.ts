@@ -35,7 +35,11 @@ describe('POST /bff/orders/:orderId/spec route', () => {
 		const response = await app.inject({ method: 'POST', url, payload })
 
 		// Assert
-		expect(app.specService.sendMessage).toHaveBeenCalledWith('order-1', payload.content, { userId: 'user-1', role: 'user', orgId: 'org-1' })
+		expect(app.specService.sendMessage).toHaveBeenCalledWith('order-1', payload.content, {
+			userId: 'user-1',
+			role: 'user',
+			orgId: 'org-1',
+		})
 		expect(response.statusCode).toBe(200)
 		expect(response.json()).toEqual(draft)
 	})

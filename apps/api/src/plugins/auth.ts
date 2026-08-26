@@ -41,6 +41,10 @@ export const publicUrls = new Set([
 	'/bff/auth/refresh',
 	'/bff/auth/logout',
 	'/bff/contact',
+	// Stripe calls the webhook with its own signature; the fake provider's checkout page is
+	// opened by the browser after a redirect (no bearer token on a navigation)
+	'/bff/stripe/webhook',
+	'/bff/stripe/fake/checkout/:sessionId',
 	'/.well-known/jwks.json',
 	'/health',
 ])
