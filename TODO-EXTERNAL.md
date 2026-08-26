@@ -10,7 +10,7 @@ Start these NOW; none of them block building the software.
 | Stripe live-mode verification (needs org.nr + bank) | you | 1–5 days after above | real payments |
 | Fortnox (or similar) for bokföring + Stripe sync | you | 1 day | accounting |
 | Ansvarsförsäkring (IT-konsult) e.g. Länsförsäkringar/If/Gjensidige | you | days | pilots with real customers |
-| Lawyer review of kundavtal, PUB-avtal (GDPR), SLA, IP/liability clause | lawyer | 1–2 weeks | pilots |
+| Lawyer review of kundavtal, PUB-avtal (GDPR), SLA, IP/liability clause — drafts in `legal/` since 2026-08-27 (`kundavtal.md`, `pub-avtal.md`, `sla-resident.md`, `villkor-webb.md`, each marked DRAFT — EJ GRANSKAD with an English summary); fill in `[BOLAGSNAMN AB]`/`[ORG.NR]`/`[ADRESS]`/`[MÅNADSAVGIFT]` and answer the bracketed open points (resident fee model: is "tokens × 1,5" the customer's total model cost — 0,5 × list to us on the customer's key — or 1,5 × list to us on top of the customer's Anthropic bill; Anthropic retention; licence gate; log retention; deletion of supplier copies is manual today) before sending. Review fixes 2026-08-27: balance due at acceptance (payment ≠ acceptance), retry before budget cancellation, cancellation matched to the order states, 12-month copy retention in both kundavtal §7.3 and PUB §10.2, GitHub sign-in removed everywhere until built (M6); `apps/api/test/legal/drafts.test.ts` guards the facts | lawyer | 1–2 weeks | pilots |
 | Anthropic: raise rate/spend limits on API org | Anthropic | days | volume |
 | AWS: service quota increases (Fargate vCPU, App Runner) | AWS | 1–3 days | parallel jobs |
 | AWS SES production access (leave sandbox) | AWS | ~1 day | customer email |
