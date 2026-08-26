@@ -101,12 +101,23 @@ describe('Contact Service', () => {
 		expect(app.email.send).toHaveBeenCalledTimes(contactRateLimit.max + 2)
 	})
 
-	it('Does not consume a rate-limit slot when nothing was sent (unconfigured or failed)', async () => {
+	it('Does not consume a rate-limit slot when the message is dropped as unconfigured', async () => {
 		// Arrange
 		const message = createMockContactMessage()
 		app.secrets.authAdminEmails = []
 		for (let i = 0; i < contactRateLimit.max; i++) await app.contactService.submit(message, ip)
 		app.secrets.authAdminEmails = ['a@example.com']
+
+		// Act
+		const result = await app.contactService.submit(message, ip)
+
+		// Assert
+		expect(result).toBe('sent')
+	})
+
+	it('Counts a send attempt even when every recipient fails, so a failing mailer cannot be retried without limit', async () => {
+		// Arrange
+		const message = createMockContactMessage()
 		vi.spyOn(app.email, 'send').mockRejectedValue(new Error('SES down'))
 		for (let i = 0; i < contactRateLimit.max; i++) {
 			await expect(app.contactService.submit(message, ip)).rejects.toThrow('SES down')
@@ -117,7 +128,57 @@ describe('Contact Service', () => {
 		const result = await app.contactService.submit(message, ip)
 
 		// Assert
-		expect(result).toBe('sent')
+		expect(result).toBe('rateLimited')
+		expect(app.email.send).toHaveBeenCalledTimes(contactRateLimit.max)
+	})
+
+	it('Records the hit before the email goes out, so a failed record never follows a delivered message', async () => {
+		// Arrange
+		const order: string[] = []
+		vi.spyOn(app.db.rateLimits, 'record').mockImplementation(async () => {
+			order.push('record')
+		})
+		vi.spyOn(app.email, 'send').mockImplementation(async () => {
+			order.push('send')
+		})
+
+		// Act
+		await app.contactService.submit(createMockContactMessage(), ip)
+
+		// Assert
+		expect(order).toEqual(['record', 'send'])
+	})
+
+	it('Surfaces a failed record without sending anything (nothing to duplicate on retry)', async () => {
+		// Arrange
+		vi.spyOn(app.db.rateLimits, 'record').mockRejectedValue(new Error('connection reset'))
+
+		// Act + Assert
+		await expect(app.contactService.submit(createMockContactMessage(), ip)).rejects.toThrow(
+			'connection reset'
+		)
+		expect(app.email.send).not.toHaveBeenCalled()
+	})
+
+	it('Keeps working with a process-local limiter when the database is configured but unavailable', async () => {
+		// Arrange: what the db plugin decorates when the secret is unreadable or migrations failed
+		const unavailable = () => Promise.reject(new Error('Database unavailable: migrations failed'))
+		app.db.available = false
+		vi.spyOn(app.db.rateLimits, 'count').mockImplementation(unavailable)
+		vi.spyOn(app.db.rateLimits, 'record').mockImplementation(unavailable)
+		const logWarn = vi.spyOn(app.log, 'warn')
+		const message = createMockContactMessage()
+
+		// Act
+		const results = []
+		for (let i = 0; i <= contactRateLimit.max; i++) {
+			results.push(await app.contactService.submit(message, ip))
+		}
+
+		// Assert
+		expect(results).toEqual([...Array<string>(contactRateLimit.max).fill('sent'), 'rateLimited'])
+		expect(app.email.send).toHaveBeenCalledTimes(contactRateLimit.max)
+		expect(logWarn).toHaveBeenCalledWith(expect.stringMatching(/process-local/))
 	})
 
 	it('Counts as sent when at least one admin got the email and logs the failed recipient', async () => {
@@ -166,7 +227,7 @@ describe('Contact Service', () => {
 	})
 
 	describe('Rate limiter', () => {
-		it('Counts delivered messages in the shared rate-limit repository under the contact scope', async () => {
+		it('Counts send attempts in the shared rate-limit repository under the contact scope', async () => {
 			// Arrange
 			vi.useFakeTimers({ toFake: ['Date'] })
 			vi.setSystemTime(new Date('2026-08-26T10:00:00.000Z'))

@@ -1,8 +1,10 @@
 import fp from 'fastify-plugin'
+import { createMemoryRepositories } from '@mf/db'
 
 import { scheduleHousekeeping } from '#/lib/housekeeping.ts'
 
 import type { FastifyPluginAsync } from 'fastify'
+import type { Repositories } from '@mf/db'
 
 /** A message posted through the public contact form on the site */
 export type ContactMessage = {
@@ -32,8 +34,10 @@ declare module 'fastify' {
 			 * Forwards a contact-form message to every `AUTH_ADMIN_EMAILS` address through the
 			 * `email` plugin. `rateLimited` when `ip` has sent `contactRateLimit.max` messages in
 			 * the window already (or the global ceiling is reached), `unconfigured` when there is
-			 * nobody to send to (logged). Only a delivered message counts toward the limits.
-			 * Throws when no recipient could be reached.
+			 * nobody to send to (logged). Every send attempt counts toward the limits — the hit is
+			 * recorded before the email goes out, like the magic-link limiter — so a burst cannot
+			 * outrun the counter by the length of the mailer round-trip and a failed send never
+			 * turns into an unlimited retry. Throws when no recipient could be reached.
 			 */
 			submit: (message: ContactMessage, ip: string) => Promise<ContactResult>
 		}
@@ -62,24 +66,40 @@ export const contactEmail = ({ name, email, company, message }: ContactMessage) 
 // MARK: Plugin
 const plugin: FastifyPluginAsync = async app => {
 	const { db, secrets, email: mailer } = app
-	const { rateLimits } = db
+
+	/**
+	 * The contact form only needs the mailer, so it must keep working through a database outage
+	 * (configured but unreadable secret, failed migration): when `db` is unavailable the limits
+	 * fall back to a process-local limiter instead of every submission failing with 500. The
+	 * fallback is per api task, which is the pre-Postgres behaviour; the degradation is logged.
+	 */
+	let fallback: Repositories['rateLimits'] | undefined
+	const rateLimits = (): Repositories['rateLimits'] => {
+		if (db.available) return db.rateLimits
+		if (!fallback) {
+			app.log.warn('Database unavailable: contact form rate limits are process-local')
+			fallback = createMemoryRepositories().rateLimits
+		}
+		return fallback
+	}
 
 	/** Whether a send from `ip` right now would exceed the per-ip or global limit */
 	const isLimited = async (ip: string, now: Date) => {
 		const since = new Date(now.getTime() - windowMs)
-		const global = await rateLimits.count(contactRateLimitScope, undefined, since)
+		const global = await rateLimits().count(contactRateLimitScope, undefined, since)
 		if (global >= contactRateLimit.globalMax) return true
-		return (await rateLimits.count(contactRateLimitScope, ip, since)) >= contactRateLimit.max
+		return (await rateLimits().count(contactRateLimitScope, ip, since)) >= contactRateLimit.max
 	}
 
 	// Rows older than the window count for nothing: drop them hourly (Postgres only)
-	await scheduleHousekeeping(app, 'Rate-limit prune', () =>
-		rateLimits.prune(new Date(Date.now() - windowMs))
+	scheduleHousekeeping(app, 'Rate-limit prune', () =>
+		db.rateLimits.prune(new Date(Date.now() - windowMs))
 	)
 
 	app.decorate('contactService', {
 		submit: async (message, ip) => {
-			if (await isLimited(ip, new Date())) {
+			const now = new Date()
+			if (await isLimited(ip, now)) {
 				app.log.warn({ ip }, 'Contact form rate limit hit')
 				return 'rateLimited'
 			}
@@ -93,6 +113,10 @@ const plugin: FastifyPluginAsync = async app => {
 				)
 				return 'unconfigured'
 			}
+
+			// Count the attempt before sending: once the email is out, a failure here would tell
+			// the visitor it failed although the admins got it (and invite a duplicate)
+			await rateLimits().record(contactRateLimitScope, ip, now)
 
 			const content = contactEmail(message)
 			const outcomes = await Promise.allSettled(
@@ -111,7 +135,6 @@ const plugin: FastifyPluginAsync = async app => {
 			for (const { to, error } of failed) {
 				app.log.error({ to, error }, 'Contact form email failed for a recipient')
 			}
-			await rateLimits.record(contactRateLimitScope, ip, new Date())
 			return 'sent'
 		},
 	})
