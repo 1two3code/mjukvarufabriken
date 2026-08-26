@@ -4,15 +4,14 @@ import { join } from 'node:path'
 
 import { exec, git } from '#job/exec.ts'
 import { mergeOrder, mergeTask } from '#job/merge.ts'
+import * as worker from '#job/worker.ts'
 
 import type { Plan, Spec, Task } from '@mf/models'
-
-type Worker = typeof import('#job/worker.ts')
 
 // The Agent SDK repair session is replaced by a fake that resolves the conflict on disk
 const runSession = vi.hoisted(() => vi.fn())
 vi.mock('#job/worker.ts', async importOriginal => ({
-	...(await importOriginal<Worker>()),
+	...(await importOriginal<typeof worker>()),
 	runSession,
 }))
 
