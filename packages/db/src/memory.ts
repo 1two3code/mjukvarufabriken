@@ -54,13 +54,14 @@ export const createMemoryRepositories = (): Repositories => {
 	const isSpecPhase = (status: OrderStatus) =>
 		status === 'drafting' || status === 'ready' || status === 'frozen'
 	const createOrder = (
-		order: { id: string; orgId: string; name: string },
+		order: { id: string; orgId: string; name: string; customerGithubLogin?: string },
 		status: OrderStatus
 	): Order => ({
 		id: order.id,
 		orgId: order.orgId,
 		name: order.name,
 		status,
+		customerGithubLogin: order.customerGithubLogin,
 		createdAt: now(),
 		updatedAt: now(),
 	})
@@ -82,14 +83,28 @@ export const createMemoryRepositories = (): Repositories => {
 			throw new UniqueViolation('users_email_key')
 		}
 	}
+	// Mirrors `users_github_id_key` (0011): one user per GitHub account
+	const assertGithubIdFree = (githubId: string | undefined, exceptId?: string) => {
+		if (
+			githubId !== undefined &&
+			[...users.values()].some(
+				existing => existing.githubId === githubId && existing.id !== exceptId
+			)
+		) {
+			throw new UniqueViolation('users_github_id_key')
+		}
+	}
 	const createUser = (user: NewUser): User => {
 		assertEmailFree(user.email)
+		assertGithubIdFree(user.githubId)
 		const created: User = {
 			id: crypto.randomUUID(),
 			email: user.email,
 			name: user.name,
 			role: user.role,
 			orgId: user.orgId,
+			githubId: user.githubId,
+			githubLogin: user.githubLogin,
 			createdAt: now(),
 		}
 		users.set(created.id, created)
@@ -304,7 +319,18 @@ export const createMemoryRepositories = (): Repositories => {
 		users: {
 			get: async id => clone(users.get(id)),
 			findByEmail: async email => clone([...users.values()].find(user => user.email === email)),
+			findByGithubId: async githubId =>
+				clone([...users.values()].find(user => user.githubId === githubId)),
 			insert: async user => createUser(user),
+			linkGithub: async (id, identity) => {
+				const user = users.get(id)
+				if (!user) return undefined
+				assertGithubIdFree(identity.githubId, id)
+				user.githubId = identity.githubId
+				user.githubLogin = identity.githubLogin
+				user.name ??= identity.name
+				return clone(user)
+			},
 			insertWithOrg: async (user, org) => {
 				assertEmailFree(user.email)
 				return createUser({ ...user, orgId: createOrg(org).id })

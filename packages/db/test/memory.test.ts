@@ -194,8 +194,18 @@ describe('memory repositories', () => {
 		})
 
 		it('Creates an order record whose draft is empty and derives the spec status from it', async () => {
-			const order = await repos.orders.insert({ id: 'o1', orgId: 'a', name: 'Gym booking' })
-			expect(order).toMatchObject({ id: 'o1', status: 'drafting', name: 'Gym booking' })
+			const order = await repos.orders.insert({
+				id: 'o1',
+				orgId: 'a',
+				name: 'Gym booking',
+				customerGithubLogin: 'anna',
+			})
+			expect(order).toMatchObject({
+				id: 'o1',
+				status: 'drafting',
+				name: 'Gym booking',
+				customerGithubLogin: 'anna',
+			})
 			await expect(repos.orders.get('o1')).resolves.toMatchObject({
 				orderId: 'o1',
 				orgId: 'a',
@@ -292,6 +302,46 @@ describe('memory repositories', () => {
 			).rejects.toMatchObject({ code: '23505' })
 			// No orphan org from the rejected attempt
 			await expect(repos.users.listOrgs()).resolves.toHaveLength(1)
+		})
+
+		it('Links a GitHub identity, finds users by GitHub id and keeps one user per account', async () => {
+			const anna = await repos.users.insertWithOrg(
+				{ email: 'anna@acme.se', role: 'user' },
+				{ name: 'acme.se' }
+			)
+			const bob = await repos.users.insert({
+				email: 'bob@acme.se',
+				role: 'user',
+				orgId: anna.orgId,
+				githubId: '7',
+				githubLogin: 'bob',
+			})
+
+			const linked = await repos.users.linkGithub(anna.id, {
+				githubId: '42',
+				githubLogin: 'anna',
+				name: 'Anna',
+			})
+
+			expect(linked).toMatchObject({
+				id: anna.id,
+				githubId: '42',
+				githubLogin: 'anna',
+				name: 'Anna',
+			})
+			await expect(repos.users.findByGithubId('42')).resolves.toEqual(linked)
+			await expect(repos.users.findByGithubId('7')).resolves.toEqual(bob)
+			await expect(repos.users.findByGithubId('1')).resolves.toBeUndefined()
+			await expect(
+				repos.users.linkGithub('missing', { githubId: '1', githubLogin: 'x' })
+			).resolves.toBeUndefined()
+			// Rename on GitHub: same id, new login; an existing name is kept
+			await expect(
+				repos.users.linkGithub(anna.id, { githubId: '42', githubLogin: 'anna2', name: 'Other' })
+			).resolves.toMatchObject({ githubLogin: 'anna2', name: 'Anna' })
+			await expect(
+				repos.users.linkGithub(bob.id, { githubId: '42', githubLogin: 'anna' })
+			).rejects.toMatchObject({ code: '23505' })
 		})
 	})
 

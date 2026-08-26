@@ -2,7 +2,7 @@ import { isUuid } from './jobs.ts'
 
 import type { Org, User } from '@mf/models'
 import type { Db } from './index.ts'
-import type { NewOrg, NewUser, UsersRepository } from './repositories.ts'
+import type { GithubIdentity, NewOrg, NewUser, UsersRepository } from './repositories.ts'
 
 // MARK: Row mapping
 
@@ -12,6 +12,8 @@ type UserRow = {
 	email: string
 	name: string | null
 	role: User['role']
+	github_id: string | null
+	github_login: string | null
 	created_at: Date
 }
 
@@ -28,6 +30,8 @@ export const toUser = (row: UserRow): User => ({
 	name: row.name ?? undefined,
 	role: row.role,
 	orgId: row.org_id,
+	githubId: row.github_id ?? undefined,
+	githubLogin: row.github_login ?? undefined,
 	createdAt: row.created_at.toISOString(),
 })
 
@@ -50,12 +54,36 @@ export const findUserByEmail = async (db: Db, email: string): Promise<User | und
 	return row && toUser(row)
 }
 
+export const findUserByGithubId = async (db: Db, githubId: string): Promise<User | undefined> => {
+	const [row] = await db.sql<UserRow[]>`select * from users where github_id = ${githubId}`
+	return row && toUser(row)
+}
+
 export const insertUser = async (db: Db, user: NewUser): Promise<User> => {
 	const [row] = await db.sql<UserRow[]>`
-		insert into users (org_id, email, name, role)
-		values (${user.orgId}, ${user.email}, ${user.name ?? null}, ${user.role})
+		insert into users (org_id, email, name, role, github_id, github_login)
+		values (
+			${user.orgId}, ${user.email}, ${user.name ?? null}, ${user.role},
+			${user.githubId ?? null}, ${user.githubLogin ?? null}
+		)
 		returning *`
 	return toUser(row!)
+}
+
+export const linkGithub = async (
+	db: Db,
+	id: string,
+	identity: GithubIdentity
+): Promise<User | undefined> => {
+	if (!isUuid(id)) return undefined
+	const [row] = await db.sql<UserRow[]>`
+		update users set
+			github_id = ${identity.githubId},
+			github_login = ${identity.githubLogin},
+			name = coalesce(name, ${identity.name ?? null})
+		where id = ${id}
+		returning *`
+	return row && toUser(row)
 }
 
 /** Org + first user in one transaction: a `users.email` unique violation rolls the org back */
@@ -67,8 +95,11 @@ export const insertUserWithOrg = async (
 	const [row] = await db.sql.begin(async tx => {
 		const [orgRow] = await tx<OrgRow[]>`insert into orgs (name) values (${org.name}) returning *`
 		return tx<UserRow[]>`
-			insert into users (org_id, email, name, role)
-			values (${orgRow!.id}, ${user.email}, ${user.name ?? null}, ${user.role})
+			insert into users (org_id, email, name, role, github_id, github_login)
+			values (
+				${orgRow!.id}, ${user.email}, ${user.name ?? null}, ${user.role},
+				${user.githubId ?? null}, ${user.githubLogin ?? null}
+			)
 			returning *`
 	})
 	return toUser(row!)
@@ -93,7 +124,9 @@ export const listOrgs = async (db: Db): Promise<Org[]> => {
 export const createUsersRepository = (db: Db): UsersRepository => ({
 	get: id => getUser(db, id),
 	findByEmail: email => findUserByEmail(db, email),
+	findByGithubId: githubId => findUserByGithubId(db, githubId),
 	insert: user => insertUser(db, user),
+	linkGithub: (id, identity) => linkGithub(db, id, identity),
 	insertWithOrg: (user, org) => insertUserWithOrg(db, user, org),
 	getOrg: id => getOrg(db, id),
 	insertOrg: org => insertOrg(db, org),

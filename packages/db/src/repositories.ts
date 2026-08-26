@@ -38,7 +38,13 @@ export type JobsRepository = {
 	listEvents: (jobId: string, afterId?: number) => Promise<JobEvent[]>
 }
 
-export type NewOrder = { id: string; orgId: string; name: string; createdBy?: string }
+export type NewOrder = {
+	id: string
+	orgId: string
+	name: string
+	createdBy?: string
+	customerGithubLogin?: string
+}
 
 export type NewPayment = Pick<
 	Payment,
@@ -92,14 +98,30 @@ export type OrdersRepository = {
 	forgetPaymentEvent: (eventId: string) => Promise<void>
 }
 
-export type NewUser = { email: string; name?: string; role: User['role']; orgId: string }
+export type NewUser = {
+	email: string
+	name?: string
+	role: User['role']
+	orgId: string
+	githubId?: string
+	githubLogin?: string
+}
+/** The GitHub identity written when a user signs in with GitHub (M6) */
+export type GithubIdentity = { githubId: string; githubLogin: string; name?: string }
 export type NewOrg = { name: string }
 
 export type UsersRepository = {
 	get: (id: string) => Promise<User | undefined>
 	/** Exact match on the stored (lower-cased) email */
 	findByEmail: (email: string) => Promise<User | undefined>
+	findByGithubId: (githubId: string) => Promise<User | undefined>
 	insert: (user: NewUser) => Promise<User>
+	/**
+	 * Stores the GitHub identity on the user (account linking / login rename). `name` is only
+	 * written when the user has none. `undefined` for an unknown id; rejects with
+	 * `code: '23505'` when the GitHub id is already linked to another user.
+	 */
+	linkGithub: (id: string, identity: GithubIdentity) => Promise<User | undefined>
 	/**
 	 * Creates the org and its first user atomically (first sign-in). Rejects with
 	 * `code: '23505'` when the email already exists — without leaving an orphan org.
