@@ -1,7 +1,5 @@
 import { createSlice } from '@reduxjs/toolkit'
 
-import { sessionApiSlice } from '#/features/session/sessionApiSlice.ts'
-
 import type { PayloadAction } from '@reduxjs/toolkit'
 import type { FrontendSession } from '@template/models'
 
@@ -39,17 +37,17 @@ export const sessionSlice = createSlice({
 			state.refreshToken = null
 			state.details = undefined
 		}),
-	}),
-	extraReducers: builder => {
-		// Keep the session details in sync with the getSession query
-		builder.addMatcher(sessionApiSlice.endpoints.getSession.matchFulfilled, (state, action) => {
+		// Dispatched from sessionListeners when the getSession query fulfils. Deliberately not an
+		// extraReducers matcher: importing the api slice here creates an import cycle through
+		// app/api.ts that leaves `appApi` undefined in the production bundle.
+		setSessionDetails: create.reducer((state, action: PayloadAction<FrontendSession>) => {
 			state.details = action.payload
-		})
-	},
+		}),
+	}),
 })
 
 // Action exports
-export const { clearSession, setTokens } = sessionSlice.actions
+export const { clearSession, setSessionDetails, setTokens } = sessionSlice.actions
 
 // Selector exports
 export const { selectToken, selectSession } = sessionSlice.selectors

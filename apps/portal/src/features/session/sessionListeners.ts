@@ -1,7 +1,7 @@
 import { createListenerMiddleware } from '@reduxjs/toolkit'
 
 import { sessionApiSlice } from '#/features/session/sessionApiSlice.ts'
-import { clearSession, setTokens } from '#/features/session/sessionSlice.ts'
+import { clearSession, setSessionDetails, setTokens } from '#/features/session/sessionSlice.ts'
 
 import type { AppDispatch, RootState } from '#/app/store.ts'
 
@@ -26,6 +26,14 @@ registerListener({
 		localStorage.removeItem('token')
 		localStorage.removeItem('refreshToken')
 		api.dispatch(sessionApiSlice.util.resetApiState())
+	},
+})
+
+// Keep the session details in sync with the getSession query
+registerListener({
+	matcher: sessionApiSlice.endpoints.getSession.matchFulfilled,
+	effect: (action, api) => {
+		api.dispatch(setSessionDetails(action.payload))
 	},
 })
 
