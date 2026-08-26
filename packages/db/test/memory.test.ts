@@ -364,6 +364,33 @@ describe('memory repositories', () => {
 			await expect(repos.auth.consumeRefreshToken('revoked')).resolves.toBeUndefined()
 			await expect(repos.auth.countMagicLinksSince('a@x.se', past(30))).resolves.toBe(2)
 		})
+
+		it('Sweeps expired rows on insert (at most once a minute) since nothing schedules prune in memory', async () => {
+			vi.useFakeTimers({ toFake: ['Date'] })
+			try {
+				const day = 24 * 60 * 60 * 1000
+				vi.setSystemTime(new Date('2026-08-01T10:00:00.000Z'))
+				const expiresAt = new Date(Date.now() + day)
+				await repos.auth.insertMagicLink({ tokenHash: 'old', email: 'a@x.se', expiresAt })
+				await repos.auth.insertRefreshToken({ tokenHash: 'old', userId: 'u', expiresAt })
+
+				// Within the same minute nothing is swept, even for rows that just expired
+				vi.setSystemTime(new Date('2026-08-01T10:00:30.000Z'))
+				await repos.auth.insertMagicLink({ tokenHash: 'same-minute', email: 'a@x.se', expiresAt })
+				await expect(repos.auth.consumeRefreshToken('old')).resolves.toBeDefined()
+
+				// Ten days later the next insert drops the expired link and token
+				vi.setSystemTime(new Date('2026-08-11T10:00:00.000Z'))
+				await repos.auth.insertMagicLink({ tokenHash: 'new', email: 'a@x.se', expiresAt })
+
+				await expect(repos.auth.getMagicLink('old')).resolves.toBeUndefined()
+				await expect(repos.auth.getMagicLink('same-minute')).resolves.toBeUndefined()
+				await expect(repos.auth.getMagicLink('new')).resolves.toBeDefined()
+				await expect(repos.auth.consumeRefreshToken('old')).resolves.toBeUndefined()
+			} finally {
+				vi.useRealTimers()
+			}
+		})
 	})
 
 	describe('rateLimits', () => {

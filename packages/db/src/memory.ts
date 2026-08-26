@@ -62,6 +62,8 @@ export const createMemoryRepositories = (): MemoryRepositories => {
 	const rateLimits = new Map<string, Map<string, number[]>>()
 	/** scope → when the retention sweep last ran (ms), so it runs at most once a minute */
 	const rateLimitSweptAt = new Map<string, number>()
+	/** When the auth sweep last ran (ms), so it runs at most once a minute */
+	let authSweptAt = 0
 
 	const byCreatedDesc = <T extends { createdAt: string }>(items: T[]) =>
 		items.sort((a, b) => b.createdAt.localeCompare(a.createdAt))
@@ -115,6 +117,33 @@ export const createMemoryRepositories = (): MemoryRepositories => {
 		const created: Org = { id: crypto.randomUUID(), name: org.name, createdAt: now() }
 		orgs.set(created.id, created)
 		return clone(created)
+	}
+
+	// MARK: Auth helpers
+	/** Drops expired links and expired or long-revoked tokens — the same rule as `pruneAuth` */
+	const sweepAuth = () => {
+		const cutoff = Date.now()
+		const weekAgo = cutoff - 7 * 24 * 60 * 60 * 1000
+		for (const [hash, link] of magicLinks) {
+			if (Date.parse(link.expiresAt) < weekAgo) magicLinks.delete(hash)
+		}
+		for (const [hash, token] of refreshTokens) {
+			const revokedAt = token.revokedAt ? Date.parse(token.revokedAt) : undefined
+			if (
+				Date.parse(token.expiresAt) < cutoff ||
+				(revokedAt !== undefined && revokedAt < weekAgo)
+			) {
+				refreshTokens.delete(hash)
+			}
+		}
+	}
+	/** Nothing schedules `auth.prune()` on the memory backend, so inserts sweep (at most once a
+	 * minute) — otherwise every unclicked link and every rotated token would live forever */
+	const sweepAuthIfDue = () => {
+		const now = Date.now()
+		if (now - authSweptAt < 60_000) return
+		authSweptAt = now
+		sweepAuth()
 	}
 
 	// MARK: Rate limits helpers
@@ -345,6 +374,7 @@ export const createMemoryRepositories = (): MemoryRepositories => {
 
 		auth: {
 			insertMagicLink: async link => {
+				sweepAuthIfDue()
 				const created: MagicLink = {
 					tokenHash: link.tokenHash,
 					email: link.email,
@@ -366,6 +396,7 @@ export const createMemoryRepositories = (): MemoryRepositories => {
 					link => link.email === email && new Date(link.createdAt) > since
 				).length,
 			insertRefreshToken: async token => {
+				sweepAuthIfDue()
 				const created: RefreshToken = {
 					tokenHash: token.tokenHash,
 					userId: token.userId,
@@ -385,22 +416,7 @@ export const createMemoryRepositories = (): MemoryRepositories => {
 				const token = refreshTokens.get(tokenHash)
 				if (token && !token.revokedAt) token.revokedAt = now()
 			},
-			prune: async () => {
-				const cutoff = Date.now()
-				const weekAgo = cutoff - 7 * 24 * 60 * 60 * 1000
-				for (const [hash, link] of magicLinks) {
-					if (Date.parse(link.expiresAt) < weekAgo) magicLinks.delete(hash)
-				}
-				for (const [hash, token] of refreshTokens) {
-					const revokedAt = token.revokedAt ? Date.parse(token.revokedAt) : undefined
-					if (
-						Date.parse(token.expiresAt) < cutoff ||
-						(revokedAt !== undefined && revokedAt < weekAgo)
-					) {
-						refreshTokens.delete(hash)
-					}
-				}
-			},
+			prune: async () => sweepAuth(),
 		},
 
 		rateLimits: {
