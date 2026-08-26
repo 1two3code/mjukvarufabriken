@@ -28,7 +28,6 @@ describe('row mapping', () => {
 				size_class: null,
 				price_sek: null,
 				frozen_at: null,
-				customer_github_login: null,
 				created_at: at,
 				updated_at: at,
 			})
@@ -55,7 +54,6 @@ describe('row mapping', () => {
 				size_class: 'M',
 				price_sek: 45_000,
 				frozen_at: at,
-				customer_github_login: null,
 				created_at: at,
 				updated_at: at,
 			})
@@ -105,6 +103,7 @@ describe('row mapping', () => {
 			toMagicLink({
 				token_hash: 'h',
 				email: 'a@x.se',
+				purpose: 'email',
 				expires_at: at,
 				used_at: null,
 				created_at: at,
@@ -112,6 +111,7 @@ describe('row mapping', () => {
 		).toEqual({
 			tokenHash: 'h',
 			email: 'a@x.se',
+			purpose: 'email',
 			createdAt: at.toISOString(),
 			expiresAt: at.toISOString(),
 			usedAt: undefined,

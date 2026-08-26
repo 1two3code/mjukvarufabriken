@@ -38,13 +38,7 @@ export type JobsRepository = {
 	listEvents: (jobId: string, afterId?: number) => Promise<JobEvent[]>
 }
 
-export type NewOrder = {
-	id: string
-	orgId: string
-	name: string
-	createdBy?: string
-	customerGithubLogin?: string
-}
+export type NewOrder = { id: string; orgId: string; name: string; createdBy?: string }
 
 export type NewPayment = Pick<
 	Payment,
@@ -132,9 +126,13 @@ export type UsersRepository = {
 	listOrgs: () => Promise<Org[]>
 }
 
+/** `email`: an emailed magic link; `login`: the one-shot link a provider sign-in ends in (M6) */
+export type MagicLinkPurpose = 'email' | 'login'
+
 export type MagicLink = {
 	tokenHash: string
 	email: string
+	purpose: MagicLinkPurpose
 	createdAt: string
 	expiresAt: string
 	usedAt?: string
@@ -149,15 +147,17 @@ export type RefreshToken = {
 }
 
 export type AuthRepository = {
+	/** `purpose` defaults to `email` */
 	insertMagicLink: (link: {
 		tokenHash: string
 		email: string
 		expiresAt: Date
+		purpose?: MagicLinkPurpose
 	}) => Promise<MagicLink>
 	getMagicLink: (tokenHash: string) => Promise<MagicLink | undefined>
 	/** Marks the link used; `undefined` when unknown or already used (single use, atomic) */
 	consumeMagicLink: (tokenHash: string) => Promise<MagicLink | undefined>
-	/** Links created for the email since the given instant (rate limiting) */
+	/** Emailed links (`purpose = 'email'`) created for the email since the given instant (rate limiting) */
 	countMagicLinksSince: (email: string, since: Date) => Promise<number>
 	insertRefreshToken: (token: {
 		tokenHash: string

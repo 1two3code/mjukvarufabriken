@@ -54,14 +54,14 @@ export const createMemoryRepositories = (): Repositories => {
 	const isSpecPhase = (status: OrderStatus) =>
 		status === 'drafting' || status === 'ready' || status === 'frozen'
 	const createOrder = (
-		order: { id: string; orgId: string; name: string; customerGithubLogin?: string },
+		order: { id: string; orgId: string; name: string; createdBy?: string },
 		status: OrderStatus
 	): Order => ({
 		id: order.id,
 		orgId: order.orgId,
 		name: order.name,
 		status,
-		customerGithubLogin: order.customerGithubLogin,
+		createdBy: order.createdBy,
 		createdAt: now(),
 		updatedAt: now(),
 	})
@@ -345,6 +345,7 @@ export const createMemoryRepositories = (): Repositories => {
 				const created: MagicLink = {
 					tokenHash: link.tokenHash,
 					email: link.email,
+					purpose: link.purpose ?? 'email',
 					createdAt: now(),
 					expiresAt: link.expiresAt.toISOString(),
 				}
@@ -360,7 +361,8 @@ export const createMemoryRepositories = (): Repositories => {
 			},
 			countMagicLinksSince: async (email, since) =>
 				[...magicLinks.values()].filter(
-					link => link.email === email && new Date(link.createdAt) > since
+					link =>
+						link.email === email && link.purpose === 'email' && new Date(link.createdAt) > since
 				).length,
 			insertRefreshToken: async token => {
 				const created: RefreshToken = {

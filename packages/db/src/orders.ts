@@ -20,7 +20,6 @@ type OrderRow = {
 	size_class: 'S' | 'M' | 'L' | null
 	price_sek: number | null
 	frozen_at: Date | null
-	customer_github_login: string | null
 	created_at: Date
 	updated_at: Date
 }
@@ -61,7 +60,7 @@ export const toOrder = (row: OrderRow): Order => ({
 	sizeClass: row.size_class ?? undefined,
 	priceSek: row.price_sek ?? undefined,
 	frozenAt: row.frozen_at?.toISOString(),
-	customerGithubLogin: row.customer_github_login ?? undefined,
+	createdBy: row.created_by ?? undefined,
 	createdAt: row.created_at.toISOString(),
 	updatedAt: row.updated_at.toISOString(),
 })
@@ -163,11 +162,8 @@ export const updateOrderUnlessFrozen = async (
 
 export const insertOrder = async (db: Db, order: NewOrder): Promise<Order> => {
 	const [row] = await db.sql<OrderRow[]>`
-		insert into orders (id, org_id, created_by, name, customer_github_login)
-		values (
-			${order.id}, ${order.orgId}, ${order.createdBy ?? null}, ${order.name},
-			${order.customerGithubLogin ?? null}
-		)
+		insert into orders (id, org_id, created_by, name)
+		values (${order.id}, ${order.orgId}, ${order.createdBy ?? null}, ${order.name})
 		returning *`
 	return toOrder(row!)
 }

@@ -198,13 +198,13 @@ describe('memory repositories', () => {
 				id: 'o1',
 				orgId: 'a',
 				name: 'Gym booking',
-				customerGithubLogin: 'anna',
+				createdBy: 'u1',
 			})
 			expect(order).toMatchObject({
 				id: 'o1',
 				status: 'drafting',
 				name: 'Gym booking',
-				customerGithubLogin: 'anna',
+				createdBy: 'u1',
 			})
 			await expect(repos.orders.get('o1')).resolves.toMatchObject({
 				orderId: 'o1',
@@ -346,11 +346,15 @@ describe('memory repositories', () => {
 	})
 
 	describe('auth', () => {
-		it('Magic links are single use and counted per email since an instant', async () => {
+		it('Magic links are single use and emailed ones are counted per email since an instant', async () => {
 			const expiresAt = new Date(Date.now() + 60_000)
 			await repos.auth.insertMagicLink({ tokenHash: 'h1', email: 'a@x.se', expiresAt })
 			await repos.auth.insertMagicLink({ tokenHash: 'h2', email: 'a@x.se', expiresAt })
 			await repos.auth.insertMagicLink({ tokenHash: 'h3', email: 'b@x.se', expiresAt })
+			// One-shot provider login links never count against the emailed-link limit
+			await expect(
+				repos.auth.insertMagicLink({ tokenHash: 'h4', email: 'a@x.se', expiresAt, purpose: 'login' })
+			).resolves.toMatchObject({ purpose: 'login' })
 
 			await expect(
 				repos.auth.countMagicLinksSince('a@x.se', new Date(Date.now() - 1000))
@@ -361,6 +365,7 @@ describe('memory repositories', () => {
 
 			await expect(repos.auth.consumeMagicLink('h1')).resolves.toMatchObject({
 				email: 'a@x.se',
+				purpose: 'email',
 				usedAt: expect.any(String),
 			})
 			await expect(repos.auth.consumeMagicLink('h1')).resolves.toBeUndefined()

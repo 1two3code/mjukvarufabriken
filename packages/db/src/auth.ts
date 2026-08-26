@@ -1,13 +1,14 @@
 import { isUuid } from './jobs.ts'
 
 import type { Db } from './index.ts'
-import type { AuthRepository, MagicLink, RefreshToken } from './repositories.ts'
+import type { AuthRepository, MagicLink, MagicLinkPurpose, RefreshToken } from './repositories.ts'
 
 // MARK: Row mapping
 
 type MagicLinkRow = {
 	token_hash: string
 	email: string
+	purpose: MagicLinkPurpose
 	expires_at: Date
 	used_at: Date | null
 	created_at: Date
@@ -24,6 +25,7 @@ type RefreshTokenRow = {
 export const toMagicLink = (row: MagicLinkRow): MagicLink => ({
 	tokenHash: row.token_hash,
 	email: row.email,
+	purpose: row.purpose,
 	createdAt: row.created_at.toISOString(),
 	expiresAt: row.expires_at.toISOString(),
 	usedAt: row.used_at?.toISOString(),
@@ -41,11 +43,11 @@ export const toRefreshToken = (row: RefreshTokenRow): RefreshToken => ({
 
 export const insertMagicLink = async (
 	db: Db,
-	link: { tokenHash: string; email: string; expiresAt: Date }
+	link: { tokenHash: string; email: string; expiresAt: Date; purpose?: MagicLinkPurpose }
 ): Promise<MagicLink> => {
 	const [row] = await db.sql<MagicLinkRow[]>`
-		insert into magic_links (token_hash, email, expires_at)
-		values (${link.tokenHash}, ${link.email}, ${link.expiresAt})
+		insert into magic_links (token_hash, email, expires_at, purpose)
+		values (${link.tokenHash}, ${link.email}, ${link.expiresAt}, ${link.purpose ?? 'email'})
 		returning *`
 	return toMagicLink(row!)
 }
@@ -71,7 +73,7 @@ export const consumeMagicLink = async (
 export const countMagicLinksSince = async (db: Db, email: string, since: Date) => {
 	const [row] = await db.sql<{ count: number }[]>`
 		select count(*)::int as count from magic_links
-		where email = ${email} and created_at > ${since}`
+		where email = ${email} and purpose = 'email' and created_at > ${since}`
 	return Number(row?.count ?? 0)
 }
 

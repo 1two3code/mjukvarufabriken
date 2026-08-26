@@ -74,10 +74,10 @@ export const OrderSchema = z.object({
 	priceSek: z.number().int().nonnegative().optional(),
 	frozenAt: z.iso.datetime().optional(),
 	/**
-	 * GitHub login of the customer who created the order (from their GitHub sign-in, M6) — the
-	 * account the delivered repo is transferred to (M5)
+	 * Id of the user who created the order. M5 delivery resolves the customer's GitHub login
+	 * (M6 sign-in) from this user at delivery time rather than from a snapshot on the order
 	 */
-	customerGithubLogin: z.string().optional(),
+	createdBy: z.string().optional(),
 	createdAt: z.iso.datetime(),
 	updatedAt: z.iso.datetime(),
 })
