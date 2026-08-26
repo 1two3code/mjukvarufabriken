@@ -61,6 +61,8 @@ export type TaskOutcome = {
 	branch: string
 	/** Short explanation when `ok` is false */
 	reason?: string
+	/** What an audit should see even when `ok`: turn caps hit, gate widened beyond the areas */
+	notes?: string[]
 }
 
 export type MergeOutcome = {

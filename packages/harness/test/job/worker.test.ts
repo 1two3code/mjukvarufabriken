@@ -6,6 +6,8 @@ import {
 	evaluateVitestReport,
 	gateCommands,
 	gateScopeForAreas,
+	gateScopeForChanges,
+	hasTestFiles,
 	maxTurnsForSpec,
 	renderCommand,
 	repoConventions,
@@ -105,6 +107,25 @@ describe('gateScopeForAreas', () => {
 		} finally {
 			workerLimits.scopedTaskGate = before
 		}
+	})
+})
+
+describe('gateScopeForChanges', () => {
+	it('Keeps the scope when every changed file is inside the task workspaces', () => {
+		expect(
+			gateScopeForChanges(['apps/app'], ['apps/app/src/x.ts', 'apps/app/vite.config.ts'])
+		).toEqual({
+			workspaces: ['apps/app'],
+		})
+	})
+
+	it('Widens to the full gate for a change under packages/*, another app or a root file', () => {
+		expect(
+			gateScopeForChanges(['apps/app'], ['apps/app/src/x.ts', 'packages/models/schemas/Order.ts'])
+		).toEqual({ full: true })
+		expect(gateScopeForChanges(['apps/app'], ['apps/api/src/routes/x.ts'])).toEqual({ full: true })
+		expect(gateScopeForChanges(['apps/app'], ['vitest.config.ts'])).toEqual({ full: true })
+		expect(gateScopeForChanges(['packages/models'], [])).toEqual({ full: true })
 	})
 })
 
@@ -218,11 +239,71 @@ describe('verifyRepo', () => {
 		await rm(dir, { recursive: true, force: true })
 	})
 
+	it('Widens to the root scripts when the task changed files outside its areas', async () => {
+		const dir = await fakeRepo({ 'apps/app': 'echo app-ok' })
+		const outcome = await verifyRepo(dir, undefined, {
+			areas: ['apps/app'],
+			changed: ['apps/app/src/x.ts', 'packages/models/schemas/Order.ts'],
+		})
+		expect(outcome.ok).toBe(false)
+		expect(outcome.output).toContain('npm run lint failed (3)')
+		await rm(dir, { recursive: true, force: true })
+	})
+
+	it('Is red when the scoped vitest run collected nothing but the workspace has test files', async () => {
+		const dir = await fakeRepo({ 'apps/app': 'echo app-ok' })
+		// A fake `npx` on PATH that behaves like vitest --passWithNoTests on an unregistered project
+		const bin = join(dir, 'bin')
+		await mkdir(bin)
+		await writeFile(
+			join(bin, 'npx'),
+			'#!/bin/sh\necho "No test files found, exiting with code 0"\n',
+			{
+				mode: 0o755,
+			}
+		)
+		const path = process.env.PATH
+		process.env.PATH = `${bin}:${path}`
+		try {
+			await mkdir(join(dir, 'apps/app/src/acceptance'), { recursive: true })
+			await writeFile(join(dir, 'apps/app/src/acceptance/f0.c0.test.tsx'), 'test')
+			const red = await verifyRepo(dir, undefined, { areas: ['apps/app'] })
+			expect(red.ok).toBe(false)
+			expect(red.output).toContain('ran no tests, but apps/app contains test files')
+			expect(red.output).toContain('root vitest.config.ts')
+
+			await rm(join(dir, 'apps/app/src'), { recursive: true })
+			const green = await verifyRepo(dir, undefined, { areas: ['apps/app'] })
+			expect(green).toEqual({
+				ok: true,
+				output:
+					'npm run lint --if-present -w apps/app: ok\nnpx vitest run --passWithNoTests apps/app: ok (no test files in apps/app)',
+			})
+		} finally {
+			process.env.PATH = path
+			await rm(dir, { recursive: true, force: true })
+		}
+	})
+
 	it('Runs the root scripts without areas (merge/verify gate)', async () => {
 		const dir = await fakeRepo({ 'apps/app': 'echo app-ok' })
 		const outcome = await verifyRepo(dir)
 		expect(outcome.ok).toBe(false)
 		expect(outcome.output).toContain('npm run lint failed (3)')
+		await rm(dir, { recursive: true, force: true })
+	})
+})
+
+describe('hasTestFiles', () => {
+	it('Finds *.test.* / *.spec.* files and skips node_modules and dist', async () => {
+		const dir = await mkdtemp(join(tmpdir(), 'mf-tests-'))
+		await mkdir(join(dir, 'node_modules/x'), { recursive: true })
+		await writeFile(join(dir, 'node_modules/x/a.test.js'), '')
+		expect(await hasTestFiles(dir)).toBe(false)
+		await mkdir(join(dir, 'src/deep'), { recursive: true })
+		await writeFile(join(dir, 'src/deep/a.spec.tsx'), '')
+		expect(await hasTestFiles(dir)).toBe(true)
+		expect(await hasTestFiles(join(dir, 'missing'))).toBe(false)
 		await rm(dir, { recursive: true, force: true })
 	})
 })

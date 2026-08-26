@@ -36,9 +36,10 @@ export const repoConventions = `Repository conventions (npm-workspaces TypeScrip
  */
 export const workerLimits = {
 	/**
-	 * Gate a task on the workspaces it touches (`task.areas`) instead of the whole monorepo; the
-	 * full-repo gate still runs at merge/verify. Only `apps/*` areas are scoped — a change under
-	 * `packages/*` is consumed by every app, so those tasks keep the full gate.
+	 * Gate a task on the `apps/*` workspaces in `task.areas` instead of the whole monorepo, as long
+	 * as the task's diff stays inside them (`gateScopeForChanges`); a change under `packages/*` is
+	 * consumed by every app, so those tasks (and any task that strays) keep the full gate. The
+	 * full-repo gate always runs at merge/verify.
 	 */
 	scopedTaskGate: true,
 	/** Turn cap of the implementation session per spec size class */
@@ -86,6 +87,25 @@ export const gateScopeForAreas = (areas: string[]): GateScope => {
 		workspaces.add(workspace)
 	}
 	return { workspaces: [...workspaces].sort() }
+}
+
+/**
+ * The scope the gate actually runs: the planner's `areas` are a hint, the files the worker
+ * changed decide. Any changed path outside the scoped `apps/*` workspaces (a schema in
+ * packages/models, the root vitest config, …) widens the gate to the full repo, because that is
+ * the only gate that sees the other consumers of the change.
+ */
+export const gateScopeForChanges = (areas: string[], changedFiles: string[]): GateScope => {
+	const scope = gateScopeForAreas(areas)
+	if ('full' in scope) return scope
+	const outside = changedFiles.filter(file => !scope.workspaces.includes(workspaceOf(file)))
+	return outside.length ? { full: true } : scope
+}
+
+/** Files a task branch changed against main (committed; call after `commitLeftovers`) */
+export const changedFiles = async (dir: string, signal?: AbortSignal) => {
+	const result = await exec('git', ['diff', '--name-only', 'main...HEAD'], { cwd: dir, signal })
+	return result.stdout.split('\n').filter(Boolean)
 }
 
 export type GateCommand = { script: 'lint' | 'test'; command: string; args: string[] }
@@ -223,18 +243,39 @@ export const removeWorktree = async (repoDir: string, taskId: string) => {
 export type VerifyOptions = {
 	/** Task areas → scoped gate (see `gateScopeForAreas`); omitted → full-repo gate */
 	areas?: string[]
+	/** Files the task changed; any path outside the scoped workspaces widens to the full gate */
+	changed?: string[]
 }
+
+const testFilePattern = /\.(test|spec)\.[cm]?[jt]sx?$/
+const skippedDirs = new Set(['node_modules', 'dist', 'coverage', '.git'])
+
+/** True when a directory holds at least one test file (outside node_modules/dist) */
+export const hasTestFiles = async (dir: string): Promise<boolean> => {
+	if (!(await exists(dir))) return false
+	for (const entry of await readdir(dir, { withFileTypes: true })) {
+		if (entry.isDirectory()) {
+			if (!skippedDirs.has(entry.name) && (await hasTestFiles(join(dir, entry.name)))) return true
+		} else if (testFilePattern.test(entry.name)) return true
+	}
+	return false
+}
+
+const noTestFilesMarker = 'No test files found'
 
 /**
  * Runs the customer repo's lint + tests; the gate every task and the final merge must pass.
- * With `areas` the gate is scoped to the task's workspaces (`workerLimits.scopedTaskGate`).
+ * With `areas` the gate is scoped to the task's workspaces (`workerLimits.scopedTaskGate`),
+ * widened to the full repo when `changed` names a file outside them. A scoped Vitest run that
+ * collected nothing (`--passWithNoTests`) is red when the workspace does hold test files — they
+ * exist but no Vitest project picks them up, so a green exit would be vacuous.
  */
 export const verifyRepo = async (
 	repoDir: string,
 	signal?: AbortSignal,
-	{ areas }: VerifyOptions = {}
+	{ areas, changed = [] }: VerifyOptions = {}
 ): Promise<VerifyOutcome> => {
-	const scope: GateScope = areas ? gateScopeForAreas(areas) : { full: true }
+	const scope: GateScope = areas ? gateScopeForChanges(areas, changed) : { full: true }
 	const outputs: string[] = []
 	for (const step of gateCommands(scope)) {
 		const result = await exec(step.command, step.args, { cwd: repoDir, signal })
@@ -244,6 +285,20 @@ export const verifyRepo = async (
 				ok: false,
 				output: `${renderCommand(step)} failed (${result.code}):\n${tail(output, workerLimits.gateOutputLines)}`,
 			}
+		}
+		if (step.script === 'test' && 'workspaces' in scope && output.includes(noTestFilesMarker)) {
+			const orphans: string[] = []
+			for (const workspace of scope.workspaces) {
+				if (await hasTestFiles(join(repoDir, workspace))) orphans.push(workspace)
+			}
+			if (orphans.length) {
+				return {
+					ok: false,
+					output: `${renderCommand(step)} ran no tests, but ${orphans.join(', ')} contains test files that no Vitest project picks up. Add the workspace (with its own vitest config) to \`projects\` in the root vitest.config.ts so they run.`,
+				}
+			}
+			outputs.push(`${renderCommand(step)}: ok (no test files in ${scope.workspaces.join(', ')})`)
+			continue
 		}
 		outputs.push(`${renderCommand(step)}: ok`)
 	}
@@ -484,6 +539,12 @@ export const runSession = async ({
 
 // MARK: Task runner
 
+/** The session and gate `runTask` uses; swapped for fakes in tests */
+export type TaskPorts = {
+	runSession: typeof runSession
+	verifyRepo: typeof verifyRepo
+}
+
 export type RunTaskInput = {
 	task: Task
 	spec: Spec
@@ -492,6 +553,7 @@ export type RunTaskInput = {
 	signal: AbortSignal
 	onUsage: (usage: TokenUsage) => void
 	model?: string
+	ports?: Partial<TaskPorts>
 }
 
 const hasCommits = async (dir: string, branch: string, signal: AbortSignal) => {
@@ -509,9 +571,11 @@ const commitLeftovers = async (dir: string, task: Task, signal: AbortSignal) => 
 }
 
 /**
- * One task = one worktree + one agent session (turn cap by spec size), then the scoped lint +
- * test gate. When verification fails the agent gets exactly one repair session with the output;
- * still red → the task fails. A session cut off by its turn cap says so in the reason.
+ * One task = one worktree + one agent session (turn cap by spec size), then the lint + test gate
+ * scoped to the workspaces the worker actually changed. A second session — at most one — follows
+ * when the gate is red (with the output) or when the first session was cut off by its cap (to
+ * finish the task); still red afterwards → the task fails. Every cap hit is recorded in the
+ * outcome's `notes` (and in the `task_failed` reason), whether or not the task ends green.
  */
 export const runTask = async ({
 	task,
@@ -521,21 +585,40 @@ export const runTask = async ({
 	signal,
 	onUsage,
 	model,
+	ports = {},
 }: RunTaskInput): Promise<TaskOutcome> => {
+	const session = ports.runSession ?? runSession
+	const verify = ports.verifyRepo ?? verifyRepo
 	const { dir, branch } = await createWorktree(repoDir, task, signal)
 	let tokens = 0
 	const count = (usage: TokenUsage) => {
 		tokens += totalTokens(usage)
 		onUsage(usage)
 	}
-	const scope = gateScopeForAreas(task.areas)
-	const [lint, test] = gateCommands(scope).map(renderCommand)
-	const systemPrompt = workerSystemPrompt(spec, plan, task, scope)
+	const plannedScope = gateScopeForAreas(task.areas)
+	const [lint, test] = gateCommands(plannedScope).map(renderCommand)
+	const systemPrompt = workerSystemPrompt(spec, plan, task, plannedScope)
 	const { size, maxTurns } = maxTurnsForSpec(spec)
-	const capNote = (session: SessionOutcome, label: string, cap: number) =>
-		session.maxTurnsReached ? ` (${label} hit its turn cap: ${cap} turns for size ${size})` : ''
+	const notes: string[] = []
+	const noteCap = (outcome: SessionOutcome, label: string, cap: number) => {
+		if (!outcome.maxTurnsReached) return
+		notes.push(`${label} hit its turn cap (${cap} turns for size ${size})`)
+		console.log(
+			JSON.stringify({ message: 'turn cap reached', taskId: task.id, session: label, cap, size })
+		)
+	}
+	const withNotes = (reason: string) => (notes.length ? `${reason} (${notes.join('; ')})` : reason)
+	const gate = async () => {
+		const changed = await changedFiles(dir, signal)
+		const scope = gateScopeForChanges(task.areas, changed)
+		if ('full' in scope && !('full' in plannedScope)) {
+			notes.push('gate widened to the full repository (changes outside the task workspaces)')
+		}
+		const commands = gateCommands(scope).map(renderCommand)
+		return { verification: await verify(dir, signal, { areas: task.areas, changed }), commands }
+	}
 
-	const session = await runSession({
+	const first = await session({
 		cwd: dir,
 		systemPrompt,
 		prompt: `Implement the task "${task.title}" as described in your instructions. Work through the task, run the gate (\`${lint}\`, \`${test}\`), fix, and commit.`,
@@ -545,19 +628,26 @@ export const runTask = async ({
 		maxTurns,
 	})
 	if (signal.aborted) return { ok: false, tokens, branch, reason: 'aborted' }
-	if (!session.ok && !session.maxTurnsReached) {
-		return { ok: false, tokens, branch, reason: `agent session failed: ${session.result}` }
+	if (!first.ok && !first.maxTurnsReached) {
+		return { ok: false, tokens, branch, reason: `agent session failed: ${first.result}` }
 	}
+	noteCap(first, 'worker session', maxTurns)
 
 	// A capped session is not a failure yet: whatever it left is committed and gated, and the
-	// repair session is the safety valve that finishes the last mile.
+	// second session is the safety valve that finishes the last mile.
 	await commitLeftovers(dir, task, signal)
-	let verification = await verifyRepo(dir, signal, { areas: task.areas })
-	if (!verification.ok) {
-		const repair = await runSession({
+	const gated = await gate()
+	let { verification } = gated
+	const { commands } = gated
+	if (!verification.ok || first.maxTurnsReached) {
+		const [scopedLint, scopedTest] = commands
+		const prompt = verification.ok
+			? `Your previous session was cut off by its turn cap (${maxTurns} turns for size ${size}) and its work was committed; the gate (\`${scopedLint}\`, \`${scopedTest}\`) is green. Check the task against its description and acceptance criteria, finish whatever is missing, run the gate once, and commit.`
+			: `Verification failed after your work${first.maxTurnsReached ? ` (your session hit its turn cap: ${maxTurns} turns for size ${size})` : ''}. Fix it so that \`${scopedLint}\` and \`${scopedTest}\` pass, then commit. Run the gate at most once more after your fixes.\n\n${verification.output}`
+		const repair = await session({
 			cwd: dir,
 			systemPrompt,
-			prompt: `Verification failed after your work${capNote(session, 'your session', maxTurns)}. Fix it so that \`${lint}\` and \`${test}\` pass, then commit. Run the gate at most once more after your fixes.\n\n${verification.output}`,
+			prompt,
 			signal,
 			onUsage: count,
 			model,
@@ -565,24 +655,24 @@ export const runTask = async ({
 		})
 		if (signal.aborted) return { ok: false, tokens, branch, reason: 'aborted' }
 		if (!repair.ok && !repair.maxTurnsReached) {
-			return { ok: false, tokens, branch, reason: `repair session failed: ${repair.result}` }
+			return {
+				ok: false,
+				tokens,
+				branch,
+				reason: withNotes(`repair session failed: ${repair.result}`),
+			}
 		}
+		noteCap(repair, 'repair session', workerLimits.repairTurns)
 		await commitLeftovers(dir, task, signal)
-		verification = await verifyRepo(dir, signal, { areas: task.areas })
+		;({ verification } = await gate())
 		if (!verification.ok) {
-			const caps = `${capNote(session, 'worker session', maxTurns)}${capNote(repair, 'repair session', workerLimits.repairTurns)}`
-			return { ok: false, tokens, branch, reason: `${verification.output}${caps}` }
+			return { ok: false, tokens, branch, reason: withNotes(verification.output) }
 		}
 	}
 	if (!(await hasCommits(dir, branch, signal))) {
-		return {
-			ok: false,
-			tokens,
-			branch,
-			reason: `worker produced no commits${capNote(session, 'worker session', maxTurns)}`,
-		}
+		return { ok: false, tokens, branch, reason: withNotes('worker produced no commits') }
 	}
-	return { ok: true, tokens, branch }
+	return { ok: true, tokens, branch, ...(notes.length ? { notes } : {}) }
 }
 
 /** True when the directory exists (used by callers that clean up worktrees defensively) */
