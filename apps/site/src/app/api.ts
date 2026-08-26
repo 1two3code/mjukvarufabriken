@@ -11,9 +11,9 @@ import { createApi, fetchBaseQuery } from '@reduxjs/toolkit/query/react'
 import { clearSession, setTokens } from '#/features/session/sessionSlice.ts'
 import { addToast } from '#/features/toasts/toastsSlice.ts'
 
+import type { ApiError } from '@mf/models'
 import type { Middleware, MiddlewareAPI, PayloadAction } from '@reduxjs/toolkit'
 import type { BaseQueryFn, FetchArgs, FetchBaseQueryError } from '@reduxjs/toolkit/query'
-import type { ApiError } from '@mf/models'
 import type { RootState } from '#/app/store.ts'
 
 /**

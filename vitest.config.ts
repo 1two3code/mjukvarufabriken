@@ -15,6 +15,6 @@ export default defineConfig({
 			],
 			exclude: ['**/*index.ts', '**/*server.ts', '**/*types.ts', '**/__mocks__/*'],
 		},
-		projects: ['apps/api', 'apps/job', 'packages/utils', 'packages/harness', 'packages/db'],
+		projects: ['apps/api', 'apps/site', 'apps/job', 'packages/utils', 'packages/harness', 'packages/db'],
 	},
 })

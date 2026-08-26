@@ -12,6 +12,7 @@ import emailPlugin from '#/plugins/email.ts'
 import errorHandlingPlugin from '#/plugins/errorHandling.ts'
 import secretsPlugin from '#/plugins/secrets.ts'
 import authService from '#/services/authService.ts'
+import contactService from '#/services/contactService.ts'
 import itemService from '#/services/itemService.ts'
 import jobService from '#/services/jobService.ts'
 import specService from '#/services/specService.ts'
@@ -58,6 +59,7 @@ export async function createServer({ logLevel }: Options = {}): Promise<FastifyI
 		.register(jobService)
 		.register(userService)
 		.register(authService)
+		.register(contactService)
 
 		// Request plugins
 		.register(errorHandlingPlugin)

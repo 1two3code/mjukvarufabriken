@@ -10,7 +10,6 @@ export function App() {
 	const dispatch = useAppDispatch()
 
 	useEffectOnce(() => {
-		document.title = import.meta.env.VITE_APP_TITLE
 		dispatch(loadTheme())
 	})
 
