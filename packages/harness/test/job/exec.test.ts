@@ -22,7 +22,6 @@ describe('exec', () => {
 			JOB_TOKEN: 'job-report-token',
 			JOB_ID: 'job-1',
 			GITHUB_ORG: 'mjukvaruhuset',
-			JOB_TOKEN: 'job-report-token',
 			API_URL: 'https://api.example',
 		})
 
