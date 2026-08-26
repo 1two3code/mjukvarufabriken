@@ -1,5 +1,5 @@
 import { readFile, writeFile } from 'node:fs/promises'
-import { join } from 'node:path'
+import { join, relative, sep } from 'node:path'
 
 import { exec } from '#job/exec.ts'
 
@@ -15,28 +15,127 @@ export const licenceFileName = 'THIRD-PARTY-LICENCES.md'
 export const unknownLicence = 'UNKNOWN'
 
 /**
- * Strong-copyleft and source-available licences the customer contract (kundavtal §9.2) promises
- * not to introduce unnoticed, plus "no licence at all". Matched per SPDX identifier, so
- * `GPL-2.0-only` is denied while `LGPL-2.1-only` and `GPL-2.0-with-classpath-exception` are not.
+ * Strong-copyleft and source-available licence families the customer contract (kundavtal §9.2)
+ * promises not to introduce unnoticed. Matched on the family prefix of one SPDX identifier, so
+ * every spelling counts: `GPL-2.0-only`, `GPL-3.0-or-later`, the deprecated `GPL-3.0` / `GPL-2.0+`,
+ * free-text `GPLv3` / `GPL`, `AGPL-3.0`, `SSPL-1.0`. `LGPL-*` is another family and passes, and
+ * `GPL-2.0-with-classpath-exception` / `GPL-2.0-only WITH Classpath-exception-2.0` pass because
+ * the exception lifts the copyleft for linking.
  */
-const deniedLicence = /^(GPL-2\.0-only|GPL-3\.0-only|AGPL-.*|SSPL-.*|UNLICENSED|UNKNOWN)$/i
+const deniedFamily = /^(GPL|AGPL|SSPL)(?:$|v\d|[-.]\d)(?!.*-with-.*-exception$)/i
+
+/** Identifiers that mean "no usable licence": npm's `UNLICENSED` and the gate's own placeholder */
+const noLicence = /^(UNLICENSED|UNKNOWN)$/i
+
+/**
+ * Shape of one SPDX licence id (`Apache-2.0`, `BSD-3-Clause`, `GPL-2.0+`, `LicenseRef-x`).
+ * Anything else — `SEE LICENSE IN LICENSE.txt`, `Proprietary`, a URL, `Apache License 2.0` — is
+ * free text the gate cannot judge, so it needs an admin waiver and shows up as a violation.
+ */
+const spdxIdentifier = /^[A-Za-z0-9][A-Za-z0-9.+-]*$/
+
+/** Free-text words that name a licence without being an SPDX id; always a waiver decision */
+const freeTextLicence = /^(proprietary|commercial|custom|public domain|none|see license.*)$/i
 
 /** Waiver id an admin puts in `Job.gateWaivers` to accept one package version */
 export const licenceWaiverId = (name: string, version: string) => `licence:${name}@${version}`
 
-/**
- * Evaluates one SPDX expression against the denylist: `A OR B` passes when any alternative
- * passes, `A AND B` passes only when every part passes; a `WITH` exception is kept with its
- * identifier (so a classpath exception is not the bare GPL). Non-SPDX free text is treated as one
- * identifier and passes unless it is on the list — the report shows it as-is for an admin to judge.
- */
-export const isDeniedLicence = (expression: string): boolean => {
-	const text = expression.trim().replace(/^\(+|\)+$/g, '')
-	if (!text) return true
-	if (/\sOR\s/.test(text)) return text.split(/\sOR\s/).every(part => isDeniedLicence(part))
-	if (/\sAND\s/.test(text)) return text.split(/\sAND\s/).some(part => isDeniedLicence(part))
-	return deniedLicence.test(text.replace(/[()]/g, '').trim())
+/** Why one licence identifier is denied, or `undefined` when it passes */
+const denialOf = (identifier: string): string | undefined => {
+	if (noLicence.test(identifier)) return 'no licence declared in package.json'
+	if (freeTextLicence.test(identifier) || !spdxIdentifier.test(identifier)) {
+		return `"${identifier}" is not an SPDX licence identifier — needs an admin waiver`
+	}
+	if (deniedFamily.test(identifier)) return `licence ${identifier} is on the denylist`
+	return undefined
 }
+
+// MARK: SPDX expressions
+
+type SpdxToken = { kind: '(' | ')' | 'OR' | 'AND' | 'WITH' } | { kind: 'id'; id: string }
+
+/**
+ * Splits an SPDX expression into parens, operators (any case) and identifiers. Consecutive words
+ * that are not operators are kept together as one free-text identifier (`SEE LICENSE IN x`).
+ */
+const tokenise = (expression: string): SpdxToken[] => {
+	const tokens: SpdxToken[] = []
+	for (const word of expression.split(/([()])|\s+/).filter(Boolean)) {
+		const upper = word.toUpperCase()
+		const last = tokens.at(-1)
+		if (word === '(' || word === ')') tokens.push({ kind: word })
+		else if (upper === 'OR' || upper === 'AND' || upper === 'WITH') tokens.push({ kind: upper })
+		else if (last?.kind === 'id') last.id = `${last.id} ${word}`
+		else tokens.push({ kind: 'id', id: word })
+	}
+	return tokens
+}
+
+const malformed = 'malformed licence expression'
+
+/**
+ * Recursive-descent evaluation against the denylist, returning why the expression is denied or
+ * `undefined` when it passes: `A OR B` passes when any alternative passes, `A AND B` passes only
+ * when every part passes, parentheses group, `X WITH exception` passes (the exception lifts the
+ * copyleft for the customer's use). Anything that does not parse is denied, never silently green.
+ */
+const evaluate = (tokens: SpdxToken[]): string | undefined => {
+	let position = 0
+	const peek = (offset = 0) => tokens[position + offset]
+
+	const primary = (): string | undefined => {
+		const token = tokens[position++]
+		if (token?.kind === '(') {
+			const result = alternatives()
+			if (peek()?.kind !== ')') return malformed
+			position++
+			return result
+		}
+		if (token?.kind !== 'id') return malformed
+		if (peek()?.kind !== 'WITH') return denialOf(token.id)
+		if (peek(1)?.kind !== 'id') return malformed
+		position += 2
+		return undefined
+	}
+
+	/** `A AND B AND C`: the first denial wins, a malformed part always wins */
+	const conjunction = (): string | undefined => {
+		const denials: string[] = []
+		const first = primary()
+		if (first !== undefined) denials.push(first)
+		while (peek()?.kind === 'AND') {
+			position++
+			const part = primary()
+			if (part !== undefined) denials.push(part)
+		}
+		return denials.find(denial => denial === malformed) ?? denials[0]
+	}
+
+	/** `A OR B OR C`: passes as soon as one alternative passes, unless a part is malformed */
+	const alternatives = (): string | undefined => {
+		const results = [conjunction()]
+		while (peek()?.kind === 'OR') {
+			position++
+			results.push(conjunction())
+		}
+		if (results.includes(malformed)) return malformed
+		return results.includes(undefined) ? undefined : results[0]
+	}
+
+	const result = alternatives()
+	return position < tokens.length ? malformed : result
+}
+
+/** Why an SPDX expression (or free-text licence) is denied, or `undefined` when it passes */
+export const licenceDenialOf = (expression: string): string | undefined => {
+	const text = expression.trim()
+	if (!text) return 'no licence declared in package.json'
+	return evaluate(tokenise(text))
+}
+
+/** `true` when the licence expression is denied (see `licenceDenialOf`) */
+export const isDeniedLicence = (expression: string): boolean =>
+	licenceDenialOf(expression) !== undefined
 
 // MARK: Collect
 
@@ -48,6 +147,8 @@ type NpmLsNode = {
 	private?: boolean
 	missing?: boolean
 	dependencies?: Record<string, NpmLsNode>
+	/** npm-level failure (`{ code, summary, detail }`); npm still exits with JSON on stdout */
+	error?: { code?: string; summary?: string; detail?: string }
 }
 
 type PackageJson = {
@@ -74,6 +175,19 @@ const runNpmLs: NpmLsRunner = async (repoDir, signal) => {
 	return result.stdout
 }
 
+/** Parses the `npm ls` JSON and refuses an npm-level error payload or a tree without packages */
+export const parseNpmLs = (json: string): NpmLsNode => {
+	const tree = JSON.parse(json) as NpmLsNode
+	if (tree.error) {
+		const { code, summary, detail } = tree.error
+		throw new Error(`npm ls failed (${code ?? 'unknown'}): ${summary ?? detail ?? ''}`.trim())
+	}
+	if (!Object.keys(tree.dependencies ?? {}).length) {
+		throw new Error('npm ls listed no dependencies — is node_modules installed?')
+	}
+	return tree
+}
+
 const licenceOf = (pkg: PackageJson): string => {
 	const single = typeof pkg.license === 'string' ? pkg.license : pkg.license?.type
 	if (single?.trim()) return single.trim()
@@ -98,42 +212,68 @@ export const repositoryUrlOf = (pkg: PackageJson): string | undefined => {
 	return url.replace(/\.git$/, '')
 }
 
-/** Every installed, non-private package once per name@version, via each node's package.json */
+/**
+ * A workspace member of this repo: installed from a path inside the repo that is not under any
+ * `node_modules`. Only those are the customer's own code; a `private: true` flag on a package
+ * fetched into `node_modules` (git/file dependency) says nothing about its licence.
+ */
+const isWorkspaceOf = (repoDir: string, path: string) => {
+	const inside = relative(repoDir, path)
+	if (!inside || inside.startsWith('..')) return false
+	return !inside.split(sep).includes('node_modules')
+}
+
+export type CollectedLicences = {
+	entries: LicenceEntry[]
+	/** `name@version` of nodes whose package.json could not be read (listed as UNKNOWN) */
+	unreadable: string[]
+	/** `name@version` of nodes npm reports as not installed here (platform-optional or failed) */
+	missing: string[]
+}
+
+/** Every installed package outside the repo's workspaces, once per name@version */
 export const collectLicences = async (
 	tree: NpmLsNode,
 	repoDir: string
-): Promise<{ entries: LicenceEntry[]; unreadable: string[] }> => {
+): Promise<CollectedLicences> => {
 	const seen = new Map<string, LicenceEntry>()
 	const unreadable: string[] = []
-	const visit = async (node: NpmLsNode, name: string, isRoot: boolean) => {
-		const children = Object.entries(node.dependencies ?? {})
-		if (!isRoot && !node.missing && node.version) {
+	const missing = new Set<string>()
+	const readManifest = async (path: string, key: string) => {
+		try {
+			return JSON.parse(await readFile(join(path, 'package.json'), 'utf8')) as PackageJson
+		} catch {
+			unreadable.push(key)
+			return undefined
+		}
+	}
+	const visit = async (node: NpmLsNode, name: string, parentPath: string) => {
+		const path = node.path ?? join(parentPath, 'node_modules', ...name.split('/'))
+		if (node.missing || !node.version) {
+			if (name) missing.add(`${name}@${node.version ?? '?'}`)
+		} else if (!isWorkspaceOf(repoDir, path)) {
 			const key = `${name}@${node.version}`
 			if (!seen.has(key)) {
-				const path = node.path ?? join(repoDir, 'node_modules', ...name.split('/'))
-				let pkg: PackageJson | undefined
-				try {
-					pkg = JSON.parse(await readFile(join(path, 'package.json'), 'utf8')) as PackageJson
-				} catch {
-					unreadable.push(key)
-				}
-				if (!(pkg?.private ?? node.private)) {
-					seen.set(key, {
-						name,
-						version: node.version,
-						licence: pkg ? licenceOf(pkg) : unknownLicence,
-						repository: pkg ? repositoryUrlOf(pkg) : undefined,
-					})
-				}
+				const pkg = await readManifest(path, key)
+				seen.set(key, {
+					name,
+					version: node.version,
+					licence: pkg ? licenceOf(pkg) : unknownLicence,
+					repository: pkg ? repositoryUrlOf(pkg) : undefined,
+				})
 			}
 		}
-		for (const [childName, child] of children) await visit(child, childName, false)
+		for (const [childName, child] of Object.entries(node.dependencies ?? {})) {
+			await visit(child, childName, path)
+		}
 	}
-	await visit(tree, tree.name ?? '', true)
+	for (const [name, child] of Object.entries(tree.dependencies ?? {})) {
+		await visit(child, name, tree.path ?? repoDir)
+	}
 	const entries = [...seen.values()].sort(
 		(a, b) => a.name.localeCompare(b.name) || a.version.localeCompare(b.version)
 	)
-	return { entries, unreadable }
+	return { entries, unreadable, missing: [...missing].sort() }
 }
 
 // MARK: Report
@@ -147,13 +287,25 @@ const countByLicence = (entries: LicenceEntry[]) => {
 const cell = (text: string) => text.replace(/\|/g, '\\|').replace(/\s+/g, ' ').trim()
 
 /** Markdown licence list: counts by licence, then one row per package (sorted by name) */
-export const renderLicenceFile = (entries: LicenceEntry[], generatedAt: Date) => {
+export const renderLicenceFile = (
+	entries: LicenceEntry[],
+	generatedAt: Date,
+	missing: string[] = []
+) => {
 	const counts = Object.entries(countByLicence(entries))
 	const countRows = counts.map(([licence, count]) => `| ${cell(licence)} | ${count} |`)
 	const rows = entries.map(
 		entry =>
 			`| ${cell(entry.name)} | ${cell(entry.version)} | ${cell(entry.licence)} | ${entry.repository ? cell(entry.repository) : '-'} |`
 	)
+	const missingSection = missing.length
+		? `
+## Not installed on the build platform
+
+Pinned in \`package-lock.json\` but not installed where this list was generated (typically optional
+packages for another OS/CPU), so their licences were not read: ${missing.map(name => `\`${name}\``).join(', ')}.
+`
+		: ''
 	return `# Third-party licences
 
 Generated ${generatedAt.toISOString().slice(0, 10)} from \`npm ls --all\` — every installed package this
@@ -172,7 +324,7 @@ ${countRows.join('\n') || '| - | 0 |'}
 | Package | Version | Licence | Repository |
 |---|---|---|---|
 ${rows.join('\n') || '| - | - | - | - |'}
-`
+${missingSection}`
 }
 
 // MARK: Gate
@@ -185,30 +337,26 @@ export type LicenceGateOptions = {
 /**
  * Deterministic licence gate (M4, no model call): lists every installed package, writes
  * `THIRD-PARTY-LICENCES.md` into the repo (delivery commits it with the other docs), and fails
- * on a denylisted or missing licence unless `licence:<pkg>@<version>` is in the job's waivers.
- * The file is written before the verdict so an admin sees the full list even when the gate is red.
+ * on a denylisted, missing or unrecognisable licence unless `licence:<pkg>@<version>` is in the
+ * job's waivers. An `npm ls` failure throws (the gate is then red as crashed) — a broken
+ * enumeration is never a green gate. The file is written before the verdict so an admin sees the
+ * full list even when the gate is red.
  */
 export const licenceGate = async (
 	{ repoDir, waivers, signal }: GateInput,
 	{ npmLs = runNpmLs, now = () => new Date() }: LicenceGateOptions = {}
 ): Promise<GateOutcome> => {
-	const tree = JSON.parse(await npmLs(repoDir, signal)) as NpmLsNode
-	const { entries, unreadable } = await collectLicences(tree, repoDir)
-	await writeFile(join(repoDir, licenceFileName), renderLicenceFile(entries, now()))
+	const tree = parseNpmLs(await npmLs(repoDir, signal))
+	const { entries, unreadable, missing } = await collectLicences(tree, repoDir)
+	await writeFile(join(repoDir, licenceFileName), renderLicenceFile(entries, now(), missing))
 
 	const violations: LicenceViolation[] = []
 	const waived: LicenceViolation[] = []
 	for (const entry of entries) {
-		if (!isDeniedLicence(entry.licence)) continue
+		const reason = licenceDenialOf(entry.licence)
+		if (reason === undefined) continue
 		const waiverId = licenceWaiverId(entry.name, entry.version)
-		const violation: LicenceViolation = {
-			...entry,
-			waiverId,
-			reason:
-				entry.licence === unknownLicence
-					? 'no licence declared in package.json'
-					: `licence ${entry.licence} is on the denylist`,
-		}
+		const violation: LicenceViolation = { ...entry, waiverId, reason }
 		;(waivers.includes(waiverId) ? waived : violations).push(violation)
 	}
 
@@ -217,6 +365,7 @@ export const licenceGate = async (
 		byLicence: countByLicence(entries),
 		violations,
 		waived,
+		missing,
 		file: licenceFileName,
 	}
 	const counts = `${entries.length} package(s), ${Object.keys(details.byLicence).length} licence(s)`
@@ -225,6 +374,7 @@ export const licenceGate = async (
 		unreadable.length
 			? `${unreadable.length} package.json unreadable (${unreadable.join(', ')})`
 			: '',
+		missing.length ? `${missing.length} not installed here (${missing.join(', ')})` : '',
 	].filter(Boolean)
 	if (violations.length) {
 		const list = violations.map(v => `${v.name}@${v.version} (${v.licence})`).join(', ')

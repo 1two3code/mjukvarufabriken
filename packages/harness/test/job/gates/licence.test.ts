@@ -7,9 +7,11 @@ import { GateReportSchema, LicenceGateDetailsSchema } from '@mf/models'
 import {
 	collectLicences,
 	isDeniedLicence,
+	licenceDenialOf,
 	licenceFileName,
 	licenceGate,
 	licenceWaiverId,
+	parseNpmLs,
 	renderLicenceFile,
 	repositoryUrlOf,
 } from '#job/gates/licence.ts'
@@ -101,24 +103,101 @@ describe('isDeniedLicence', () => {
 	it.each([
 		['MIT', false],
 		['Apache-2.0', false],
+		['BSD-3-Clause', false],
+		['0BSD', false],
 		['LGPL-2.1-only', false],
+		['LGPL-3.0-or-later', false],
 		['GPL-2.0-with-classpath-exception', false],
+		['GPL-2.0-only WITH Classpath-exception-2.0', false],
+		['Apache-2.0 WITH LLVM-exception', false],
+		['LicenseRef-scancode-x', false],
+		// Every GPL family spelling: current, deprecated, plus, free text
 		['GPL-2.0-only', true],
 		['GPL-3.0-only', true],
 		['gpl-3.0-only', true],
+		['GPL-2.0', true],
+		['GPL-3.0', true],
+		['GPL-2.0+', true],
+		['GPL-3.0+', true],
+		['GPL-2.0-or-later', true],
+		['GPL-3.0-or-later', true],
+		['GPLv2', true],
+		['GPLv3', true],
+		['GPL', true],
+		['GPL-1.0', true],
+		['AGPL', true],
+		['AGPL-3.0', true],
 		['AGPL-3.0-only', true],
 		['AGPL-3.0-or-later', true],
+		['SSPL', true],
 		['SSPL-1.0', true],
 		['UNLICENSED', true],
 		['UNKNOWN', true],
 		['', true],
+		['   ', true],
+		// Free text the gate cannot judge needs a waiver
+		['SEE LICENSE IN LICENSE.txt', true],
+		['Proprietary', true],
+		['Commercial', true],
+		['Custom', true],
+		['Public Domain', true],
+		['https://example.com/licence', true],
+		['Apache License 2.0', true],
+		// Expressions
 		['(MIT OR GPL-3.0-only)', false],
+		['MIT OR GPL-3.0', false],
+		['mit or gpl-3.0', false],
 		['(GPL-2.0-only OR AGPL-3.0-only)', true],
 		['(MIT AND GPL-3.0-only)', true],
+		['MIT and GPL-3.0-only', true],
 		['(MIT AND Apache-2.0)', false],
-		['SEE LICENSE IN LICENSE.txt', false],
+		['GPL-3.0-only AND (MIT OR ISC)', true],
+		['(GPL-3.0-only AND MIT) OR ISC', false],
+		['MIT OR (GPL-3.0-only AND ISC)', false],
+		['(GPL-2.0-only OR GPL-3.0-only) AND MIT', true],
+		['((MIT))', false],
+		['MIT OR (SEE LICENSE IN x)', false],
+		// Malformed never passes
+		['(MIT', true],
+		['MIT)', true],
+		['MIT OR', true],
+		['OR MIT', true],
+		['MIT WITH', true],
+		['()', true],
 	])('%s → denied %s', (expression, denied) => {
 		expect(isDeniedLicence(expression)).toBe(denied)
+	})
+
+	it('Gives the reason for a denial', () => {
+		expect(licenceDenialOf('GPL-3.0')).toBe('licence GPL-3.0 is on the denylist')
+		expect(licenceDenialOf('MIT AND GPL-3.0')).toBe('licence GPL-3.0 is on the denylist')
+		expect(licenceDenialOf('UNLICENSED')).toBe('no licence declared in package.json')
+		expect(licenceDenialOf('SEE LICENSE IN LICENSE.txt')).toBe(
+			'"SEE LICENSE IN LICENSE.txt" is not an SPDX licence identifier — needs an admin waiver'
+		)
+		expect(licenceDenialOf('(MIT')).toBe('malformed licence expression')
+		expect(licenceDenialOf('MIT')).toBeUndefined()
+	})
+})
+
+describe('parseNpmLs', () => {
+	it('Refuses an npm error payload and an empty tree instead of passing them as clean', () => {
+		expect(() =>
+			parseNpmLs(JSON.stringify({ error: { code: 'EJSONPARSE', summary: 'bad package.json' } }))
+		).toThrow('npm ls failed (EJSONPARSE): bad package.json')
+		expect(() => parseNpmLs(JSON.stringify({ name: 'x', version: '1.0.0' }))).toThrow(
+			'npm ls listed no dependencies'
+		)
+		expect(() => parseNpmLs(JSON.stringify({ name: 'x', dependencies: {} }))).toThrow(
+			'npm ls listed no dependencies'
+		)
+		expect(() => parseNpmLs('not json')).toThrow()
+	})
+
+	it('Accepts a tree with dependencies', () => {
+		expect(parseNpmLs(JSON.stringify({ dependencies: { a: { version: '1.0.0' } } }))).toEqual({
+			dependencies: { a: { version: '1.0.0' } },
+		})
 	})
 })
 
@@ -165,6 +244,7 @@ describe('licenceGate', () => {
 			byLicence: { 'Apache-2.0': 1, ISC: 1, MIT: 1 },
 			violations: [],
 			waived: [],
+			missing: [],
 			file: licenceFileName,
 		})
 		expect(file).toContain('Generated 2026-08-27')
@@ -264,7 +344,7 @@ describe('licenceGate', () => {
 		})
 	})
 
-	it('Skips the root, private/workspace packages and missing nodes; dedupes name@version', async () => {
+	it('Skips the root and workspace packages; dedupes name@version; reports missing nodes', async () => {
 		const shared = mit('shared', '1.0.0')
 		const tree = await installFixture(root, [
 			{ ...mit('a'), dependencies: [shared] },
@@ -279,12 +359,73 @@ describe('licenceGate', () => {
 		])
 		const withMissing = JSON.parse(tree) as { dependencies: Record<string, unknown> }
 		withMissing.dependencies['ghost'] = { version: '9.9.9', missing: true }
+		withMissing.dependencies['@os/darwin-bin'] = { missing: true }
 
-		const { outcome, details } = await runGate(root, JSON.stringify(withMissing))
+		const { outcome, details, file } = await runGate(root, JSON.stringify(withMissing))
 
 		expect(outcome.ok).toBe(true)
 		expect(details.packages).toBe(3)
 		expect(Object.keys(details.byLicence)).toEqual(['MIT'])
+		expect(details.missing).toEqual(['@os/darwin-bin@?', 'ghost@9.9.9'])
+		expect(outcome.summary).toContain('2 not installed here (@os/darwin-bin@?, ghost@9.9.9)')
+		expect(file).toContain('## Not installed on the build platform')
+		expect(file).toContain('`ghost@9.9.9`')
+	})
+
+	it('Checks a private-flagged package installed under node_modules (git/file dependency)', async () => {
+		const tree = await installFixture(root, [
+			mit('a'),
+			{
+				name: 'gpl-lib',
+				version: '0.0.0',
+				private: true,
+				manifest: { private: true, license: 'AGPL-3.0-only' },
+			},
+		])
+
+		const { outcome, details } = await runGate(root, tree)
+
+		expect(outcome.ok).toBe(false)
+		expect(details.violations.map(v => v.waiverId)).toEqual(['licence:gpl-lib@0.0.0'])
+	})
+
+	it('Fails on deprecated GPL ids and free-text licences with a reason per package', async () => {
+		const tree = await installFixture(root, [
+			{ name: 'old', version: '1.0.0', manifest: { license: 'GPL-3.0' } },
+			{ name: 'later', version: '1.0.0', manifest: { license: 'GPL-2.0-or-later' } },
+			{ name: 'see', version: '1.0.0', manifest: { license: 'SEE LICENSE IN LICENSE.txt' } },
+			{ name: 'lgpl', version: '1.0.0', manifest: { license: 'LGPL-3.0-or-later' } },
+		])
+
+		const { outcome, details } = await runGate(root, tree)
+
+		expect(outcome.ok).toBe(false)
+		expect(details.violations.map(v => [v.name, v.reason])).toEqual([
+			['later', 'licence GPL-2.0-or-later is on the denylist'],
+			['old', 'licence GPL-3.0 is on the denylist'],
+			['see', '"SEE LICENSE IN LICENSE.txt" is not an SPDX licence identifier — needs an admin waiver'],
+		])
+	})
+
+	it('Fails (throws, red) on an npm error payload instead of passing an empty list', async () => {
+		await expect(
+			runGate(root, JSON.stringify({ error: { code: 'ELOCKVERIFY', summary: 'lock mismatch' } }))
+		).rejects.toThrow('npm ls failed (ELOCKVERIFY): lock mismatch')
+	})
+
+	it('Falls back to the parent path for a node without `path` (nested-only package)', async () => {
+		const tree = await installFixture(root, [
+			{ ...mit('a'), dependencies: [mit('nested', '1.0.0', { license: 'ISC' })] },
+		])
+		const stripped = JSON.parse(tree) as {
+			dependencies: Record<string, { path?: string; dependencies: Record<string, { path?: string }> }>
+		}
+		delete stripped.dependencies['a']!.dependencies['nested']!.path
+
+		const { outcome, details } = await runGate(root, JSON.stringify(stripped))
+
+		expect(outcome.ok).toBe(true)
+		expect(details.byLicence).toEqual({ ISC: 1, MIT: 1 })
 	})
 
 	it('Treats an unreadable package.json as UNKNOWN (red) and says so in the summary', async () => {
@@ -346,9 +487,10 @@ describe('licenceGate', () => {
 
 describe('collectLicences / renderLicenceFile', () => {
 	it('Renders an empty tree without breaking the tables', async () => {
-		const { entries, unreadable } = await collectLicences({ name: 'root' }, '/nowhere')
+		const { entries, unreadable, missing } = await collectLicences({ name: 'root' }, '/nowhere')
 		expect(entries).toEqual([])
 		expect(unreadable).toEqual([])
+		expect(missing).toEqual([])
 		const file = renderLicenceFile(entries, new Date('2026-01-01T00:00:00Z'))
 		expect(file).toContain('| - | 0 |')
 		expect(file).toContain('| - | - | - | - |')

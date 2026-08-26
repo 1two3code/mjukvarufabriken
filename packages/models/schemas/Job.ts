@@ -127,6 +127,8 @@ export const LicenceGateDetailsSchema = z.object({
 	byLicence: z.record(z.string(), z.number().int().nonnegative()),
 	violations: z.array(LicenceViolationSchema),
 	waived: z.array(LicenceViolationSchema),
+	/** `name@version` pinned in the lockfile but not installed on the build platform (unchecked) */
+	missing: z.array(z.string()),
 	/** Path of the generated licence list, relative to the repo root */
 	file: z.string(),
 })

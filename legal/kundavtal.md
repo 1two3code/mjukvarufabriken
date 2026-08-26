@@ -239,8 +239,8 @@ programvara.
 ta fram en förteckning över beroenden och deras licenser ur det levererade kodförrådet
 (`package.json` och låsfil); Leverantören lämnar ingen garanti för att förteckningen är
 fullständig. Leverantörens byggprocess innehåller en automatisk licenskontroll som stoppar
-leveransen om ett beroende med starkt copyleft-licens (GPL-2.0-only, GPL-3.0-only, AGPL, SSPL) eller
-utan angiven licens ingår, såvida inte Leverantören uttryckligen godkänt beroendet, och som lägger
+leveransen om ett beroende med starkt copyleft-licens (GPL, AGPL, SSPL i alla varianter) eller
+utan angiven eller igenkännbar licens ingår, såvida inte Leverantören uttryckligen godkänt beroendet, och som lägger
 en förteckning över beroenden (paket, version, licens, källkodsförråd) i filen
 `THIRD-PARTY-LICENCES.md` i det levererade kodförrådet. Förteckningen bygger på vad respektive paket
 självt anger och utgör ingen garanti. _[Öppen punkt: klausulen bör ses över av jurist när
