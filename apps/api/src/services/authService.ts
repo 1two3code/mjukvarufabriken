@@ -70,8 +70,9 @@ const plugin: FastifyPluginAsync = async app => {
 	}
 
 	// Housekeeping: nothing else deletes magic_links / refresh_tokens rows (every request and
-	// every refresh inserts one). Boot, then hourly with jitter, Postgres only.
-	await scheduleHousekeeping(app, 'Auth prune', () => db.auth.prune())
+	// every refresh inserts one). Shortly after boot, then hourly with jitter, Postgres only — the
+	// memory repository sweeps itself on insert.
+	scheduleHousekeeping(app, 'Auth prune', () => db.auth.prune())
 
 	app.decorate('authService', {
 		requestMagicLink: async rawEmail => {

@@ -1,4 +1,5 @@
 import {
+	housekeepingBootDelayMs,
 	housekeepingIntervalMs,
 	housekeepingJitterMs,
 	scheduleHousekeeping,
@@ -17,6 +18,8 @@ const createApp = (backend: 'postgres' | 'memory', available = true) => {
 	return { app: app as unknown as FastifyInstance, hooks, log: app.log }
 }
 
+const firstRunMs = housekeepingBootDelayMs + housekeepingJitterMs
+
 describe('scheduleHousekeeping', () => {
 	beforeEach(() => {
 		vi.useFakeTimers({ toFake: ['setTimeout', 'clearTimeout'] })
@@ -27,16 +30,18 @@ describe('scheduleHousekeeping', () => {
 		vi.restoreAllMocks()
 	})
 
-	it('Runs at boot and then hourly with a random jitter on Postgres', async () => {
+	it('Runs shortly after boot and then hourly with a random jitter on Postgres', async () => {
 		// Arrange
 		const { app } = createApp('postgres')
 		const task = vi.fn().mockResolvedValue(undefined)
 		vi.spyOn(Math, 'random').mockReturnValue(0.5)
 
 		// Act
-		await scheduleHousekeeping(app, 'Test prune', task)
+		scheduleHousekeeping(app, 'Test prune', task)
 
 		// Assert
+		expect(task).not.toHaveBeenCalled()
+		await vi.advanceTimersByTimeAsync(housekeepingBootDelayMs + housekeepingJitterMs / 2)
 		expect(task).toHaveBeenCalledTimes(1)
 		await vi.advanceTimersByTimeAsync(housekeepingIntervalMs)
 		expect(task).toHaveBeenCalledTimes(1)
@@ -46,13 +51,28 @@ describe('scheduleHousekeeping', () => {
 		expect(task).toHaveBeenCalledTimes(3)
 	})
 
+	it('Never blocks registration: a hung first run does not delay the caller', async () => {
+		// Arrange
+		const { app } = createApp('postgres')
+		const task = vi.fn(() => new Promise<void>(() => {}))
+
+		// Act
+		const result = scheduleHousekeeping(app, 'Test prune', task)
+		await vi.advanceTimersByTimeAsync(firstRunMs)
+
+		// Assert
+		expect(result).toBeUndefined()
+		expect(task).toHaveBeenCalledTimes(1)
+	})
+
 	it('Logs a failed run and keeps the schedule', async () => {
 		// Arrange
 		const { app, log } = createApp('postgres')
 		const task = vi.fn().mockRejectedValueOnce(new Error('db down')).mockResolvedValue(undefined)
 
 		// Act
-		await scheduleHousekeeping(app, 'Test prune', task)
+		scheduleHousekeeping(app, 'Test prune', task)
+		await vi.advanceTimersByTimeAsync(firstRunMs)
 		await vi.advanceTimersByTimeAsync(housekeepingIntervalMs + housekeepingJitterMs)
 
 		// Assert
@@ -64,10 +84,37 @@ describe('scheduleHousekeeping', () => {
 		// Arrange
 		const { app, hooks } = createApp('postgres')
 		const task = vi.fn().mockResolvedValue(undefined)
-		await scheduleHousekeeping(app, 'Test prune', task)
+		scheduleHousekeeping(app, 'Test prune', task)
+		await vi.advanceTimersByTimeAsync(firstRunMs)
 
 		// Act
 		for (const hook of hooks) hook()
+		await vi.advanceTimersByTimeAsync(2 * (housekeepingIntervalMs + housekeepingJitterMs))
+
+		// Assert
+		expect(task).toHaveBeenCalledTimes(1)
+	})
+
+	it('Does not re-arm when the app closes while a run is in flight', async () => {
+		// Arrange
+		const { app, hooks } = createApp('postgres')
+		let finish = () => {}
+		const task = vi
+			.fn<() => Promise<void>>()
+			.mockImplementationOnce(
+				() =>
+					new Promise(resolve => {
+						finish = resolve
+					})
+			)
+			.mockResolvedValue(undefined)
+		scheduleHousekeeping(app, 'Test prune', task)
+		await vi.advanceTimersByTimeAsync(firstRunMs)
+		expect(task).toHaveBeenCalledTimes(1)
+
+		// Act: close during the run, then let it finish
+		for (const hook of hooks) hook()
+		finish()
 		await vi.advanceTimersByTimeAsync(2 * (housekeepingIntervalMs + housekeepingJitterMs))
 
 		// Assert
@@ -81,9 +128,9 @@ describe('scheduleHousekeeping', () => {
 		const task = vi.fn().mockResolvedValue(undefined)
 
 		// Act
-		await scheduleHousekeeping(memory.app, 'Test prune', task)
-		await scheduleHousekeeping(unavailable.app, 'Test prune', task)
-		await vi.advanceTimersByTimeAsync(housekeepingIntervalMs + housekeepingJitterMs)
+		scheduleHousekeeping(memory.app, 'Test prune', task)
+		scheduleHousekeeping(unavailable.app, 'Test prune', task)
+		await vi.advanceTimersByTimeAsync(firstRunMs + housekeepingIntervalMs + housekeepingJitterMs)
 
 		// Assert
 		expect(task).not.toHaveBeenCalled()
