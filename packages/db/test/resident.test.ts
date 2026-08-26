@@ -115,6 +115,93 @@ describe('resident repository (memory)', () => {
 		await expect(repos.resident.getUsageReport('acme-shop', '2026-10')).resolves.toBeUndefined()
 		await expect(repos.resident.listUsageReports('2026-09')).resolves.toHaveLength(1)
 	})
+
+	it('Reserves a report by compare-and-set and confirms it into the cumulative', async () => {
+		const reservation = {
+			installationId: 'acme-shop',
+			month: '2026-09',
+			provider: 'stripe' as const,
+			fromUsdCents: 0,
+			toUsdCents: 600,
+			identifier: 'acme-shop/2026-09/600',
+		}
+
+		// A month without a row: reserved with cumulative 0
+		await expect(repos.resident.reserveUsageReport(reservation)).resolves.toMatchObject({
+			usdCents: 0,
+			pendingUsdCents: 600,
+			pendingIdentifier: 'acme-shop/2026-09/600',
+		})
+		// Another run with a different report loses; the same report (a retry) passes
+		await expect(
+			repos.resident.reserveUsageReport({
+				...reservation,
+				toUsdCents: 800,
+				identifier: 'acme-shop/2026-09/800',
+			})
+		).resolves.toBeUndefined()
+		await expect(repos.resident.reserveUsageReport(reservation)).resolves.toMatchObject({
+			pendingUsdCents: 600,
+			pendingAt: expect.any(String),
+		})
+		// Releasing keeps the report pending but no longer in flight
+		await repos.resident.releaseUsageReport('acme-shop', '2026-09', 'acme-shop/2026-09/600')
+		const released = await repos.resident.getUsageReport('acme-shop', '2026-09')
+		expect(released).toMatchObject({ pendingUsdCents: 600 })
+		expect(released?.pendingAt).toBeUndefined()
+		// Confirming needs the pending identifier
+		await expect(
+			repos.resident.confirmUsageReport('acme-shop', '2026-09', 'other', 'r0')
+		).resolves.toBeUndefined()
+		const confirmed = await repos.resident.confirmUsageReport(
+			'acme-shop',
+			'2026-09',
+			'acme-shop/2026-09/600',
+			'r1'
+		)
+		expect(confirmed).toMatchObject({ usdCents: 600, reference: 'r1' })
+		expect(confirmed?.pendingUsdCents).toBeUndefined()
+		expect(confirmed?.pendingIdentifier).toBeUndefined()
+		expect(confirmed?.pendingAt).toBeUndefined()
+		// A stale read (from 0 while the row says 600) loses; the current cumulative passes
+		await expect(
+			repos.resident.reserveUsageReport({
+				...reservation,
+				toUsdCents: 800,
+				identifier: 'acme-shop/2026-09/800',
+			})
+		).resolves.toBeUndefined()
+		await expect(
+			repos.resident.reserveUsageReport({
+				...reservation,
+				fromUsdCents: 600,
+				toUsdCents: 800,
+				identifier: 'acme-shop/2026-09/800',
+			})
+		).resolves.toMatchObject({ usdCents: 600, pendingUsdCents: 800 })
+	})
+
+	it("Takes over another provider's report with the cumulative reset", async () => {
+		await repos.resident.upsertUsageReport({
+			installationId: 'acme-shop',
+			month: '2026-09',
+			usdCents: 600,
+			provider: 'fake',
+			reference: 'fake_1',
+		})
+
+		const reserved = await repos.resident.reserveUsageReport({
+			installationId: 'acme-shop',
+			month: '2026-09',
+			provider: 'stripe',
+			fromUsdCents: 0,
+			toUsdCents: 600,
+			identifier: 'acme-shop/2026-09/600',
+		})
+
+		expect(reserved).toMatchObject({ usdCents: 0, provider: 'stripe', pendingUsdCents: 600 })
+		expect(reserved?.reference).toBeUndefined()
+	})
 })
 
 describe('resident row mapping', () => {
@@ -164,6 +251,9 @@ describe('resident row mapping', () => {
 				usd_cents: '900',
 				provider: 'stripe',
 				reference: null,
+				pending_usd_cents: '1200',
+				pending_identifier: 'a/2026-09/1200',
+				pending_at: at,
 				reported_at: at,
 			})
 		).toEqual({
@@ -172,6 +262,9 @@ describe('resident row mapping', () => {
 			usdCents: 900,
 			provider: 'stripe',
 			reference: undefined,
+			pendingUsdCents: 1200,
+			pendingIdentifier: 'a/2026-09/1200',
+			pendingAt: at.toISOString(),
 			reportedAt: at.toISOString(),
 		})
 	})

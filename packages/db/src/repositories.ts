@@ -169,6 +169,19 @@ export type NewResidentUsageReport = Pick<
 	'installationId' | 'month' | 'usdCents' | 'provider' | 'reference'
 >
 
+/** Compare-and-set on the month's report row, see `ResidentRepository.reserveUsageReport` */
+export type ResidentUsageReportReservation = {
+	installationId: string
+	month: string
+	provider: ResidentUsageReport['provider']
+	/** The cumulative cents the caller read for this provider (0 when none / other provider) */
+	fromUsdCents: number
+	/** The cumulative cents after the report the caller is about to send */
+	toUsdCents: number
+	/** Provider identifier of that report (its idempotency key) */
+	identifier: string
+}
+
 export type ResidentRepository = {
 	getInstallation: (id: string) => Promise<ResidentInstallation | undefined>
 	/** Newest first */
@@ -190,6 +203,33 @@ export type ResidentRepository = {
 	listUsageReports: (month?: string) => Promise<ResidentUsageReport[]>
 	/** Sets the cumulative cents reported for the month (insert or replace) */
 	upsertUsageReport: (report: NewResidentUsageReport) => Promise<ResidentUsageReport>
+	/**
+	 * Reserves the month's report before the provider is called: succeeds only when the row's
+	 * cumulative cents still equal `fromUsdCents` and no other report is pending (a pending
+	 * one with the same `identifier` is a retry and passes). A row of another provider is
+	 * taken over with its cumulative reset to 0 — its reports never reached this provider.
+	 * `undefined` = lost the race / stale read; nothing is written
+	 */
+	reserveUsageReport: (
+		reservation: ResidentUsageReportReservation
+	) => Promise<ResidentUsageReport | undefined>
+	/**
+	 * Confirms the pending report with the given identifier: the cumulative becomes the
+	 * pending cents, the reference is stored, the reservation is cleared. `undefined` when
+	 * no such reservation is pending
+	 */
+	confirmUsageReport: (
+		installationId: string,
+		month: string,
+		identifier: string,
+		reference: string | undefined
+	) => Promise<ResidentUsageReport | undefined>
+	/**
+	 * Marks the pending report with the given identifier as no longer in flight (the provider
+	 * rejected it): it stays pending — the next run retries it at once instead of waiting
+	 * for the in-flight timeout
+	 */
+	releaseUsageReport: (installationId: string, month: string, identifier: string) => Promise<void>
 }
 
 export type Repositories = {

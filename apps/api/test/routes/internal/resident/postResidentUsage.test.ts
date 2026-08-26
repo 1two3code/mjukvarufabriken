@@ -1,3 +1,5 @@
+import { residentUsageRecordIssues } from '@mf/models'
+
 import postResidentUsage from '#/routes/internal/resident/postResidentUsage.ts'
 import { createMockResidentUsageRecord } from '#/services/__mocks__/residentService.ts'
 import { ResidentUnauthorized } from '#/services/residentService.ts'
@@ -57,5 +59,30 @@ describe('POST /internal/resident/usage route', () => {
 		expect(unauthorized.statusCode).toBe(401)
 		expect(malformed.statusCode).toBe(400)
 		expect(app.residentService.recordUsage).not.toHaveBeenCalled()
+	})
+
+	it("Rejects a record whose billable amount, markup or month is not the day's own", async () => {
+		// The resident runs in the customer's account: the figures it cannot choose are checked
+		const post = (payload: object) => app.inject({ method: 'POST', url, headers, payload })
+
+		const underbilled = await post(
+			createMockResidentUsageRecord({ cost: { listPriceUsd: 4.5, markup: 1.5, billableUsd: 0 } })
+		)
+		const ownMarkup = await post(
+			createMockResidentUsageRecord({ cost: { listPriceUsd: 4.5, markup: 1, billableUsd: 4.5 } })
+		)
+		const otherMonth = await post(createMockResidentUsageRecord({ month: '2099-01' }))
+		const ok = await post(
+			createMockResidentUsageRecord({ cost: { listPriceUsd: 4.5, markup: 1.5, billableUsd: 6.75 } })
+		)
+
+		expect(underbilled.statusCode).toBe(400)
+		expect(ownMarkup.statusCode).toBe(400)
+		expect(otherMonth.statusCode).toBe(400)
+		expect(residentUsageRecordIssues(createMockResidentUsageRecord({ month: '2099-01' }))).toEqual([
+			"month 2099-01 is not the day's",
+		])
+		expect(ok.statusCode).toBe(200)
+		expect(app.residentService.recordUsage).toHaveBeenCalledTimes(1)
 	})
 })

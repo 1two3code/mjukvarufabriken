@@ -42,10 +42,13 @@ describe('Resident Service', () => {
 		])
 		expect(await app.residentService.listUsage()).toHaveLength(3)
 		// The installation row exists from the first record, unlinked until an admin links it
-		expect(await app.residentService.listInstallations()).toMatchObject([
-			{ id: 'beta-crm' },
-			{ id: 'acme-shop' },
+		// (order is by creation time, which the four awaits above may share to the millisecond)
+		const installations = await app.residentService.listInstallations()
+		expect(installations.map(installation => installation.id).sort()).toEqual([
+			'acme-shop',
+			'beta-crm',
 		])
+		expect(installations.every(installation => installation.orgId === undefined)).toBe(true)
 	})
 
 	it('Summarises the month per installation with its org and provider report', async () => {

@@ -3,7 +3,13 @@ import { createMockJob } from '#/plugins/__mocks__/db.ts'
 import { createMockPaymentEvent, mockSessionId } from '#/plugins/__mocks__/stripe.ts'
 import { createMockResidentUsageRecord } from '#/services/__mocks__/residentService.ts'
 import { InvalidOrderTransition } from '#/services/orderService.ts'
-import { FakeProviderInactive, PaymentNotDue } from '#/services/paymentService.ts'
+import {
+	FakeProviderInactive,
+	maxUsageIdentifierLength,
+	PaymentNotDue,
+	usageReportIdentifier,
+	usageReportInFlightMs,
+} from '#/services/paymentService.ts'
 
 import type { FastifyInstance } from 'fastify'
 import type { BackendSession, Order, OrderStatus } from '@mf/models'
@@ -506,11 +512,166 @@ describe('Payment Service', () => {
 
 			const failed = await app.paymentService.billResidentUsage(month)
 
-			expect(failed.results[0]).toMatchObject({ outcome: 'failed', reason: 'rate limited' })
-			await expect(app.db.resident.getUsageReport('acme-shop', month)).resolves.toBeUndefined()
+			expect(failed.results[0]).toMatchObject({
+				outcome: 'failed',
+				reason: 'rate limited',
+				totalUsdCents: 0,
+			})
+			// The reservation records what was attempted; nothing counts as reported
+			await expect(app.db.resident.getUsageReport('acme-shop', month)).resolves.toMatchObject({
+				usdCents: 0,
+				pendingUsdCents: 1_350,
+				pendingIdentifier: 'acme-shop/2026-09/1350',
+			})
 			// The next run reports the full amount
 			const retry = await app.paymentService.billResidentUsage(month)
 			expect(retry.results[0]).toMatchObject({ outcome: 'reported', usdCents: 1_350 })
+			const report = await app.db.resident.getUsageReport('acme-shop', month)
+			expect(report).toMatchObject({ usdCents: 1_350, reference: 'mtr_acme-shop/2026-09/1350' })
+			expect(report?.pendingUsdCents).toBeUndefined()
+			expect(report?.pendingAt).toBeUndefined()
+		})
+
+		it('Retries the identical event when the row could not be confirmed, even after new usage', async () => {
+			// Stripe accepted the event but the confirm write failed: the money side moved, the
+			// ledger did not. The retry must send the same identifier (deduped at Stripe), not a
+			// fresh delta that would bill the 1 350 cents again.
+			await createBillingApp()
+			vi.spyOn(app.db.resident, 'confirmUsageReport').mockRejectedValueOnce(new Error('pg blip'))
+
+			const failed = await app.paymentService.billResidentUsage(month)
+			await app.residentService.recordUsage(record('2026-09-04', 2))
+			const retry = await app.paymentService.billResidentUsage(month)
+			const rest = await app.paymentService.billResidentUsage(month)
+
+			expect(failed.results[0]).toMatchObject({ outcome: 'failed', reason: 'pg blip' })
+			expect(retry.results[0]).toEqual({
+				installationId: 'acme-shop',
+				outcome: 'reported',
+				usdCents: 1_350,
+				totalUsdCents: 1_350,
+			})
+			expect(app.paymentProvider.reportUsage).toHaveBeenNthCalledWith(
+				2,
+				expect.objectContaining({ usdCents: 1_350, identifier: 'acme-shop/2026-09/1350' })
+			)
+			// The day that arrived meanwhile is billed by the run after
+			expect(rest.results[0]).toMatchObject({ outcome: 'reported', usdCents: 200 })
+			expect(app.paymentProvider.reportUsage).toHaveBeenCalledTimes(3)
+		})
+
+		it('Retries a report left in flight by a run that died, once it has timed out', async () => {
+			await createBillingApp()
+			vi.useFakeTimers({ toFake: ['Date'] })
+			vi.spyOn(app.db.resident, 'confirmUsageReport').mockRejectedValueOnce(new Error('pg gone'))
+			vi.spyOn(app.db.resident, 'releaseUsageReport').mockRejectedValueOnce(new Error('pg gone'))
+
+			const died = await app.paymentService.billResidentUsage(month)
+			const tooSoon = await app.paymentService.billResidentUsage(month)
+			vi.advanceTimersByTime(usageReportInFlightMs + 1)
+			const retried = await app.paymentService.billResidentUsage(month)
+			vi.useRealTimers()
+
+			expect(died.results[0]).toMatchObject({ outcome: 'failed', reason: 'pg gone' })
+			expect(tooSoon.results[0]).toMatchObject({ outcome: 'in_progress' })
+			expect(retried.results[0]).toMatchObject({ outcome: 'reported', usdCents: 1_350 })
+			expect(app.paymentProvider.reportUsage).toHaveBeenCalledTimes(2)
+			expect(app.paymentProvider.reportUsage).toHaveBeenLastCalledWith(
+				expect.objectContaining({ identifier: 'acme-shop/2026-09/1350' })
+			)
+		})
+
+		it('Lets a concurrent run lose the reservation instead of reporting twice', async () => {
+			await createBillingApp()
+			// Run A is at the provider when run B reads the same (empty) report
+			let releaseA: () => void = () => {}
+			vi.spyOn(app.paymentProvider, 'reportUsage').mockImplementationOnce(
+				input =>
+					new Promise(resolve => {
+						releaseA = () => resolve({ reference: `mtr_${input.identifier}` })
+					})
+			)
+
+			const runA = app.paymentService.billResidentUsage(month)
+			await vi.waitFor(() => expect(app.paymentProvider.reportUsage).toHaveBeenCalledTimes(1))
+			await app.residentService.recordUsage(record('2026-09-04', 2))
+			const runB = await app.paymentService.billResidentUsage(month)
+			releaseA()
+			const resultA = await runA
+
+			expect(runB.results[0]).toMatchObject({
+				outcome: 'in_progress',
+				usdCents: 0,
+				reason: expect.stringContaining('in flight'),
+			})
+			expect(resultA.results[0]).toMatchObject({ outcome: 'reported', usdCents: 1_350 })
+			expect(app.paymentProvider.reportUsage).toHaveBeenCalledTimes(1)
+			// The next run picks up what B saw
+			const runC = await app.paymentService.billResidentUsage(month)
+			expect(runC.results[0]).toMatchObject({ outcome: 'reported', usdCents: 200 })
+		})
+
+		it('Flags a month whose total dropped below what was reported, with the credit due', async () => {
+			await createBillingApp()
+			await app.paymentService.billResidentUsage(month)
+			// A metering correction re-sends day 3 lower (last write wins)
+			await app.residentService.recordUsage(record('2026-09-02', 6.25))
+
+			const run = await app.paymentService.billResidentUsage(month)
+
+			expect(run.results[0]).toEqual({
+				installationId: 'acme-shop',
+				outcome: 'overreported',
+				usdCents: 0,
+				totalUsdCents: 1_350,
+				reason: expect.stringContaining('credit 50 cents'),
+			})
+			expect(app.paymentProvider.reportUsage).toHaveBeenCalledTimes(1)
+		})
+
+		it("Does not count another provider's reports: the fake one's months go to Stripe", async () => {
+			await createBillingApp()
+			await app.db.resident.upsertUsageReport({
+				installationId: 'acme-shop',
+				month,
+				usdCents: 1_350,
+				provider: 'fake',
+				reference: 'fake_usage_acme-shop/2026-09/1350',
+			})
+
+			const run = await app.paymentService.billResidentUsage(month)
+
+			expect(run.results[0]).toMatchObject({
+				outcome: 'reported',
+				usdCents: 1_350,
+				totalUsdCents: 1_350,
+			})
+			await expect(app.db.resident.getUsageReport('acme-shop', month)).resolves.toMatchObject({
+				provider: 'stripe',
+				usdCents: 1_350,
+				reference: 'mtr_acme-shop/2026-09/1350',
+			})
+		})
+
+		it("Keeps the identifier within the provider's limit for a long installation id", async () => {
+			const longId = 'customer-name-eu-north-1-prod-repo-owner-repo-name-resident-agent-installation-2026-primary'
+			await createBillingApp()
+			await app.residentService.recordUsage(record('2026-09-01', 6.75, longId))
+			await app.residentService.upsertInstallation(longId, { billingCustomerId: 'cus_long' })
+
+			const run = await app.paymentService.billResidentUsage(month)
+			const identifier = usageReportIdentifier(longId, month, 675)
+
+			expect(identifier.length).toBeLessThanOrEqual(maxUsageIdentifierLength)
+			expect(identifier).toMatch(/^[0-9a-f]{32}\/2026-09\/675$/)
+			expect(usageReportIdentifier('acme-shop', month, 675)).toBe('acme-shop/2026-09/675')
+			expect(run.results.find(result => result.installationId === longId)).toMatchObject({
+				outcome: 'reported',
+				usdCents: 675,
+			})
+			expect(app.paymentProvider.reportUsage).toHaveBeenCalledWith(
+				expect.objectContaining({ installationId: longId, identifier })
+			)
 		})
 
 		it('Records the report on the fake provider without needing a customer id', async () => {

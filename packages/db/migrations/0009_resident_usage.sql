@@ -42,6 +42,11 @@ create table resident_usage_reports (
 	usd_cents bigint not null default 0,
 	provider text not null check (provider in ('stripe', 'fake')),
 	reference text,
+	-- Reserve-then-confirm: the cumulative cents + identifier handed to the provider, cleared
+	-- once the report is confirmed (usd_cents := pending_usd_cents)
+	pending_usd_cents bigint,
+	pending_identifier text,
+	pending_at timestamptz,
 	reported_at timestamptz not null default now(),
 	primary key (installation_id, month)
 );

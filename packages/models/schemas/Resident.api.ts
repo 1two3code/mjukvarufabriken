@@ -48,7 +48,7 @@ export const ResidentTaskCountsSchema = z.object({
 export type ResidentTaskCounts = z.infer<typeof ResidentTaskCountsSchema>
 
 /** One day of a resident installation, written to its S3 bucket and POSTed to the factory api */
-export const ResidentUsageRecordSchema = z.object({
+export const ResidentUsageRecordBaseSchema = z.object({
 	installationId: z.string().min(1),
 	/** `owner/name` of the repository the installation is scoped to */
 	repository: z.string().min(1),
@@ -67,6 +67,37 @@ export const ResidentUsageRecordSchema = z.object({
 	/** When the record was produced; a later record for the same day replaces an earlier one */
 	generatedAt: z.iso.datetime(),
 })
+
+/** `billableUsd` is trusted as far as the day's own figures let the api check it (cents) */
+export const residentUsageCostToleranceUsd = 0.01
+
+/**
+ * Invariants the resident cannot bend: the month is the day's, the markup is the factory's and
+ * the billable amount is the list price × that markup (to the cent). The record carries the
+ * customer installation's own numbers, so this is the floor the api can hold it to.
+ */
+export const residentUsageRecordIssues = (
+	record: Pick<ResidentUsageRecord, 'day' | 'month' | 'cost'>
+): string[] => {
+	const issues: string[] = []
+	if (record.month !== record.day.slice(0, 7)) issues.push(`month ${record.month} is not the day's`)
+	if (record.cost.markup !== residentUsageMarkup) {
+		issues.push(`markup ${record.cost.markup} is not ${residentUsageMarkup}`)
+	}
+	const expected = record.cost.listPriceUsd * residentUsageMarkup
+	if (Math.abs(record.cost.billableUsd - expected) > residentUsageCostToleranceUsd) {
+		issues.push(`billableUsd ${record.cost.billableUsd} is not listPriceUsd × ${residentUsageMarkup}`)
+	}
+	return issues
+}
+
+export const ResidentUsageRecordSchema = ResidentUsageRecordBaseSchema.superRefine(
+	(record, context) => {
+		for (const message of residentUsageRecordIssues(record)) {
+			context.addIssue({ code: 'custom', message, path: ['cost'] })
+		}
+	}
+)
 export type ResidentUsageRecord = z.infer<typeof ResidentUsageRecordSchema>
 
 // MARK: POST /internal/resident/usage
@@ -119,6 +150,16 @@ export const ResidentUsageReportSchema = z.object({
 	provider: z.enum(['stripe', 'fake']),
 	/** Provider reference of the last report (meter event identifier) */
 	reference: z.string().optional(),
+	/**
+	 * A report reserved but not yet confirmed: the cumulative cents and identifier handed to
+	 * the provider. Set before the meter event is sent and cleared once the row is confirmed,
+	 * so a run interrupted in between retries the very same event (deduped at the provider)
+	 * instead of re-billing the difference
+	 */
+	pendingUsdCents: z.number().int().nonnegative().optional(),
+	pendingIdentifier: z.string().optional(),
+	/** When the pending report went in flight; cleared when its run gave up (provider error) */
+	pendingAt: z.iso.datetime().optional(),
 	reportedAt: z.iso.datetime(),
 })
 export type ResidentUsageReport = z.infer<typeof ResidentUsageReportSchema>
@@ -153,10 +194,20 @@ export type ResidentUsageQuery = z.infer<typeof ResidentUsageQuerySchema>
 
 /**
  * Outcome per installation of a billing run for one month: `reported` = the unbilled part
- * was reported now; `unchanged` = nothing new since the last run; `no_customer` = the
- * installation has no billing customer id yet; `failed` = the provider rejected it
+ * was reported now; `unchanged` = nothing new since the last run; `overreported` = the month's
+ * total dropped below what was reported (a corrected day) — a credit is due at the provider,
+ * `reason` carries the cents; `no_customer` = the installation has no billing customer id
+ * yet; `in_progress` = another run holds the month's report right now; `failed` = the
+ * provider rejected it (the reservation stays and is retried as-is on the next run)
  */
-export const residentBillingOutcome = ['reported', 'unchanged', 'no_customer', 'failed'] as const
+export const residentBillingOutcome = [
+	'reported',
+	'unchanged',
+	'overreported',
+	'no_customer',
+	'in_progress',
+	'failed',
+] as const
 export type ResidentBillingOutcome = (typeof residentBillingOutcome)[number]
 
 export const ResidentBillingResultSchema = z.object({

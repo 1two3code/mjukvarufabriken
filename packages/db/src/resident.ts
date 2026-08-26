@@ -10,6 +10,7 @@ import type {
 	ResidentInstallationUpsert,
 	ResidentRepository,
 	ResidentUsageFilter,
+	ResidentUsageReportReservation,
 } from './repositories.ts'
 
 // MARK: Row mapping
@@ -49,6 +50,9 @@ type ReportRow = {
 	usd_cents: number | string
 	provider: ResidentUsageReport['provider']
 	reference: string | null
+	pending_usd_cents: number | string | null
+	pending_identifier: string | null
+	pending_at: Date | null
 	reported_at: Date
 }
 
@@ -66,6 +70,9 @@ export const toResidentUsageReport = (row: ReportRow): ResidentUsageReport => ({
 	usdCents: Number(row.usd_cents),
 	provider: row.provider,
 	reference: row.reference ?? undefined,
+	pendingUsdCents: row.pending_usd_cents === null ? undefined : Number(row.pending_usd_cents),
+	pendingIdentifier: row.pending_identifier ?? undefined,
+	pendingAt: row.pending_at?.toISOString(),
 	reportedAt: row.reported_at.toISOString(),
 })
 
@@ -261,9 +268,79 @@ export const upsertResidentUsageReport = async (
 			usd_cents = excluded.usd_cents,
 			provider = excluded.provider,
 			reference = excluded.reference,
+			pending_usd_cents = null,
+			pending_identifier = null,
+			pending_at = null,
 			reported_at = now()
 		returning *`
 	return toResidentUsageReport(row!)
+}
+
+/**
+ * One atomic statement: the insert covers a month without a row, the conditional update the
+ * compare-and-set on an existing one (`where` false → no row returned, nothing written)
+ */
+export const reserveResidentUsageReport = async (
+	db: Db,
+	reservation: ResidentUsageReportReservation
+): Promise<ResidentUsageReport | undefined> => {
+	const { sql } = db
+	const r = sql`resident_usage_reports`
+	const [row] = await sql<ReportRow[]>`
+		insert into resident_usage_reports (
+			installation_id, month, usd_cents, provider, pending_usd_cents, pending_identifier, pending_at
+		)
+		values (
+			${reservation.installationId}, ${reservation.month}, 0, ${reservation.provider},
+			${reservation.toUsdCents}, ${reservation.identifier}, now()
+		)
+		on conflict (installation_id, month) do update set
+			usd_cents = case when ${r}.provider = excluded.provider then ${r}.usd_cents else 0 end,
+			reference = case when ${r}.provider = excluded.provider then ${r}.reference else null end,
+			provider = excluded.provider,
+			pending_usd_cents = excluded.pending_usd_cents,
+			pending_identifier = excluded.pending_identifier,
+			pending_at = now()
+		where ${r}.provider <> excluded.provider
+			or (
+				${r}.usd_cents = ${reservation.fromUsdCents}
+				and (${r}.pending_identifier is null or ${r}.pending_identifier = excluded.pending_identifier)
+			)
+		returning *`
+	return row && toResidentUsageReport(row)
+}
+
+export const confirmResidentUsageReport = async (
+	db: Db,
+	installationId: string,
+	month: string,
+	identifier: string,
+	reference: string | undefined
+): Promise<ResidentUsageReport | undefined> => {
+	const [row] = await db.sql<ReportRow[]>`
+		update resident_usage_reports set
+			usd_cents = pending_usd_cents,
+			reference = ${reference ?? null},
+			pending_usd_cents = null,
+			pending_identifier = null,
+			pending_at = null,
+			reported_at = now()
+		where installation_id = ${installationId} and month = ${month}
+			and pending_identifier = ${identifier}
+		returning *`
+	return row && toResidentUsageReport(row)
+}
+
+export const releaseResidentUsageReport = async (
+	db: Db,
+	installationId: string,
+	month: string,
+	identifier: string
+): Promise<void> => {
+	await db.sql`
+		update resident_usage_reports set pending_at = null
+		where installation_id = ${installationId} and month = ${month}
+			and pending_identifier = ${identifier}`
 }
 
 export const createResidentRepository = (db: Db): ResidentRepository => ({
@@ -276,4 +353,9 @@ export const createResidentRepository = (db: Db): ResidentRepository => ({
 	getUsageReport: (installationId, month) => getResidentUsageReport(db, installationId, month),
 	listUsageReports: month => listResidentUsageReports(db, month),
 	upsertUsageReport: report => upsertResidentUsageReport(db, report),
+	reserveUsageReport: reservation => reserveResidentUsageReport(db, reservation),
+	confirmUsageReport: (installationId, month, identifier, reference) =>
+		confirmResidentUsageReport(db, installationId, month, identifier, reference),
+	releaseUsageReport: (installationId, month, identifier) =>
+		releaseResidentUsageReport(db, installationId, month, identifier),
 })

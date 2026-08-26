@@ -498,6 +498,48 @@ export const createMemoryRepositories = (): Repositories => {
 				usageReports.set(`${report.installationId}/${report.month}`, next)
 				return clone(next)
 			},
+			reserveUsageReport: async reservation => {
+				const key = `${reservation.installationId}/${reservation.month}`
+				const existing = usageReports.get(key)
+				const sameProvider = existing?.provider === reservation.provider
+				if (existing && sameProvider) {
+					const retry = existing.pendingIdentifier === reservation.identifier
+					if (existing.usdCents !== reservation.fromUsdCents) return undefined
+					if (existing.pendingIdentifier !== undefined && !retry) return undefined
+				}
+				const next: ResidentUsageReport = {
+					installationId: reservation.installationId,
+					month: reservation.month,
+					usdCents: sameProvider ? existing!.usdCents : 0,
+					provider: reservation.provider,
+					reference: sameProvider ? existing!.reference : undefined,
+					pendingUsdCents: reservation.toUsdCents,
+					pendingIdentifier: reservation.identifier,
+					pendingAt: now(),
+					reportedAt: existing?.reportedAt ?? now(),
+				}
+				usageReports.set(key, next)
+				return clone(next)
+			},
+			confirmUsageReport: async (installationId, month, identifier, reference) => {
+				const key = `${installationId}/${month}`
+				const existing = usageReports.get(key)
+				if (!existing || existing.pendingIdentifier !== identifier) return undefined
+				const next: ResidentUsageReport = {
+					installationId,
+					month,
+					usdCents: existing.pendingUsdCents ?? existing.usdCents,
+					provider: existing.provider,
+					reference,
+					reportedAt: now(),
+				}
+				usageReports.set(key, next)
+				return clone(next)
+			},
+			releaseUsageReport: async (installationId, month, identifier) => {
+				const existing = usageReports.get(`${installationId}/${month}`)
+				if (existing?.pendingIdentifier === identifier) delete existing.pendingAt
+			},
 		},
 	}
 }
