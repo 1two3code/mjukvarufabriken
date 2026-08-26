@@ -1,5 +1,5 @@
 import { CfnOutput, Duration, RemovalPolicy, Stack } from 'aws-cdk-lib'
-import { Peer, Port, SecurityGroup, SubnetType, Vpc } from 'aws-cdk-lib/aws-ec2'
+import { NatProvider, Peer, Port, SecurityGroup, SubnetType, Vpc } from 'aws-cdk-lib/aws-ec2'
 import {
 	Cluster,
 	ContainerDependencyCondition,
@@ -49,6 +49,8 @@ export type ExternalSecretName =
  */
 export class ResourcesStack extends Stack {
 	readonly vpc: Vpc
+	/** Id of the single NAT gateway (for the egress-cost alarm in OpsStack) */
+	readonly natGatewayId: string
 	readonly database: DatabaseInstance
 	/** Secrets Manager secret with `username`/`password`/`host`/`port`/`dbname` for Postgres */
 	readonly databaseSecret: ISecret
@@ -59,6 +61,8 @@ export class ResourcesStack extends Stack {
 	readonly jobsCluster: Cluster
 	readonly jobTaskDefinition: FargateTaskDefinition
 	readonly jobSecurityGroup: SecurityGroup
+	/** `/mf/<env>/jobs` — JSON lines from the job + proxy containers (see docs/RUNBOOK.md) */
+	readonly jobLogGroup: LogGroup
 	/** Postgres security group; consumers add their own ingress rule (see WebStack) */
 	readonly databaseSecurityGroup: SecurityGroup
 	/** SES sending identity for the hosted-zone domain (only with `domain` config) */
@@ -74,18 +78,24 @@ export class ResourcesStack extends Stack {
 		this.templateOptions.description = `Shared resources (${environment.name})`
 
 		// MARK: Networking
-		// 2 AZs; one NAT gateway (≈ 35 USD/month) shared by both private subnets.
+		// 2 AZs; one NAT gateway (≈ 35 USD/month) shared by both private subnets. The provider is
+		// the default one — it is only instantiated here so the gateway id can be read for alarms.
+		const natGatewayProvider = NatProvider.gateway()
 		this.vpc = new Vpc(this, 'Vpc', {
 			maxAzs: 2,
 			natGateways: 1,
+			natGatewayProvider,
 			subnetConfiguration: [
 				{ name: 'public', subnetType: SubnetType.PUBLIC },
 				{ name: 'private', subnetType: SubnetType.PRIVATE_WITH_EGRESS },
 				{ name: 'isolated', subnetType: SubnetType.PRIVATE_ISOLATED },
 			],
 		})
+		this.natGatewayId = natGatewayProvider.configuredGateways[0]!.gatewayId
 
-		// MARK: RDS Postgres 17
+		// MARK: RDS Postgres 17 — automated backups (`backupRetentionDays`: 7 dev / 30 live), live
+		// is deletion-protected and takes a final snapshot if the instance is ever removed from
+		// the stack; dev is simply destroyed.
 		this.databaseSecurityGroup = new SecurityGroup(this, 'DatabaseSecurityGroup', {
 			vpc: this.vpc,
 			description: 'Postgres - ingress granted per consumer',
@@ -104,14 +114,15 @@ export class ResourcesStack extends Stack {
 			multiAz: false,
 			backupRetention: Duration.days(environment.database.backupRetentionDays),
 			deletionProtection: isLive,
-			removalPolicy,
+			removalPolicy: isLive ? RemovalPolicy.SNAPSHOT : RemovalPolicy.DESTROY,
 			storageEncrypted: true,
 			autoMinorVersionUpgrade: true,
 		})
 		this.databaseSecret = this.database.secret!
 
 		// MARK: S3 — one bucket for all job deliverables (repo zips, docs, test reports).
-		// The template's generic attachments bucket was folded into this one.
+		// The template's generic attachments bucket was folded into this one. Versioned so an
+		// overwritten/deleted deliverable can be recovered for 90 days (M9 backups).
 		this.artifactsBucket = new Bucket(this, 'ArtifactsBucket', {
 			blockPublicAccess: BlockPublicAccess.BLOCK_ALL,
 			encryption: BucketEncryption.S3_MANAGED,
@@ -119,7 +130,7 @@ export class ResourcesStack extends Stack {
 			versioned: true,
 			lifecycleRules: [
 				{ abortIncompleteMultipartUploadAfter: Duration.days(7) },
-				{ noncurrentVersionExpiration: Duration.days(isLive ? 90 : 14) },
+				{ noncurrentVersionExpiration: Duration.days(90) },
 			],
 			removalPolicy,
 			autoDeleteObjects: !isLive,
@@ -185,6 +196,7 @@ export class ResourcesStack extends Stack {
 			retention: RetentionDays.TWO_WEEKS,
 			removalPolicy,
 		})
+		this.jobLogGroup = jobLogGroup
 
 		this.jobTaskDefinition = new FargateTaskDefinition(this, 'JobTaskDefinition', {
 			family: `mf-job-${environment.name}`,
@@ -246,12 +258,23 @@ export class ResourcesStack extends Stack {
 			condition: ContainerDependencyCondition.HEALTHY,
 		})
 
-		// Job task role: the database (job row + events), the Anthropic build secret, write
-		// artifacts. Never Stripe keys, the auth signing key or the GitHub token (M5 delivery mints
-		// a short-lived per-job token instead) — no customer secrets inside the sandbox.
+		// MARK: Job task role — reviewed M9. The container runs customer-driven code, so it gets
+		// exactly what apps/job needs today:
+		//   secretsmanager:GetSecretValue on the RDS secret   — DATABASE_SECRET_ARN: job row + events
+		//   secretsmanager:GetSecretValue on anthropic-api-key — the build itself (Agent SDK workers)
+		//   s3:PutObject*/Abort* on the artifacts bucket       — upload deliverables (never read/list/delete)
+		// Never: Stripe keys, the auth signing key, the GitHub token (M5 delivery mints a
+		// short-lived per-job token instead), ecs:* or logs:* (the execution role writes logs).
+		// Secrets reach the container as ARNs and are fetched at start-up; no plaintext env.
+		//
+		// KNOWN GAPS (PLAN.md, "M3 hardening" — not closed by M9): the RDS secret is the *master*
+		// credential, so code running in the job can read/write every customer's rows; and
+		// PutObject is bucket-wide, so a job can overwrite (not read) another job's deliverable —
+		// versioning keeps the previous copy. Both go away when the job reports status/events and
+		// uploads through an authenticated per-job api endpoint instead of holding credentials.
 		this.databaseSecret.grantRead(this.jobTaskDefinition.taskRole)
 		this.secrets['anthropic-api-key'].grantRead(this.jobTaskDefinition.taskRole)
-		this.artifactsBucket.grantWrite(this.jobTaskDefinition.taskRole)
+		this.artifactsBucket.grantPut(this.jobTaskDefinition.taskRole)
 
 		// MARK: Outputs (export names never contain the environment — one account per environment)
 		new CfnOutput(this, 'VpcId', { value: this.vpc.vpcId, exportName: 'vpc-id' })

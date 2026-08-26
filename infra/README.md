@@ -6,6 +6,7 @@ AWS CDK app for mjukvaruhuset.se. It is **not** an npm workspace (CDK's Docker a
 npm i --prefix infra
 npm run build                    # the web stack uploads apps/site/dist/<env> and apps/portal/dist/<env>
 cd infra && npx cdk synth
+npm test --prefix infra          # template assertions (alarms, security baseline, backups) — no build needed
 ```
 
 ## Stacks (per environment in `lib/config.ts`)
@@ -13,9 +14,10 @@ cd infra && npx cdk synth
 | Stack | Contents |
 |---|---|
 | `resources-<env>` | VPC (2 AZs, public + private-with-NAT + isolated subnets, **1 NAT gateway**), RDS **Postgres 17** (`mf` database, credentials generated into Secrets Manager, isolated subnets), `artifacts` bucket (versioned, private, lifecycle: abort multipart after 7 d, expire old versions 14 d dev / 90 d live), five Secrets Manager placeholders (below), SES `EmailIdentity` for the hosted-zone domain with DKIM + MAIL FROM records in Route 53 (only with `domain` config), ECS cluster `mf-jobs-<env>` + Fargate task definition `mf-job-<env>` for build jobs (M3; placeholder `node:24-alpine` image, 2 vCPU / 4 GB, logs 14 d). Exports `vpc-id`, `rds-endpoint`, `rds-secret-arn`, `s3-artifacts`, `ecs-jobs-cluster-arn`, `ecs-job-task-definition-arn`, `ecs-job-security-group-id`. |
+| `ops-<env>` | Alerting (M9), deployed last: SNS topic `mf-alerts-<env>` (e-mail to `adminEmails`, confirm the subscription), CloudWatch alarms — failed jobs + per-job token burn (metric filters on `/mf/<env>/jobs`), api 5xx + unhealthy targets (ALB), RDS CPU/storage/memory, NAT egress (hourly threshold + anomaly band) — and an AWS Budgets monthly cost budget (`alerts.monthlyBudgetUsd`, 80 % actual / 100 % forecast) filtered on the `Environment` tag. Thresholds in `config.alerts`. What each alarm means: `docs/RUNBOOK.md`. |
 | `mf-<env>` | **Site + Portal**: one private S3 bucket + CloudFront each (OAC, SPA fallback, security headers). **API**: ECS Fargate behind an ALB from `apps/api/Dockerfile` in the private (NAT) subnets, health check `/health`, security-group ingress to Postgres :5432, env vars `AUTH_ISSUER` (= api URL), `AUTH_AUDIENCE`, `AUTH_JWT_PRIVATE_KEY_SECRET_ARN`, `AUTH_ADMIN_EMAILS`, `AUTH_EMAIL_FROM`, `EMAIL_TRANSPORT`, `DATABASE_SECRET_ARN`, `ARTIFACTS_BUCKET`, `JOBS_CLUSTER_ARN`, `JOB_TASK_DEFINITION_ARN`, `JOB_SUBNET_IDS`, `JOB_SECURITY_GROUP_ID`, `STRIPE_*_SECRET_ARN`. Task role: read db + auth-key + Anthropic + Stripe secrets, read/write artifacts, `ses:SendEmail` on the domain identity, `ecs:RunTask/DescribeTasks/StopTask` scoped to the jobs cluster + `iam:PassRole` for the job roles. Optional custom domains + Route 53 records. |
 
-Sizing per environment lives in `lib/config.ts` (`database`, `jobs`): dev = `db.t4g.micro` 20 GB, 1-day backups, DESTROY; live = `db.t4g.small`, 7-day backups, RETAIN + deletion protection. Multi-AZ is off in both for now.
+Sizing per environment lives in `lib/config.ts` (`database`, `jobs`, `alerts`): dev = `db.t4g.micro` 20 GB, 7-day automated backups, DESTROY; live = `db.t4g.small`, 30-day backups, deletion protection + final snapshot on removal. Multi-AZ is off in both for now. Logs: `/mf/<env>/api` (14 d dev / 30 d live) and `/mf/<env>/jobs` (14 d).
 
 The template's generic attachments bucket, DynamoDB table and OpenSearch option were removed — the project uses Postgres, and all job deliverables (repo zips, docs, test reports) go into the single `artifacts` bucket.
 
@@ -70,6 +72,7 @@ npm run build
 cd infra && npx cdk bootstrap && npx cdk deploy resources-dev   # 1. resources (RDS takes ~10 min)
 # 2. fill the secrets (above)
 npx cdk deploy mf-dev                                           # 3. site + portal + api
+npx cdk deploy ops-dev                                          # 4. alarms + budget (confirm the SNS e-mail)
 ```
 
 Then point `VITE_API_URL` in `apps/portal/.env.dev` (and `apps/site/.env.dev`) at the `ApiUrl` output and redeploy `mf-dev`. The GitHub Actions `deploy` workflow automates this (see `.github/workflows/deploy.yml`).
@@ -80,6 +83,6 @@ Then point `VITE_API_URL` in `apps/portal/.env.dev` (and `apps/site/.env.dev`) a
 |---|---|---|---|---|
 | dev | 2026-08-26 | https://dev.mjukvaruhuset.se | https://portal.dev.mjukvaruhuset.se | https://api.dev.mjukvaruhuset.se |
 
-Deploy with `infra/scripts/deploy.sh <env> [stacks]` (reads AWS creds from the root `.env`).
+Deploy with `infra/scripts/deploy.sh <env> [stacks]` (reads AWS creds from the root `.env`); with no stacks given it deploys `resources-<env>`, `mf-<env>` and `ops-<env>` in that order, the same as the `deploy` workflow.
 
 Both SPA distributions forward `/bff/*` to the api ALB, so the apps use `VITE_API_URL=/bff` in every mode (locally Vite proxies `/bff` to `:5174`). ACM certs for dev were requested with `aws acm request-certificate` (us-east-1 for CloudFront, eu-north-1 for the ALB) and DNS-validated in the `mjukvaruhuset.se` hosted zone; ARNs live in `lib/config.ts`. For `live`, repeat with `mjukvaruhuset.se` + `portal.mjukvaruhuset.se` and `api.mjukvaruhuset.se`.

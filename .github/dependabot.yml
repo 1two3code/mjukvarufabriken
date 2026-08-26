@@ -1,0 +1,59 @@
+# Dependency scanning (M9 security baseline). Weekly, grouped so a wave of transitive bumps is
+# one PR per ecosystem/directory instead of thirty. Security advisories still open their own PR.
+version: 2
+updates:
+  - package-ecosystem: npm
+    directory: /
+    schedule:
+      interval: weekly
+      day: monday
+      time: '06:00'
+      timezone: Europe/Stockholm
+    groups:
+      workspace-dependencies:
+        patterns: ['*']
+    open-pull-requests-limit: 5
+    labels: [dependencies]
+
+  - package-ecosystem: npm
+    directory: /infra
+    schedule:
+      interval: weekly
+      day: monday
+      time: '06:00'
+      timezone: Europe/Stockholm
+    groups:
+      cdk:
+        patterns: ['aws-cdk*', 'constructs']
+      infra-dependencies:
+        patterns: ['*']
+        exclude-patterns: ['aws-cdk*', 'constructs']
+    open-pull-requests-limit: 3
+    labels: [dependencies]
+
+  # The golden template is never edited by hand (CLAUDE.md), but its lockfile still ages —
+  # Dependabot bumps are the one sanctioned way its dependencies move.
+  - package-ecosystem: npm
+    directory: /templates/web
+    schedule:
+      interval: weekly
+      day: monday
+      time: '06:00'
+      timezone: Europe/Stockholm
+    groups:
+      template-dependencies:
+        patterns: ['*']
+    open-pull-requests-limit: 3
+    labels: [dependencies, template]
+
+  - package-ecosystem: github-actions
+    directory: /
+    schedule:
+      interval: weekly
+      day: monday
+      time: '06:00'
+      timezone: Europe/Stockholm
+    groups:
+      actions:
+        patterns: ['*']
+    labels: [dependencies]

@@ -21,3 +21,5 @@ Start these NOW; none of them block building the software.
 | Hard network egress fence for build jobs: Fargate sidecars share the task ENI, so the tinyproxy allowlist is app-level (HTTPS_PROXY). A proxy in its own task/SG + VPC endpoints for Secrets Manager/S3 gives a real fence (~10 USD/month) — decide before pilots | you | hours | untrusted-code isolation |
 | Anthropic: Claude Agent SDK usage terms / org rate limits for parallel workers (2–4 sessions per job) | Anthropic | days | parallel jobs |
 | Mailbox hej@mjukvaruhuset.se (shown on the public site as contact address; contact-form mail goes to AUTH_ADMIN_EMAILS via SES) | you | hours | site contact address answering |
+| Confirm the `mf-alerts-<env>` SNS e-mail subscription (AWS sends "Subscription Confirmation" to each `adminEmails` address after the first `ops-<env>` deploy; nothing is delivered until clicked) | you | minutes | M9 alerts reaching anyone |
+| Activate the `Environment` cost-allocation tag (Billing → Cost allocation tags → user-defined → activate; takes up to 24 h) so the per-env AWS Budget sees spend instead of 0 | you | 1 day | M9 budget alerts |

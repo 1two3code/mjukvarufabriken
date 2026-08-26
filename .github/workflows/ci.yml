@@ -33,6 +33,16 @@ jobs:
       - name: Lint
         run: npm run lint
 
+      # Dependency scanning (M9). Allowed to fail for now: advisories in transitive dependencies
+      # would otherwise block every PR until upstream ships a fix — Dependabot opens the PRs,
+      # this step just keeps the count visible in the log. Drop `continue-on-error` once the
+      # baseline is clean.
+      - name: Audit dependencies (high+)
+        continue-on-error: true
+        run: |
+          npm audit --audit-level=high
+          npm audit --audit-level=high --prefix infra
+
       - name: Test (with coverage)
         run: npm run coverage
 
@@ -47,6 +57,12 @@ jobs:
       - name: CDK synth
         working-directory: infra
         run: npx cdk synth --quiet
+
+      # Template assertions: alarms/budget wiring and the security baseline (no plaintext
+      # secrets in task definitions, least-privilege job role, headers, backups)
+      - name: Infra tests
+        working-directory: infra
+        run: npm test
 
       - uses: actions/upload-artifact@v4
         with:
