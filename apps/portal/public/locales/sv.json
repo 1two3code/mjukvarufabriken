@@ -225,6 +225,7 @@
   "resident.loadError": "Residentanvändningen kunde inte läsas in.",
   "resident.reported": "Rapporterat {{amount}} {{date}} ({{provider}})",
   "resident.toast.billed": "Fakturerade {{month}} via {{provider}}: {{summary}}",
+  "resident.toast.billedNothing": "Inget fakturerat för {{month}} via {{provider}}: {{summary}}",
   "resident.toast.linked": "Installationen uppdaterad",
   "resident.toast.nothingToBill": "inga installationer",
   "resident.unbilled": "{{amount}} ofakturerat",

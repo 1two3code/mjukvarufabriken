@@ -7,6 +7,7 @@ import {
 	useCompleteFakeCheckoutMutation,
 	useCreateCheckoutMutation,
 } from '#/features/orders/ordersApiSlice.ts'
+import { paymentOf } from '#/features/orders/payments.ts'
 
 import { Button } from '#/components/Button.tsx'
 
@@ -113,9 +114,6 @@ export function PaymentPanel({ detail }: PaymentPanelProps) {
 	const { order, payments } = detail
 	if (order.priceSek === undefined) return null
 
-	const paymentOf = (kind: PaymentKind, status: Payment['status']) =>
-		payments.findLast(payment => payment.kind === kind && payment.status === status)
-
 	return (
 		<section className={styles.panel}>
 			<h2 className={styles.title}>{t('payment.title')}</h2>
@@ -126,8 +124,8 @@ export function PaymentPanel({ detail }: PaymentPanelProps) {
 						key={kind}
 						kind={kind}
 						priceSek={order.priceSek!}
-						paid={paymentOf(kind, 'paid')}
-						pending={paymentOf(kind, 'pending')}
+						paid={paymentOf(payments, kind, 'paid')}
+						pending={paymentOf(payments, kind, 'pending')}
 						due={order.status === dueIn[kind]}
 						orderId={order.id}
 					/>

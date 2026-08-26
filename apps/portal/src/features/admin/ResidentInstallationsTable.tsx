@@ -68,7 +68,7 @@ function LinkForm({ installation }: LinkFormProps) {
 				value={billingCustomerId}
 				onChange={event => setBillingCustomerId(event.target.value)}
 			/>
-			<Button size="tiny" color="secondary" disabled={!dirty || isLoading}>
+			<Button type="submit" size="tiny" color="secondary" disabled={!dirty || isLoading}>
 				{t('resident.action.save')}
 			</Button>
 		</form>

@@ -5,10 +5,10 @@ import { Link, useParams, useSearchParams } from 'react-router-dom'
 import { customerCancellableOrderStatus, isActiveJobStatus } from '@mf/models'
 
 import { usePermission } from '#/hooks/usePermission.ts'
-import { Deliverables } from '#/features/jobs/Deliverables.tsx'
-import { GateReports } from '#/features/jobs/GateReports.tsx'
 import { useGetJobQuery } from '#/features/jobs/jobsApiSlice.ts'
 import { useCancelOrderMutation, useGetOrderQuery } from '#/features/orders/ordersApiSlice.ts'
+import { Deliverables } from '#/features/jobs/Deliverables.tsx'
+import { GateReports } from '#/features/jobs/GateReports.tsx'
 import { OrderStatusBadge } from '#/features/orders/OrderStatusBadge.tsx'
 import { OrderStepper } from '#/features/orders/OrderStepper.tsx'
 import { PaymentPanel } from '#/features/orders/PaymentPanel.tsx'
@@ -64,9 +64,14 @@ export function OrderPage() {
 		pollingInterval: pollingInterval,
 	})
 	const [cancel, { isLoading: isCancelling }] = useCancelOrderMutation()
-	// The full job row carries the gate reports; the order detail only has a summary of it
+	// The full job row carries the gate reports; the order detail only has a summary of it.
+	// Polled only while the build runs — a finished job's gates and deliverables never change.
 	const latestJobId = detail?.latestJob?.id ?? ''
-	const { data: job } = useGetJobQuery(latestJobId, { skip: !latestJobId, pollingInterval })
+	const latestActive = detail?.latestJob ? isActiveJobStatus(detail.latestJob.status) : false
+	const { data: job } = useGetJobQuery(latestJobId, {
+		skip: !latestJobId,
+		pollingInterval: latestActive ? pollingInterval : 0,
+	})
 	const { hasPermission } = usePermission()
 	const cancellable = hasPermission('job:admin')
 		? adminCancellable
@@ -77,7 +82,6 @@ export function OrderPage() {
 
 	const { order, latestJob, spec } = detail
 	const paymentResult = searchParams.get('payment')
-	const buildActive = latestJob ? isActiveJobStatus(latestJob.status) : false
 
 	return (
 		<>
@@ -113,7 +117,7 @@ export function OrderPage() {
 						</Link>
 						{latestJob && (
 							<Link to={`/orders/${order.id}/job`}>
-								{t(buildActive ? 'order.action.followBuild' : 'order.action.viewBuild')}
+								{t(latestActive ? 'order.action.followBuild' : 'order.action.viewBuild')}
 							</Link>
 						)}
 					</div>

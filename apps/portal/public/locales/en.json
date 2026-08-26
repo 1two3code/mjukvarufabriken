@@ -225,6 +225,7 @@
   "resident.loadError": "The resident usage could not be loaded.",
   "resident.reported": "Reported {{amount}} {{date}} ({{provider}})",
   "resident.toast.billed": "Billed {{month}} via {{provider}}: {{summary}}",
+  "resident.toast.billedNothing": "Nothing billed for {{month}} via {{provider}}: {{summary}}",
   "resident.toast.linked": "Installation updated",
   "resident.toast.nothingToBill": "no installations",
   "resident.unbilled": "{{amount}} unbilled",

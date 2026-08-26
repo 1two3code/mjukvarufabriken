@@ -11,22 +11,16 @@ import {
 	useGetResidentInstallationsQuery,
 	useGetResidentUsageQuery,
 } from '#/features/admin/residentApiSlice.ts'
-import { usageMonths } from '#/features/admin/residentBilling.ts'
+import {
+	billingRunTone,
+	filterUsageMonth,
+	summarizeBillingRun,
+	usageMonths,
+} from '#/features/admin/residentBilling.ts'
 import { ResidentInstallationsTable } from '#/features/admin/ResidentInstallationsTable.tsx'
 import { ResidentUsageTable } from '#/features/admin/ResidentUsageTable.tsx'
 
 import { Button } from '#/components/Button.tsx'
-
-import type { ResidentBillingRunResponse } from '@mf/models'
-
-/** `reported: 2, unchanged: 1, …` for the toast after a billing run */
-const summarizeRun = (run: ResidentBillingRunResponse) => {
-	const counts = new Map<string, number>()
-	for (const result of run.results) {
-		counts.set(result.outcome, (counts.get(result.outcome) ?? 0) + 1)
-	}
-	return [...counts].map(([outcome, count]) => `${outcome}: ${count}`).join(', ')
-}
 
 /** Admins only: resident installations, their metered usage per month and the billing run */
 export function AdminResidentPage() {
@@ -35,7 +29,8 @@ export function AdminResidentPage() {
 	const { hasPermission } = usePermission()
 	const isAdmin = hasPermission('job:admin')
 	const [month, setMonth] = useState('')
-	const usageQuery = useGetResidentUsageQuery(month ? { month } : {}, { skip: !isAdmin })
+	// Every month in one fetch; the filter narrows client-side so the month list stays complete
+	const usageQuery = useGetResidentUsageQuery({}, { skip: !isAdmin })
 	const installationsQuery = useGetResidentInstallationsQuery(undefined, { skip: !isAdmin })
 	const [bill, { isLoading: isBilling }] = useBillResidentMonthMutation()
 
@@ -44,18 +39,20 @@ export function AdminResidentPage() {
 	const usage = usageQuery.data ?? []
 	const installations = installationsQuery.data ?? []
 	const months = usageMonths(usage)
+	const rows = filterUsageMonth(usage, month)
 	const billMonth = month || months[0]
 
 	const handleBill = async () => {
 		if (!billMonth) return
 		const result = await bill(billMonth)
 		if (result.error) return
+		const tone = billingRunTone(result.data)
 		toast(
-			'success',
-			t('resident.toast.billed', {
+			tone,
+			t(`resident.toast.${tone === 'success' ? 'billed' : 'billedNothing'}`, {
 				month: billMonth,
 				provider: result.data.provider,
-				summary: summarizeRun(result.data) || t('resident.toast.nothingToBill'),
+				summary: summarizeBillingRun(result.data) || t('resident.toast.nothingToBill'),
 			})
 		)
 	}
@@ -64,7 +61,8 @@ export function AdminResidentPage() {
 		<>
 			<h1>{t('page.adminResident.title')}</h1>
 			<p className={styles.intro}>
-				{t('page.adminResident.intro')} <Link to="/admin">{t('page.adminResident.backToAdmin')}</Link>
+				{t('page.adminResident.intro')}{' '}
+				<Link to="/admin">{t('page.adminResident.backToAdmin')}</Link>
 			</p>
 
 			<div className={styles.toolbar}>
@@ -92,7 +90,7 @@ export function AdminResidentPage() {
 			<p className={styles.hint}>{t('resident.billHint')}</p>
 
 			<ResidentUsageTable
-				usage={usage}
+				usage={rows}
 				installations={installations}
 				isLoading={usageQuery.isLoading}
 				isError={usageQuery.isError}

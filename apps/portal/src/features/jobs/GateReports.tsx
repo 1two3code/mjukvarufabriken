@@ -2,6 +2,9 @@ import styles from './GateReports.module.css'
 
 import { useTranslation } from 'react-i18next'
 
+import { usePermission } from '#/hooks/usePermission.ts'
+import { formatGateDetail, gateHeadline } from '#/features/jobs/gateReport.ts'
+
 import type { GateReport } from '@mf/models'
 
 type GateReportsProps = {
@@ -10,18 +13,13 @@ type GateReportsProps = {
 	expanded?: boolean
 }
 
-/** First line of the summary — what the collapsed row shows */
-const headline = (summary: string) => summary.split('\n').find(line => line.trim()) ?? ''
-
-/** `details` is free-form per gate: scalars inline, anything else pretty-printed */
-const formatDetail = (value: unknown) =>
-	typeof value === 'string' || typeof value === 'number' || typeof value === 'boolean'
-		? String(value)
-		: JSON.stringify(value, null, 2)
-
 /** The QA gates (M4) in run order, from `jobs.gates`; absent until the first gate has run */
 export function GateReports({ gates, expanded = false }: GateReportsProps) {
 	const { t, i18n } = useTranslation()
+	const { hasPermission } = usePermission()
+	// `details` carries harness internals (findings, waiver ids, file lists) — admins only;
+	// customers get the summary text
+	const showDetails = hasPermission('job:admin')
 
 	return (
 		<section className={styles.gates}>
@@ -42,18 +40,18 @@ export function GateReports({ gates, expanded = false }: GateReportsProps) {
 									</span>
 								</summary>
 								<p className={styles.summary}>{gate.summary}</p>
-								{gate.details && Object.keys(gate.details).length > 0 && (
+								{showDetails && gate.details && Object.keys(gate.details).length > 0 && (
 									<dl className={styles.detailList}>
 										{Object.entries(gate.details).map(([key, value]) => (
 											<div key={key} className={styles.detail}>
 												<dt className={styles.detailKey}>{key}</dt>
-												<dd className={styles.detailValue}>{formatDetail(value)}</dd>
+												<dd className={styles.detailValue}>{formatGateDetail(value)}</dd>
 											</div>
 										))}
 									</dl>
 								)}
 							</details>
-							{!expanded && <p className={styles.headline}>{headline(gate.summary)}</p>}
+							{!expanded && <p className={styles.headline}>{gateHeadline(gate.summary)}</p>}
 							<span className={styles.meta}>
 								{t('job.gates.meta', {
 									duration: Math.round(gate.durationMs / 1000).toLocaleString(i18n.language),
