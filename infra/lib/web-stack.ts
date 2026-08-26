@@ -1,4 +1,4 @@
-import { CfnOutput, Duration, RemovalPolicy, Stack } from 'aws-cdk-lib'
+import { Annotations, CfnOutput, Duration, RemovalPolicy, Stack } from 'aws-cdk-lib'
 import { Certificate } from 'aws-cdk-lib/aws-certificatemanager'
 import {
 	AllowedMethods,
@@ -209,6 +209,14 @@ export class WebStack extends Stack {
 		// ALB. The job security group allows 443/80 egress anywhere and the public ALB accepts
 		// 80/443 from anywhere, so the reports arrive through the NAT gateway with no extra rule.
 		const jobApiHost = domain ? domain.apiDomainName : api.loadBalancer.loadBalancerDnsName
+		if (!apiUrl) {
+			// The ALB only terminates TLS with the domain's certificate; until then the per-job
+			// bearer token crosses NAT → public ALB in cleartext (certificate: TODO-EXTERNAL.md)
+			Annotations.of(this).addWarningV2(
+				'mf:job-api-url-http',
+				`JOB_API_URL is plain http (${albUrl}) — configure \`domain\` so build jobs report over TLS`
+			)
+		}
 		api.taskDefinition.defaultContainer!.addEnvironment('JOB_API_URL', apiUrl ?? albUrl)
 		api.taskDefinition.defaultContainer!.addEnvironment(
 			'JOB_NO_PROXY',
