@@ -121,7 +121,7 @@ underbiträden. Vid avtalets ingående anlitas följande underbiträden:
 |---|---|---|---|
 | Amazon Web Services EMEA SARL (AWS) | Molninfrastruktur: databas, lagring av leverabler och byggartefakter, byggmiljöer (containers), e-postutskick, hemlighetshantering | Lagring och körning av all data i Tjänsten | Region **eu-north-1 (Stockholm)**, EU. Supportåtkomst kan ske från tredjeland under AWS standardavtalsklausuler |
 | Anthropic PBC / Anthropic Ireland Ltd | Språkmodell-API (Claude) | Specifikation, kod, tester och ärendetext skickas till modellen för generering av plan, kod, tester och granskning | USA (tredjeland); överföring enligt punkt 8. Enligt Anthropics API-villkor används data inte för modellträning |
-| GitHub, Inc. (Microsoft) | Kodförråd, pull requests, ärenden, inloggning med GitHub | Källkod och dokumentation levereras till ett privat förråd; i residentläget läses ärenden och skapas pull requests | USA (tredjeland); överföring enligt punkt 8 |
+| GitHub, Inc. (Microsoft) | Kodförråd, pull requests, ärenden | Källkod och dokumentation levereras till ett privat förråd; i residentläget läses ärenden och skapas pull requests | USA (tredjeland); överföring enligt punkt 8 |
 | Stripe Payments Europe, Ltd. / Stripe, Inc. | Betaltjänst | Betalningsuppgifter för Kundens beställningar (Leverantören är här självständigt ansvarig, se punkt 1.3; anges för fullständighet) | Irland/USA |
 
 6.2 Leverantören ska informera Kunden skriftligen (e-post till registrerad adress eller
@@ -156,8 +156,8 @@ behörighet som återkallas när uppdraget avslutas.
 7.3 Byggmiljöer körs i isolerade containers med nätverksåtkomst begränsad till en vitlista
 (paketregister, GitHub, språkmodell-API) och med hårda gränser för resursförbrukning och tid.
 
-7.4 Åtkomst till Tjänsten sker genom personlig inloggning (engångslänk via e-post eller
-GitHub-inloggning) och kortlivade signerade sessionsbevis; Kundens uppgifter är avgränsade per
+7.4 Åtkomst till Tjänsten sker genom personlig inloggning (engångslänk via e-post) och
+kortlivade signerade sessionsbevis; Kundens uppgifter är avgränsade per
 organisation. Administrativ åtkomst är begränsad till namngivna personer hos Leverantören.
 
 7.5 Databasen säkerhetskopieras automatiskt (7 dagar i utvecklingsmiljö, 30 dagar i
@@ -213,9 +213,15 @@ Leverantören radera eller återlämna personuppgifterna och radera befintliga k
 lagring krävs enligt lag (t.ex. bokföringslagen).
 
 10.2 Leverabler (kodförråd, arkivfiler, dokumentation) återlämnas genom Leveransen enligt
-Kundavtalet; Leverantörens kopior i lagringstjänsten raderas senast nittio (90) dagar efter
-acceptans, om Kunden inte begär tidigare radering. Säkerhetskopior av databasen raderas i takt
-med den automatiska rotationen (max 30 dagar).
+Kundavtalet. Leverantörens kopior av Specifikationen, leverablerna samt bygg- och gate-rapporter
+behålls enligt Kundavtalet punkt 7.3 (support, kravfrist och tvistehantering) och raderas senast
+tolv (12) månader efter acceptans, eller — om en tvist om beställningen pågår — när tvisten
+avslutats. Kunden kan begära tidigare radering; Leverantören får då avböja support enligt
+Kundavtalet punkt 6 och återställande enligt Kundavtalet punkt 10.2 för den beställningen.
+Bokföringsunderlag sparas den tid bokföringslagen kräver. Säkerhetskopior av databasen raderas i
+takt med den automatiska rotationen (max 30 dagar). _[Öppen punkt: raderingen sker i dag manuellt
+på begäran; en automatisk raderingsrutin för leverabler i lagringstjänsten och databasen är inte
+byggd ännu — bygg den innan avtalet används mot kund, eller behåll "manuellt" i texten.]_
 
 10.3 Data som skickats till språkmodell-API lagras hos underbiträdet enligt dess
 lagringspolicy (för närvarande som mest trettio (30) dagar för missbruksövervakning, om inte
@@ -281,21 +287,22 @@ _DRAFT — NOT REVIEWED. This summary is for orientation only; the Swedish text 
   built-in functions is chargeable.
 - **Sub-processors (§6):** general prior authorisation with a 30-day notice and objection right.
   Current list: **AWS (eu-north-1, Stockholm)** for all infrastructure; **Anthropic** (LLM API,
-  US, no training on API data); **GitHub** (delivery repositories, issues/PRs, sign-in; US);
+  US, no training on API data); **GitHub** (delivery repositories, issues/PRs; US);
   **Stripe** (payments — listed for completeness, supplier is controller there). In resident mode
   the software runs in the customer's own AWS account with the customer's own Anthropic key and
   GitHub repo, so those providers are the customer's processors; only daily usage metrics reach
   the supplier.
 - **Security (§7):** EU-only storage, TLS and encryption at rest, secrets in Secrets Manager
   never exposed to build sandboxes, per-job short-lived credentials, network-allowlisted
-  containers with hard token/time budgets, magic-link/GitHub login with short-lived signed
-  tokens, org-scoped data, automated backups (7/30 days), alarms, dependency scanning.
+  containers with hard token/time budgets, magic-link login with short-lived signed tokens, org-scoped data, automated backups (7/30 days), alarms, dependency scanning.
 - **Third-country transfers (§8):** to the US for Anthropic and GitHub, under the EU–US Data
   Privacy Framework where certified and otherwise the 2021 SCCs in the vendors' data terms.
 - **Audit (§9):** once a year (plus for cause) with 30 days' notice, primarily via documentation
   and sub-processor reports; supplier time is chargeable unless material deficiencies are found.
-- **Deletion (§10):** delete or return at contract end; supplier copies of deliverables deleted
-  within 90 days of acceptance; DB backups roll off within 30 days; LLM-side retention per the
+- **Deletion (§10):** delete or return at contract end; supplier copies of specs, deliverables
+  and gate reports are kept per the customer agreement §7.3 and deleted within 12 months of
+  acceptance (longer while a dispute is open; earlier on request, which ends support/restore for
+  that order; deletion is manual today — open point); DB backups roll off within 30 days; LLM-side retention per the
   vendor's policy (open point to verify).
 - **Breaches (§11):** notice to the customer without undue delay and within 48 hours of
   awareness, with the art. 33 content, possibly in stages.

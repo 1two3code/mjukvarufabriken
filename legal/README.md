@@ -18,5 +18,8 @@ tokens × 1,5 + månadsavgift, residenten kör på kundens egen Anthropic-nyckel
 AWS-konto. Tekniska fakta (gates, tokenbudget, portalens sessionslagring) är hämtade från koden
 i `packages/harness`, `packages/resident`, `apps/portal` och `apps/api` per 2026-08-27.
 
+Konsistens mot koden (inloggningsmetod, lagringstider, avbeställning, token-tak) hålls av
+`apps/api/test/legal/drafts.test.ts`; uppdatera testet när fakta ändras.
+
 Placeholders att fylla i före granskning: `[BOLAGSNAMN AB]`, `[ORG.NR]`, `[ADRESS]`,
 `[MÅNADSAVGIFT]`, `[DATUM]`.

@@ -28,13 +28,17 @@ organisationen.
 
 _DRAFT — EJ GRANSKAD_
 
-2.1 Konto skapas genom att ange en e-postadress och följa engångslänken vi skickar, eller genom
-inloggning med GitHub. Kontot knyts till en organisation som som standard namnges efter
-e-postadressens domän; den första användaren från en domän blir organisationens administratör.
+2.1 Konto skapas genom att ange en e-postadress och följa engångslänken vi skickar; inloggning
+sker utan lösenord. Vid första inloggningen skapas en egen organisation för kontot. Organisationen
+namnges som standard efter e-postadressens domän (t.ex. `acme.se`) eller, om adressen tillhör en
+allmän e-postleverantör (t.ex. gmail.com, outlook.com), efter den del av adressen som står före
+`@`. Namnet kan ändras på begäran. Ingen ansluts automatiskt till en annan organisation på grund
+av e-postdomän; ytterligare användare läggs till i en organisation av oss på organisationens
+begäran. _[Öppen punkt: inloggning med GitHub (PLAN M6) är inte byggd — lägg till den här och i
+punkterna 8.3, 9.1 och 12.1 när den finns.]_
 
-2.2 Du ansvarar för att din e-postadress och ditt GitHub-konto är skyddade. Engångslänkar är
-giltiga i 15 minuter och får inte vidarebefordras. Meddela oss omedelbart vid misstanke om
-obehörig åtkomst.
+2.2 Du ansvarar för att din e-postadress är skyddad. Engångslänkar är giltiga i 15 minuter och
+får inte vidarebefordras. Meddela oss omedelbart vid misstanke om obehörig åtkomst.
 
 2.3 Vi får stänga av konton som används i strid med villkoren, för intrångsförsök, för att
 belasta tjänsten onormalt eller för att lägga in olagligt innehåll.
@@ -103,8 +107,8 @@ _DRAFT — EJ GRANSKAD_
 | Situation | Uppgifter | Ändamål | Rättslig grund | Lagringstid |
 |---|---|---|---|---|
 | 8.1 Besök på Webbplatsen | IP-adress, tidpunkt, begärd sida, webbläsartyp (i tekniska loggar hos vår innehållsleverans- och webbserver) | Leverera sidan, säkerhet, felsökning | Berättigat intresse (drift och säkerhet) | Loggar raderas inom 30 dagar _[öppen punkt: sätt motsvarande retention på CloudFront-/ALB-loggar i infra]_ |
-| 8.2 Kontaktformulär | Namn, e-post, ev. företag, meddelande, avsändar-IP (för begränsning av antal försändelser) | Besvara din förfrågan | Berättigat intresse (besvara förfrågan) / åtgärder inför avtal | E-post hos oss tills ärendet är avslutat, längst 12 månader; IP-räknaren i minst 1 timme |
-| 8.3 Konto i Portalen | E-postadress, namn (om lämnat), organisation, roll, tidpunkt för inloggning; vid GitHub-inloggning även GitHub-id och användarnamn; engångslänkar och uppdateringsbevis (refresh tokens) | Autentisering, behörigheter, avtalsfullgörande | Fullgörande av avtal / åtgärder inför avtal | Kontots livstid + 12 månader; engångslänkar 15 minuter; uppdateringsbevis 30 dagar |
+| 8.2 Kontaktformulär | Namn, e-post, ev. företag, meddelande, avsändar-IP (för begränsning av antal försändelser) | Besvara din förfrågan | Berättigat intresse (besvara förfrågan) / åtgärder inför avtal | E-post hos oss tills ärendet är avslutat, längst 12 månader; IP-räknaren endast i arbetsminnet i högst 10 minuter |
+| 8.3 Konto i Portalen | E-postadress, namn (om lämnat), organisation, roll (användare, eller administratör för vår egen personal), tidpunkt för inloggning; engångslänkar och uppdateringsbevis (refresh tokens) | Autentisering, behörigheter, avtalsfullgörande | Fullgörande av avtal / åtgärder inför avtal | Kontots livstid + 12 månader; engångslänkar 15 minuter; uppdateringsbevis 30 dagar |
 | 8.4 Beställningar och byggen | Specifikationer, ordrar, byggloggar, gate-rapporter, leverabler, tokenförbrukning | Fullgöra Kundavtalet, support, bokföring | Fullgörande av avtal; rättslig förpliktelse (bokföringslagen) | Enligt Kundavtalet/PUB-avtalet; bokföringsunderlag 7 år |
 | 8.5 Betalningar | Belopp, tidpunkt, betalstatus, Stripes kund- och betalningsreferens, faktura-/kvittolänk. Kortuppgifter lämnas direkt till Stripe och når aldrig oss | Ta betalt, fakturera | Fullgörande av avtal; rättslig förpliktelse (bokföring) | 7 år (bokföring) |
 | 8.6 E-post till dig | E-postadress, innehåll (engångslänkar, leverans- och byggmeddelanden) | Autentisering och avtalsmeddelanden | Fullgörande av avtal | Loggar hos e-posttjänsten enligt 8.1 |
@@ -118,7 +122,7 @@ _DRAFT — EJ GRANSKAD_
 
 9.1 Vi använder följande leverantörer som personuppgiftsbiträden: **Amazon Web Services**
 (all drift, region Stockholm eu-north-1; e-post via Amazon SES), **Stripe** (betalningar),
-**GitHub** (inloggning med GitHub, leverans av kod), **Anthropic** (språkmodell som behandlar
+**GitHub** (leverans av kod till kundens kodförråd), **Anthropic** (språkmodell som behandlar
 specifikationer och kod vid byggen). Se `pub-avtal.md` punkt 6 för detaljer.
 
 9.2 Stripe, GitHub och Anthropic kan behandla uppgifter i USA. Överföringen sker med stöd av
@@ -166,7 +170,7 @@ berättigat intresse. Kontakta hej@mjukvaruhuset.se; vi svarar inom en månad.
 _DRAFT — EJ GRANSKAD_
 
 12.1 Trafik krypteras (TLS), data lagras krypterat i AWS region Stockholm, hemligheter hanteras
-i en dedikerad hemlighetstjänst, inloggning sker utan lösenord (engångslänk eller GitHub) med
+i en dedikerad hemlighetstjänst, inloggning sker utan lösenord (engångslänk via e-post) med
 kortlivade signerade bevis, och åtkomst till kunddata är avgränsad per organisation. Se vidare
 `pub-avtal.md` punkt 7.
 
@@ -187,9 +191,11 @@ _DRAFT — NOT REVIEWED. This summary is for orientation only; the Swedish text 
 
 - Apply to the public site mjukvaruhuset.se and the customer portal; orders are governed by the
   customer agreement and resident addendum, which take precedence.
-- Accounts are created by e-mail magic link (15-minute validity) or GitHub sign-in; the org is
-  named after the e-mail domain and the first user becomes its admin. Users protect their
-  e-mail/GitHub access; we may suspend accounts for abuse.
+- Accounts are created by e-mail magic link (15-minute validity) only (no other login method
+  until built — open point); each first sign-in gets its own org, named after the e-mail domain or,
+  for public mail providers, the local part of the address; nobody joins another org by domain —
+  additional users are added by us on the org's request. Users protect their e-mail access; we
+  may suspend accounts for abuse.
 - Users keep the rights to content they enter and grant us the processing rights needed to
   provide the service; no secrets in specs or the contact form.
 - Site, portal and software are our IP; no copying or building a competing service from them.
@@ -202,9 +208,9 @@ _DRAFT — NOT REVIEWED. This summary is for orientation only; the Swedish text 
 - Controller: [company], contact hej@mjukvaruhuset.se; no DPO. For personal data in customer
   specs/code we are processor under the DPA.
 - What we process and why: technical logs on site visits (legitimate interest, 30 days); contact
-  form name/e-mail/company/message plus sender IP for rate limiting (legitimate interest /
-  pre-contract, max 12 months); portal account data incl. GitHub id/login when used, magic links
-  (15 min) and refresh tokens (30 days) (contract); orders, specs, build logs, gate reports,
+  form name/e-mail/company/message (legitimate interest / pre-contract, max 12 months) plus the
+  sender IP in memory for at most 10 minutes for rate limiting; portal account data (e-mail,
+  name, org, role), magic links (15 min) and refresh tokens (30 days) (contract); orders, specs, build logs, gate reports,
   deliverables and token usage (contract; bookkeeping 7 years); payment records via Stripe —
   card data never reaches us (contract/bookkeeping, 7 years); transactional e-mails (contract).
   No automated decision-making, no profiling, no selling of data.

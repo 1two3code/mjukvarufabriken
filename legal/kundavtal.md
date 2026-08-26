@@ -63,8 +63,11 @@ exklusive mervärdesskatt. Mervärdesskatt tillkommer enligt gällande lag.
    a) **Förskott, 50 %** av priset, betalas i samband med att Specifikationen fryses. Byggnationen
    påbörjas inte förrän förskottet är mottaget.
 
-   b) **Slutbetalning, 50 %** av priset, förfaller till betalning vid Leverans enligt punkt 5
-   och ska erläggas inom tio (10) dagar från Leveransen.
+   b) **Slutbetalning, 50 %** av priset, förfaller till betalning när leveransen accepterats
+   enligt punkt 5.6 och ska erläggas inom tio (10) dagar från acceptansen. Leverantören
+   tillgängliggör betalningen i portalen vid Leveransen; Kunden får betala tidigare, men en
+   tidigare betalning påverkar inte Granskningsperioden eller Kundens rättigheter enligt
+   punkt 5.4–5.7.
 
 3.3 Betalning sker genom den betaltjänst som portalen anvisar (för närvarande Stripe). Kvitto
 och faktura tillhandahålls via betaltjänsten. Vid försenad betalning utgår dröjsmålsränta enligt
@@ -88,8 +91,10 @@ anges i punkt 5.2 ("Gates").
 
 4.2 Byggnationen sker i en avgränsad miljö med begränsad nätverksåtkomst och en hård gräns för
 resursförbrukning (tokenbudget och maximal byggtid). Om gränsen nås utan att Gates passerats
-avbryts bygget och Leverantören avgör om ett nytt försök ska göras på Leverantörens bekostnad
-eller om beställningen ska avbrytas enligt punkt 11.2.
+avbryts bygget och Leverantören gör **minst ett förnyat försök** på Leverantörens bekostnad.
+Leverantören får därvid justera planeringen och byggmiljön men inte Specifikationen. Kan bygget
+inte slutföras inom budgeten efter förnyat försök får Leverantören avbryta beställningen enligt
+punkt 11.2. Ett avbrytande på den grunden utgör inte avtalsbrott från Leverantörens sida.
 
 4.3 Kunden kan följa byggets förlopp i portalen. Förloppsinformationen är informativ och utgör
 inte Leverans.
@@ -137,7 +142,7 @@ för de anmälda Avvikelserna.
 
 5.6 Leveransen anses **accepterad** när det tidigaste av följande inträffar: (a) Kunden
 skriftligen godkänner leveransen, (b) Granskningsperioden löper ut utan att Avvikelse anmälts,
-(c) Kunden tar applikationen i produktiv drift, eller (d) Kunden genomför slutbetalning.
+eller (c) Kunden tar applikationen i produktiv drift. Slutbetalning i sig utgör inte acceptans.
 
 5.7 Om Leverantören inom rimlig tid, dock högst två (2) ytterligare leveranser, inte kan åtgärda
 en Avvikelse som avser ett acceptanskriterium, har Kunden rätt att antingen acceptera leveransen
@@ -178,9 +183,12 @@ licens att granska och testa leveransen.
    c) programvara från tredje part enligt punkt 9.
 
 7.3 Kunden ger Leverantören rätt att behålla en kopia av Specifikationen, det Kundspecifika
-resultatet och bygg- och gate-rapporter i den omfattning som krävs för bokföring, tvistehantering
-och för att fullgöra punkt 6, samt att använda avidentifierade och aggregerade mätdata om bygget
-(t.ex. tokenförbrukning, byggtid, antal gate-körningar) för att förbättra Tjänsten.
+resultatet och bygg- och gate-rapporter till dess att tolv (12) månader förflutit från acceptans
+(vilket täcker supporten enligt punkt 6 och kravfristen enligt punkt 10.4), eller längre om en
+tvist om beställningen pågår, för bokföring, tvistehantering och för att fullgöra punkt 6.
+Därefter raderas kopian; bokföringsunderlag (beställning, pris, betalningar) sparas den tid
+bokföringslagen kräver. Leverantören får använda avidentifierade och aggregerade mätdata om
+bygget (t.ex. tokenförbrukning, byggtid, antal gate-körningar) för att förbättra Tjänsten.
 
 7.4 Leverantören får inte utan Kundens skriftliga godkännande använda Kunden som referens
 eller publicera det Kundspecifika resultatet.
@@ -263,14 +271,29 @@ grundas på innehållet i Specifikationen eller på material som Kunden tillhand
 
 _DRAFT — EJ GRANSKAD_
 
-11.1 Kunden får avbryta en beställning innan förskottet betalats utan kostnad. Efter att bygget
-påbörjats får Kunden avbryta beställningen; förskottet återbetalas då inte, och ingen
-slutbetalning utgår. Delresultat levereras inte.
+11.1 Kundens avbeställning:
+
+   a) **Innan förskottet betalats** får Kunden avbryta beställningen utan kostnad, själv i
+   portalen.
+
+   b) **Efter att förskottet betalats men innan bygget påbörjats** (t.ex. om byggstarten
+   misslyckas eller dröjer) får Kunden avbryta genom skriftligt meddelande till Leverantören.
+   Förskottet återbetalas då i sin helhet.
+
+   c) **Efter att bygget påbörjats** får Kunden avbryta genom skriftligt meddelande till
+   Leverantören. Leverantören stoppar då bygget. Förskottet återbetalas inte, eftersom det
+   täcker den beräkningskostnad som förbrukats, och ingen slutbetalning utgår. Delresultat
+   levereras inte.
+
+   Bygget anses påbörjat när Leverantören startat byggmiljön för beställningen, vilket visas
+   i portalen. Avbeställning enligt b) och c) utförs av Leverantören i portalen; en beställning
+   som avbrutits kan inte återupptas.
 
 11.2 Leverantören får avbryta en beställning om bygget inte kan slutföras inom den avsatta
-budgeten efter förnyat försök, om Specifikationen visar sig strida mot lag eller tredje mans
-rätt, eller om Kunden bryter mot avtalet. Avbryter Leverantören utan att Kunden är i
-avtalsbrott återbetalas förskottet i sin helhet, vilket är Kundens enda påföljd.
+budgeten efter förnyat försök enligt punkt 4.2, om bygget inte kan påbörjas inom tio (10)
+arbetsdagar från det att förskottet mottagits, om Specifikationen visar sig strida mot lag eller
+tredje mans rätt, eller om Kunden bryter mot avtalet. Avbryter Leverantören utan att Kunden är
+i avtalsbrott återbetalas förskottet i sin helhet, vilket är Kundens enda påföljd.
 
 11.3 Vid hävning enligt punkt 5.7 återbetalas förskottet och Kundens licens enligt punkt 7.1
 upphör.
@@ -339,26 +362,31 @@ _DRAFT — NOT REVIEWED. This summary is for orientation only; the Swedish text 
   criteria, stack constraints). Anything not in it, and everything listed as a non-goal, is out of
   scope; changes after freezing are a new order.
 - **Price and payment (§3):** fixed price by size class (S/M/L) ex VAT. **50 % deposit** when the
-  spec is frozen (build starts only after receipt), **50 % balance** due at delivery, payable
-  within 10 days. Compute cost (LLM tokens, build environment) is included; hosting, domains and
-  third-party services are not.
+  spec is frozen (build starts only after receipt), **50 % balance** due at acceptance, payable
+  within 10 days of acceptance (the portal offers the payment at delivery; paying early does not
+  shorten the review window). Compute cost (LLM tokens, build environment) is included; hosting,
+  domains and third-party services are not.
 - **Build process (§4):** automated build by LLM agents in an isolated environment with a hard
-  token/time budget; the supplier chooses the technical solution within the spec's constraints.
+  token/time budget; if the budget is hit the supplier makes at least one retry at its own cost
+  before it may cancel under §11.2; the supplier chooses the technical solution within the spec's
+  constraints.
 - **Delivery and acceptance (§5):** delivery = source in a private GitHub repo (customer as admin)
   or a zip, handover docs and test report, optionally a temporary preview URL. Delivery only
   happens once all four gates pass: *verify* (lint/test/build), *acceptance-tests* (one generated
   test per acceptance criterion), *review* (automated code review), *acceptance-check* (every
   criterion mapped to evidence). The customer then has a **review window of 10 working days** to
   report deviations from the acceptance criteria; fixes get a 5-working-day re-review. Acceptance
-  occurs on written approval, expiry of the window, productive use, or final payment. If a
-  deviation cannot be fixed in two further deliveries the customer may accept with a price
+  occurs on written approval, expiry of the window, or productive use — never by payment alone.
+  If a deviation cannot be fixed in two further deliveries the customer may accept with a price
   reduction or terminate with refund of the deposit.
 - **Support (§6):** 30 days of free fixes for regressions against acceptance criteria; nothing
   else is included.
 - **IP (§7):** all supplier rights in the customer-specific result **transfer on final payment**.
   Excluded: the supplier's platform (orchestrator, agents, gates, portal) and the generic template
   and components, which are licensed perpetually and royalty-free instead. The supplier keeps a
-  copy for bookkeeping/support and may use anonymised build metrics. No uniqueness guarantee.
+  copy for support, claims and disputes until 12 months after acceptance (longer while a dispute
+  is open), then deletes it; bookkeeping records are kept as the law requires; anonymised build
+  metrics may be used. No uniqueness guarantee.
 - **AI-generated code disclosure (§8):** the code is essentially generated by large language
   models (currently Anthropic's), quality-controlled by the gates. The customer accepts that
   copyright protection of AI output is unsettled, that AI code may contain undetected defects or
@@ -372,9 +400,13 @@ _DRAFT — NOT REVIEWED. This summary is for orientation only; the Swedish text 
   VAT); no indirect or consequential damages; exceptions for intent/gross negligence and mandatory
   law; claims within 6 months of acceptance. The customer indemnifies for claims based on the
   content of the spec.
-- **Cancellation (§11):** free before the deposit; after build start the deposit is forfeited and
-  no balance is due. Supplier may cancel (budget exhausted after retry, illegal spec, customer
-  breach) — refund of the deposit is the sole remedy if the customer is not in breach.
+- **Cancellation (§11):** free in the portal before the deposit; after the deposit but before
+  the build has started (e.g. a failed build start) the customer cancels by written notice and
+  the deposit is refunded in full; after build start the customer cancels by written notice, the
+  build is stopped, the deposit is forfeited and no balance is due. Supplier may cancel (budget
+  exhausted after the §4.2 retry, build cannot start within 10 working days of the deposit,
+  illegal spec, customer breach) — refund of the deposit is the sole remedy if the customer is not
+  in breach.
 - **Confidentiality, data protection, misc., law (§12–15):** mutual confidentiality for 3 years;
   the supplier is controller for contact data and processor under the DPA for personal data in
   specs/results; Swedish law, Stockholm District Court after 30 days of negotiation.

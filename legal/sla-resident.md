@@ -65,9 +65,12 @@ _DRAFT — EJ GRANSKAD_
 uppgift.
 
 3.2 Varje uppgift startar med en budget motsvarande det minsta av uppgiftstaket och vad som
-återstår av månaden. Residenten avbryter uppgiften så snart budgeten överskrids. Överskridandet
-av månadstaket är därmed begränsat till **högst en modellvändning**. När taket nåtts startas inga
-nya uppgifter förrän en ny kalendermånad (UTC) börjar eller Kunden höjer taket.
+återstår av månaden. Residenten avbryter uppgiften så snart budgeten överskrids; de
+modellvändningar som då pågår slutförs och räknas. Överskridandet av månadstaket är därmed
+begränsat till **högst en modellvändning per parallell arbetare** (`RESIDENT_TASK_WORKERS`,
+standard två). Kunden kan sätta antalet arbetare till ett för att begränsa överskridandet till en
+enda modellvändning. När taket nåtts startas inga nya uppgifter förrän en ny kalendermånad (UTC)
+börjar eller Kunden höjer taket.
 
 3.3 Räknaren lagras i Kundens eget konto. Leverantören ansvarar inte för kostnader som beror på
 att Kunden ändrat räknaren, taket eller mallens konfiguration, eller för avgifter som Anthropic
@@ -98,15 +101,23 @@ _DRAFT — EJ GRANSKAD_
    (ett förråd), som debiteras i förskott per kalendermånad och inte återbetalas för del av
    månad; samt
 
-   b) en **användningsbaserad avgift** motsvarande Anthropics vid var tid gällande listpris för
-   den modellanvändning Residenten registrerar, **multiplicerat med 1,5**, debiterad i efterskott
-   per kalendermånad.
+   b) en **användningsbaserad avgift** beräknad på Anthropics vid var tid gällande listpris för
+   den modellanvändning Residenten registrerar ("Listpriset"), debiterad i efterskott per
+   kalendermånad. Kundens sammanlagda modellkostnad för Residenten ska motsvara **1,5 × Listpriset**:
 
-5.2 Den användningsbaserade avgiften är Leverantörens ersättning för orkestrering, Gates och
-programvara. Kundens faktiska kostnad hos Anthropic betalas av Kunden direkt till Anthropic och
-ingår inte i Leverantörens avgift. _[Öppen punkt: bekräfta att avgiftsmodellen "kundens egen
-nyckel + 1,5 × listpris till oss" är den avsedda; alternativet är att Leverantören står för
-nyckeln och 1,5 × listpris täcker även modellkostnaden. PLAN.md anger kundens nyckel i v1.]_
+      i) när Residenten körs på **Kundens egen Anthropic-nyckel** (v1) betalar Kunden Listpriset
+      direkt till Anthropic och användningsavgiften till Leverantören är **0,5 × Listpriset**;
+
+      ii) när Leverantören tillhandahåller nyckeln är användningsavgiften **1,5 × Listpriset** och
+      inkluderar modellkostnaden.
+
+5.2 Användningsavgiften är Leverantörens ersättning för orkestrering, Gates och programvara samt,
+i fallet 5.1 b) ii), modellkostnaden. Avgiften stackas inte på Kundens egen Anthropic-faktura
+utöver vad som anges i 5.1 b) i). _[Öppen punkt för beslut: PLAN.md anger "tokens × 1,5 +
+månadsavgift" och kundens egen nyckel i v1; texten ovan tolkar 1,5 × som Kundens totala
+modellkostnad. Om avsikten i stället är 1,5 × Listpriset till Leverantören utöver Kundens egen
+Anthropic-faktura (2,5 × totalt) ska 5.1 b) i) ändras. Mätningen i Residenten rapporterar
+Listpriset × 1,5 som kostnadsestimat; faktureringen måste tillämpa rätt multiplikator.]_
 
 5.3 Underlaget för användningsavgiften är de dagliga mätposter (tokens per modell, antal
 uppgifter, kostnadsestimat) som Residenten rapporterar till Leverantören. Rapporteringen är
@@ -232,17 +243,20 @@ _DRAFT — NOT REVIEWED. This summary is for orientation only; the Swedish text 
   review of AI code); keep secrets and unnecessary personal data out of issues; lawful use only.
 - **Token cap (§3):** hard monthly cap in budget-weighted tokens (cache reads at 10 %), plus an
   optional per-task cap; each task's budget = min(task cap, what is left of the month); the
-  harness aborts on breach, so overshoot is at most one model turn; nothing starts once the cap is
-  hit until a new UTC month or a higher cap. The supplier is not liable for costs caused by the
+  harness aborts on breach but in-flight turns complete, so overshoot is at most one model turn
+  per parallel worker (`RESIDENT_TASK_WORKERS`, default 2; set 1 for a single turn); nothing
+  starts once the cap is hit until a new UTC month or a higher cap. The supplier is not liable for costs caused by the
   customer altering the counter/config or for provider charges beyond what the counter records.
 - **Pause / kill switch (§4):** persistent pause via the control API aborts the task in flight
   within ~10 s and blocks new tasks; the customer can also stop the service or revoke keys. The
   supplier cannot control a resident in the customer's account. Audit write failure pauses the
   resident (fail closed).
 - **Fees (§5):** a **monthly fee** per installation (in advance, non-refundable) plus a
-  **usage-based fee = Anthropic list price × 1.5** on the resident's recorded usage (in arrears).
-  The customer additionally pays Anthropic directly for the key (open point: confirm this is the
-  intended model vs. the supplier providing the key). Billing is based on the daily usage records
+  **usage-based fee** on the resident's recorded usage (in arrears) such that the customer's
+  total model cost is **1.5 × Anthropic list price**: 0.5 × list to the supplier when the customer
+  runs on its own key (v1, and pays Anthropic directly), 1.5 × list when the supplier provides the
+  key (open point: confirm this reading of "tokens × 1.5" vs. 1.5 × list stacked on top of the
+  customer's own Anthropic bill). Billing is based on the daily usage records
   the resident reports (last write wins per day); blocking the reporting allows billing from local
   data or termination. Stripe invoicing, 10-day terms; 60 days' notice for fee changes; Anthropic
   list-price changes pass through immediately.
