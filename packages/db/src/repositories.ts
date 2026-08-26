@@ -3,7 +3,17 @@
  * and the in-memory one (`createMemoryRepositories`, used by the api without a database and
  * by its tests). Services depend on these types only.
  */
-import type { Job, JobEvent, NewJobEvent, Org, SpecDraft, User } from '@mf/models'
+import type {
+	Job,
+	JobEvent,
+	NewJobEvent,
+	Order,
+	OrderStatus,
+	Org,
+	Payment,
+	SpecDraft,
+	User,
+} from '@mf/models'
 import type { JobUpdate, NewJob } from './jobs.ts'
 
 export type JobsRepository = {
@@ -16,17 +26,56 @@ export type JobsRepository = {
 	listEvents: (jobId: string, afterId?: number) => Promise<JobEvent[]>
 }
 
-/** An order row is the `SpecDraft` keyed by `orderId` (M2); M6 adds the payment columns */
+export type NewOrder = { id: string; orgId: string; name: string; createdBy?: string }
+
+export type NewPayment = Pick<
+	Payment,
+	'orderId' | 'kind' | 'provider' | 'amountSek' | 'vatSek' | 'totalSek' | 'sessionId'
+>
+
+export type PaymentPaid = Pick<Payment, 'eventId' | 'hostedInvoiceUrl' | 'receiptUrl'>
+
+/**
+ * An order row carries both the `SpecDraft` keyed by `orderId` (M2) and the order record with
+ * its state machine (M6). The draft's `status` is derived from the order status: `drafting` /
+ * `ready` as-is, anything later reads as `frozen`.
+ */
 export type OrdersRepository = {
 	get: (orderId: string) => Promise<SpecDraft | undefined>
 	list: (filter?: { orgId?: string }) => Promise<SpecDraft[]>
-	/** Inserts or replaces the whole draft; `createdBy` is only written on insert */
+	/**
+	 * Inserts or replaces the whole draft; `createdBy` is only written on insert and the order
+	 * status only while the order is still in its spec phase (drafting / ready / frozen)
+	 */
 	upsert: (draft: SpecDraft, createdBy?: string) => Promise<SpecDraft>
 	/**
 	 * Replaces the draft only while the stored row is not frozen (guards the read → engine →
 	 * write window against a concurrent freeze); `undefined` when frozen or missing
 	 */
 	updateUnlessFrozen: (draft: SpecDraft) => Promise<SpecDraft | undefined>
+
+	// MARK: Order record (M6)
+	/** Creates a `drafting` order with an api-minted id */
+	insert: (order: NewOrder) => Promise<Order>
+	getOrder: (orderId: string) => Promise<Order | undefined>
+	listOrders: (filter?: { orgId?: string }) => Promise<Order[]>
+	/** Atomic compare-and-set on the status; `undefined` when missing or not in `from` */
+	transition: (
+		orderId: string,
+		from: readonly OrderStatus[],
+		to: OrderStatus
+	) => Promise<Order | undefined>
+
+	// MARK: Payments (M6)
+	insertPayment: (payment: NewPayment) => Promise<Payment>
+	getPayment: (id: string) => Promise<Payment | undefined>
+	findPaymentBySession: (sessionId: string) => Promise<Payment | undefined>
+	/** Oldest first */
+	listPayments: (orderId: string) => Promise<Payment[]>
+	/** Marks a pending payment paid; `undefined` when unknown or already paid */
+	markPaymentPaid: (id: string, paid: PaymentPaid) => Promise<Payment | undefined>
+	/** Records a processed webhook event id; false when it was seen before (idempotency) */
+	recordPaymentEvent: (eventId: string, type: string) => Promise<boolean>
 }
 
 export type NewUser = { email: string; name?: string; role: User['role']; orgId: string }
