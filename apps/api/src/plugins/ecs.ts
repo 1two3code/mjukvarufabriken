@@ -8,7 +8,8 @@ declare module 'fastify' {
 		/**
 		 * Starts/stops build-job tasks on the `mf-jobs-<env>` Fargate cluster. `configured` is
 		 * false without the CDK-provided cluster/task/subnet settings — `runJob` then returns
-		 * undefined and the caller logs the local `job:dev` command instead.
+		 * undefined and the caller logs the local `job:dev` command instead. When configured,
+		 * `runJob` always resolves to a task ARN or throws.
 		 */
 		ecs: {
 			configured: boolean
@@ -68,7 +69,10 @@ const plugin: FastifyPluginAsync = async app => {
 			)
 			const failure = result.failures?.[0]
 			if (failure) throw new Error(`ecs:RunTask failed: ${failure.reason} (${failure.detail})`)
-			return result.tasks?.[0]?.taskArn
+			const taskArn = result.tasks?.[0]?.taskArn
+			// An empty response would otherwise leave the job queued forever with no signal
+			if (!taskArn) throw new Error('ecs:RunTask returned no task and no failure')
+			return taskArn
 		},
 		stopTask: async (taskArn, reason) => {
 			await client.send(new StopTaskCommand({ cluster: jobsClusterArn, task: taskArn, reason }))

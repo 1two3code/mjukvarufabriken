@@ -1,4 +1,4 @@
-import { EntityInvalid } from '#/lib/entityError.ts'
+import { EntityInvalid, EntityNotFound } from '#/lib/entityError.ts'
 import {
 	createMockSpecToolOutput,
 	createMockToolUseMessage,
@@ -7,6 +7,10 @@ import { createMockSpec, createMockSpecDraft } from '#/services/__mocks__/specSe
 import { createEmptyDraft } from '#/services/specService.ts'
 
 import type { FastifyInstance } from 'fastify'
+import type { BackendSession } from '@mf/models'
+
+const user: BackendSession = { userId: 'user-1', role: 'user', orgId: 'org-1' }
+const admin: BackendSession = { userId: 'admin-1', role: 'admin', orgId: 'org-admin' }
 
 describe('Spec Service', () => {
 	let app: FastifyInstance
@@ -21,11 +25,29 @@ describe('Spec Service', () => {
 			vi.spyOn(app.store, 'get').mockResolvedValue(undefined)
 
 			// Act
-			const draft = await app.specService.get('order-9')
+			const draft = await app.specService.get('order-9', user)
 
 			// Assert
-			expect(draft).toEqual(createEmptyDraft('order-9'))
+			expect(draft).toEqual(createEmptyDraft('order-9', 'org-1'))
 			expect(app.store.put).toHaveBeenCalledWith('specs', 'order-9', draft)
+		})
+
+		it("Hides another org's draft as not found, but admins see it", async () => {
+			// Arrange
+			vi.spyOn(app.store, 'get').mockResolvedValue(
+				createMockSpecDraft({ orderId: 'order-1', orgId: 'org-2' })
+			)
+
+			// Act / Assert
+			await expect(app.specService.get('order-1', user)).rejects.toBeInstanceOf(EntityNotFound)
+			await expect(app.specService.sendMessage('order-1', 'hi', user)).rejects.toBeInstanceOf(
+				EntityNotFound
+			)
+			await expect(app.specService.freeze('order-1', user)).rejects.toBeInstanceOf(EntityNotFound)
+			await expect(app.specService.get('order-1', admin)).resolves.toMatchObject({
+				orgId: 'org-2',
+			})
+			expect(app.store.put).not.toHaveBeenCalled()
 		})
 
 		it('Returns the stored draft', async () => {
@@ -34,7 +56,7 @@ describe('Spec Service', () => {
 			vi.spyOn(app.store, 'get').mockResolvedValue(stored)
 
 			// Act
-			const draft = await app.specService.get('order-1')
+			const draft = await app.specService.get('order-1', user)
 
 			// Assert
 			expect(app.store.get).toHaveBeenCalledWith('specs', 'order-1')
@@ -46,10 +68,10 @@ describe('Spec Service', () => {
 	describe('sendMessage', () => {
 		it('Runs an engine turn, appends both messages and stores open questions', async () => {
 			// Arrange
-			vi.spyOn(app.store, 'get').mockResolvedValue(createEmptyDraft('order-1'))
+			vi.spyOn(app.store, 'get').mockResolvedValue(createEmptyDraft('order-1', 'org-1'))
 
 			// Act
-			const draft = await app.specService.sendMessage('order-1', 'I want a booking app')
+			const draft = await app.specService.sendMessage('order-1', 'I want a booking app', user)
 
 			// Assert
 			expect(app.anthropic.messages.create).toHaveBeenCalledTimes(1)
@@ -83,7 +105,11 @@ describe('Spec Service', () => {
 			)
 
 			// Act
-			const draft = await app.specService.sendMessage('order-1', 'No payments, no constraints')
+			const draft = await app.specService.sendMessage(
+				'order-1',
+				'No payments, no constraints',
+				user
+			)
 
 			// Assert
 			expect(draft.status).toBe('ready')
@@ -98,7 +124,7 @@ describe('Spec Service', () => {
 			vi.spyOn(app.store, 'get').mockResolvedValue(createMockSpecDraft({ status: 'frozen' }))
 
 			// Act & Assert
-			await expect(app.specService.sendMessage('order-1', 'more')).rejects.toBeInstanceOf(
+			await expect(app.specService.sendMessage('order-1', 'more', user)).rejects.toBeInstanceOf(
 				EntityInvalid
 			)
 			expect(app.anthropic.messages.create).not.toHaveBeenCalled()
@@ -106,11 +132,13 @@ describe('Spec Service', () => {
 
 		it('Propagates engine failures without storing anything', async () => {
 			// Arrange
-			vi.spyOn(app.store, 'get').mockResolvedValue(createEmptyDraft('order-1'))
+			vi.spyOn(app.store, 'get').mockResolvedValue(createEmptyDraft('order-1', 'org-1'))
 			vi.spyOn(app.anthropic.messages, 'create').mockRejectedValue(new Error('rate limited'))
 
 			// Act & Assert
-			await expect(app.specService.sendMessage('order-1', 'hi')).rejects.toThrow('rate limited')
+			await expect(app.specService.sendMessage('order-1', 'hi', user)).rejects.toThrow(
+				'rate limited'
+			)
 			expect(app.store.put).not.toHaveBeenCalled()
 		})
 	})
@@ -121,7 +149,7 @@ describe('Spec Service', () => {
 			vi.spyOn(app.store, 'get').mockResolvedValue(createMockSpecDraft())
 
 			// Act & Assert
-			await expect(app.specService.freeze('order-1')).rejects.toBeInstanceOf(EntityInvalid)
+			await expect(app.specService.freeze('order-1', user)).rejects.toBeInstanceOf(EntityInvalid)
 			expect(app.store.put).not.toHaveBeenCalled()
 		})
 
@@ -131,7 +159,7 @@ describe('Spec Service', () => {
 			vi.spyOn(app.store, 'get').mockResolvedValue(ready)
 
 			// Act
-			const frozen = await app.specService.freeze('order-1')
+			const frozen = await app.specService.freeze('order-1', user)
 
 			// Assert
 			expect(frozen).toEqual({
@@ -151,7 +179,7 @@ describe('Spec Service', () => {
 			vi.spyOn(app.store, 'get').mockResolvedValue(frozen)
 
 			// Act
-			const result = await app.specService.freeze('order-1')
+			const result = await app.specService.freeze('order-1', user)
 
 			// Assert
 			expect(result).toEqual(frozen)

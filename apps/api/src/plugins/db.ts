@@ -12,7 +12,7 @@ import {
 	updateJob,
 } from '@mf/db'
 
-import type { FastifyPluginAsync } from 'fastify'
+import type { FastifyInstance, FastifyPluginAsync } from 'fastify'
 import type { DatabaseSecret, Db, JobUpdate, NewJob } from '@mf/db'
 import type { Job, JobEvent, NewJobEvent } from '@mf/models'
 
@@ -25,6 +25,8 @@ declare module 'fastify' {
 		 */
 		db: {
 			available: boolean
+			/** Set when a database is configured but its migrations failed — /health reports 503 */
+			error?: string
 			jobs: {
 				insert: (job: NewJob) => Promise<Job>
 				get: (id: string) => Promise<Job | undefined>
@@ -40,6 +42,12 @@ declare module 'fastify' {
 export class DatabaseNotConfigured extends Error {
 	constructor() {
 		super('Database is not configured (DATABASE_URL / DATABASE_SECRET_ARN)')
+	}
+}
+
+export class DatabaseUnavailable extends Error {
+	constructor(cause: Error) {
+		super(`Database unavailable: migrations failed (${cause.message})`, { cause })
 	}
 }
 
@@ -66,7 +74,18 @@ const createJobsRepository = (db: Db) => ({
 	listEvents: (jobId: string, afterId?: number) => listEvents(db, jobId, afterId),
 })
 
-const unavailable = () => Promise.reject(new DatabaseNotConfigured())
+/** Every repository call rejects with the given error */
+const unavailableRepository = (error: () => Error): FastifyInstance['db']['jobs'] => {
+	const reject = () => Promise.reject(error())
+	return {
+		insert: reject,
+		get: reject,
+		list: reject,
+		update: reject,
+		appendEvent: reject,
+		listEvents: reject,
+	}
+}
 
 const plugin: FastifyPluginAsync = async app => {
 	const connectionString = await resolveConnectionString().catch(error => {
@@ -78,29 +97,30 @@ const plugin: FastifyPluginAsync = async app => {
 		app.log.warn('Database not configured — job routes unavailable')
 		app.decorate('db', {
 			available: false,
-			jobs: {
-				insert: unavailable,
-				get: unavailable,
-				list: unavailable,
-				update: unavailable,
-				appendEvent: unavailable,
-				listEvents: unavailable,
-			},
+			jobs: unavailableRepository(() => new DatabaseNotConfigured()),
 		})
 		return
 	}
 
 	const db = createDb(connectionString)
+	app.addHook('onClose', () => db.close())
 	// RDS lives in isolated subnets, so the api applies pending migrations itself at boot
-	// (idempotent, tracked in schema_migrations). A failure here is logged, not fatal.
+	// (idempotent, serialised by an advisory lock, tracked in schema_migrations). A failure is
+	// never masked: the repository becomes unavailable and /health reports 503, so a rollout
+	// with a broken migration cannot pass as healthy while every job route 500s.
 	try {
 		const result = await migrate(db)
 		if (result.applied.length) app.log.info({ applied: result.applied }, 'Migrations applied')
 	} catch (error) {
-		app.log.warn({ err: error }, 'Could not run database migrations')
+		app.log.error({ err: error }, 'Could not run database migrations — database unavailable')
+		app.decorate('db', {
+			available: false,
+			error: (error as Error).message,
+			jobs: unavailableRepository(() => new DatabaseUnavailable(error as Error)),
+		})
+		return
 	}
 	app.decorate('db', { available: true, jobs: createJobsRepository(db) })
-	app.addHook('onClose', () => db.close())
 }
 
 export default fp(plugin, { name: '#internal/db', dependencies: ['#internal/secrets'] })

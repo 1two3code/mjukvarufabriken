@@ -61,20 +61,23 @@ const plugin: FastifyPluginAsync = async app => {
 	app.decorate('jobService', {
 		get,
 		start: async (orderId, session) => {
-			const draft = await specService.get(orderId)
+			// Org-scoped via the order: specService.get is EntityNotFound for another org's draft
+			const draft = await specService.get(orderId, session)
 			if (draft.status !== 'frozen') throw new SpecNotFrozen(orderId)
 			const spec = SpecSchema.parse(draft.spec)
 			const sizeClass = spec.sizeClass ?? 'S'
+			const orgId = draft.orgId ?? session.orgId
 
+			// Friendly fast path; the jobs_one_active_per_order index is the real guard (23505)
 			const existing = await db.jobs.list({ orderId })
 			if (existing.some(job => isActiveJobStatus(job.status))) throw new JobAlreadyActive(orderId)
 
-			const job = await db.jobs.insert({
-				orderId,
-				orgId: session.orgId,
-				spec,
-				budget: budgetForSize[sizeClass],
-			})
+			const job = await db.jobs
+				.insert({ orderId, orgId, spec, budget: budgetForSize[sizeClass] })
+				.catch((error: Error & { code?: string }) => {
+					if (error.code === '23505') throw new JobAlreadyActive(orderId)
+					throw error
+				})
 
 			if (!ecs.configured) {
 				app.log.warn({ jobId: job.id }, `ECS not configured — run: npm run job:dev -- ${job.id}`)
@@ -82,7 +85,6 @@ const plugin: FastifyPluginAsync = async app => {
 			}
 			try {
 				const taskArn = await ecs.runJob(job.id)
-				if (!taskArn) return job
 				return (await db.jobs.update(job.id, { taskArn })) ?? job
 			} catch (error) {
 				const reason = `ecs:RunTask failed: ${(error as Error).message}`

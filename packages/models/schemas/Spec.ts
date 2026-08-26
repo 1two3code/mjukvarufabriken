@@ -47,6 +47,8 @@ export type ChatMessage = z.infer<typeof ChatMessageSchema>
 // MARK: Draft
 export const SpecDraftSchema = z.object({
 	orderId: z.string(),
+	/** Owning org, set on first access; every read/write is scoped to it (admins see all) */
+	orgId: z.string().optional(),
 	status: z.enum(specStatus),
 	spec: PartialSpecSchema,
 	messages: z.array(ChatMessageSchema),

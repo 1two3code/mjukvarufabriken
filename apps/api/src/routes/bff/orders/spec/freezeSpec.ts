@@ -2,7 +2,7 @@ import { z } from 'zod'
 import { SpecDraftResponseSchema } from '@mf/models'
 import { tryCatch } from '@mf/utils/function'
 
-import { EntityInvalid } from '#/lib/entityError.ts'
+import { EntityInvalid, EntityNotFound } from '#/lib/entityError.ts'
 
 import type { FastifyContextConfig } from 'fastify'
 import type { FastifyPluginAsyncZod } from 'fastify-type-provider-zod'
@@ -18,9 +18,10 @@ const route: FastifyPluginAsyncZod = async function (app) {
 	const { specService } = app
 
 	app.post('/bff/orders/:orderId/spec/freeze', { schema, config }, async (request, reply) => {
-		const { orderId } = request.params
+		const { session, params } = request
 
-		const [error, draft] = await tryCatch(specService.freeze(orderId))
+		const [error, draft] = await tryCatch(specService.freeze(params.orderId, session))
+		if (error instanceof EntityNotFound) return reply.error(404, error)
 		if (error instanceof EntityInvalid) return reply.error(409, error, 'specIncomplete')
 		if (error) return reply.error(500, error)
 		return reply.send(draft)

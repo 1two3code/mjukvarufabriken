@@ -31,6 +31,39 @@ describe('Job Service', () => {
 			expect(app.db.jobs.insert).not.toHaveBeenCalled()
 		})
 
+		it("Cannot start a build on another org's order (404, no row, no task)", async () => {
+			vi.spyOn(app.specService, 'get').mockRejectedValue(new EntityNotFound('spec', 'order-1'))
+
+			await expect(
+				app.jobService.start('order-1', { ...user, orgId: 'org-2' })
+			).rejects.toBeInstanceOf(EntityNotFound)
+			expect(app.specService.get).toHaveBeenCalledWith('order-1', { ...user, orgId: 'org-2' })
+			expect(app.db.jobs.insert).not.toHaveBeenCalled()
+			expect(app.ecs.runJob).not.toHaveBeenCalled()
+		})
+
+		it("Tags the job with the order's org (admin starting for a customer)", async () => {
+			vi.spyOn(app.specService, 'get').mockResolvedValue({ ...frozen(), orgId: 'org-7' })
+			vi.spyOn(app.db.jobs, 'list').mockResolvedValue([])
+
+			await app.jobService.start('order-1', admin)
+
+			expect(app.db.jobs.insert).toHaveBeenCalledWith(expect.objectContaining({ orgId: 'org-7' }))
+		})
+
+		it('Maps the one-active-job unique violation to JobAlreadyActive (double-start race)', async () => {
+			vi.spyOn(app.specService, 'get').mockResolvedValue(frozen())
+			vi.spyOn(app.db.jobs, 'list').mockResolvedValue([])
+			vi.spyOn(app.db.jobs, 'insert').mockRejectedValue(
+				Object.assign(new Error('duplicate key value violates unique constraint'), {
+					code: '23505',
+				})
+			)
+
+			await expect(app.jobService.start('order-1', user)).rejects.toBeInstanceOf(JobAlreadyActive)
+			expect(app.ecs.runJob).not.toHaveBeenCalled()
+		})
+
 		it('Rejects a second active job for the order', async () => {
 			vi.spyOn(app.specService, 'get').mockResolvedValue(frozen())
 			vi.spyOn(app.db.jobs, 'list').mockResolvedValue([createMockJob({ status: 'building' })])

@@ -93,6 +93,15 @@ describe('ECS plugin (ecs)', () => {
 		await expect(app.ecs.runJob('job-1')).rejects.toThrow(/RESOURCE:CPU/)
 	})
 
+	it('Throws when RunTask returns neither a task nor a failure', async () => {
+		// Arrange
+		const app = await createApp(true)
+		sendMock.mockResolvedValue({ tasks: [], failures: [] })
+
+		// Act / Assert
+		await expect(app.ecs.runJob('job-1')).rejects.toThrow(/no task and no failure/)
+	})
+
 	it('Stops a task on the cluster', async () => {
 		// Arrange
 		const app = await createApp(true)

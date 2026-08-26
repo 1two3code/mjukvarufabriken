@@ -24,6 +24,7 @@ export const createMockSpec = (overrides?: PartialDeep<Spec>): Spec =>
 
 const defaultDraft: SpecDraft = {
 	orderId: 'order-1',
+	orgId: 'org-1',
 	status: 'drafting',
 	spec: { goal: 'A booking app for a small gym' },
 	messages: [

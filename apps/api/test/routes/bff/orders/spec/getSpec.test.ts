@@ -19,7 +19,7 @@ describe('GET /bff/orders/:orderId/spec route', () => {
 		const response = await app.inject({ url })
 
 		// Assert
-		expect(app.specService.get).toHaveBeenCalledWith('order-1')
+		expect(app.specService.get).toHaveBeenCalledWith('order-1', { userId: 'user-1', role: 'user', orgId: 'org-1' })
 		expect(response.statusCode).toBe(200)
 		expect(response.json()).toEqual(createMockSpecDraft({ orderId: 'order-1' }))
 	})

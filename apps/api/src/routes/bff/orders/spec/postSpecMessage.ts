@@ -2,7 +2,7 @@ import { z } from 'zod'
 import { SpecDraftResponseSchema, SpecMutationSchemas } from '@mf/models'
 import { tryCatch } from '@mf/utils/function'
 
-import { EntityInvalid } from '#/lib/entityError.ts'
+import { EntityInvalid, EntityNotFound } from '#/lib/entityError.ts'
 import { AnthropicNotConfigured } from '#/plugins/anthropic.ts'
 
 import type { FastifyContextConfig } from 'fastify'
@@ -20,10 +20,12 @@ const route: FastifyPluginAsyncZod = async function (app) {
 	const { specService } = app
 
 	app.post('/bff/orders/:orderId/spec', { schema, config }, async (request, reply) => {
-		const { orderId } = request.params
-		const { content } = request.body
+		const { session, params, body } = request
 
-		const [error, draft] = await tryCatch(specService.sendMessage(orderId, content))
+		const [error, draft] = await tryCatch(
+			specService.sendMessage(params.orderId, body.content, session)
+		)
+		if (error instanceof EntityNotFound) return reply.error(404, error)
 		if (error instanceof EntityInvalid) return reply.error(409, error, 'specFrozen')
 		if (error instanceof AnthropicNotConfigured) {
 			return reply.error(503, error, 'specEngineUnavailable')

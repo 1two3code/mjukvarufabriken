@@ -19,8 +19,11 @@ server.register(autoload, {
 	ignorePattern: /^.*(?:types|utils).ts$/,
 })
 
-// Register health check endpoint
-server.get('/health', { logLevel: 'silent' }, async () => ({ message: 'OK' }))
+// Register health check endpoint: 503 when a configured database is unusable (migrations failed)
+server.get('/health', { logLevel: 'silent' }, async (_request, reply) => {
+	if (server.db.error) return reply.code(503).send({ message: 'DEGRADED', db: server.db.error })
+	return { message: 'OK' }
+})
 
 try {
 	await server.listen({ host: ADDRESS, port: Number(PORT) })
