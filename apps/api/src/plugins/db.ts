@@ -65,6 +65,8 @@ const unavailableRepositories = (error: () => Error): Repositories => {
 			'list',
 			'update',
 			'appendEvent',
+			'appendEventOnce',
+			'countEvents',
 			'listEvents',
 		]),
 		orders: repository(['get', 'list', 'upsert', 'updateUnlessFrozen']),
@@ -109,7 +111,10 @@ const plugin: FastifyPluginAsync = async app => {
 	// a task running on RAM behind a healthy ALB would lose logins and specs at the next restart
 	const [secretError, connectionString] = await tryCatch(resolveConnectionString())
 	if (secretError) {
-		app.log.error({ err: secretError }, 'Could not resolve the database secret — database unavailable')
+		app.log.error(
+			{ err: secretError },
+			'Could not resolve the database secret — database unavailable'
+		)
 		return decorateUnavailable(app, 'secret unresolvable', secretError)
 	}
 

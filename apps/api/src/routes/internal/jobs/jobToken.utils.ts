@@ -13,6 +13,12 @@ import type { FastifyInstance, FastifyReply, FastifyRequest } from 'fastify'
  */
 export const jobParams = z.object({ jobId: z.string() })
 
+/**
+ * Gate reports carry review findings and test output in `details`; the default 1 MiB would
+ * reject the final PATCH of a large job and lose its outcome (the job only PATCHes once).
+ */
+export const reportBodyLimit = 8 * 1024 * 1024
+
 export const readBearer = (request: FastifyRequest) => {
 	const header = request.headers.authorization
 	return header?.startsWith('Bearer ') ? header.slice('Bearer '.length).trim() : undefined

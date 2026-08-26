@@ -64,6 +64,13 @@ const mockPlugin: FastifyPluginAsync = async app => {
 			appendEvent: vi.fn((jobId: string, event) =>
 				Promise.resolve(createMockJobEvent({ jobId, ...event }))
 			),
+			appendEventOnce: vi.fn((jobId: string, seq: number, event) =>
+				Promise.resolve({
+					event: createMockJobEvent({ id: seq, jobId, ...event }),
+					duplicate: false,
+				})
+			),
+			countEvents: vi.fn().mockResolvedValue(0),
 			listEvents: vi.fn().mockResolvedValue([createMockJobEvent()]),
 		},
 	}

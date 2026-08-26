@@ -1,7 +1,7 @@
 import { EntityNotFound } from '#/lib/entityError.ts'
 import { createMockJob } from '#/plugins/__mocks__/db.ts'
 import postJobEvents from '#/routes/internal/jobs/postJobEvents.ts'
-import { ReportUnauthorized } from '#/services/jobService.ts'
+import { MalformedGateReport, ReportUnauthorized } from '#/services/jobService.ts'
 
 import type { FastifyInstance } from 'fastify'
 
@@ -30,6 +30,27 @@ describe('POST /internal/jobs/:jobId/events route', () => {
 		expect(app.jobService.reportEvents).toHaveBeenCalledWith(createMockJob({ id: 'job-1' }), events)
 		expect(response.statusCode).toBe(200)
 		expect(response.json()).toEqual({ lastEventId: 1 })
+	})
+
+	it('Passes event numbers through and rejects a malformed gate report with 400', async () => {
+		// Arrange
+		const numbered = [{ type: 'gate', payload: { name: 'verify' }, seq: 3 }]
+		vi.spyOn(app.jobService, 'reportEvents').mockRejectedValue(new MalformedGateReport('job-1'))
+
+		// Act
+		const response = await app.inject({
+			method: 'POST',
+			url,
+			headers,
+			payload: { events: numbered },
+		})
+
+		// Assert
+		expect(app.jobService.reportEvents).toHaveBeenCalledWith(
+			createMockJob({ id: 'job-1' }),
+			numbered
+		)
+		expect(response.statusCode).toBe(400)
 	})
 
 	it('Rejects an empty batch or an unknown event type with 400', async () => {

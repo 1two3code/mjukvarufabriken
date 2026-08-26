@@ -1,7 +1,7 @@
 import { EntityNotFound } from '#/lib/entityError.ts'
 import { createMockJob } from '#/plugins/__mocks__/db.ts'
 import patchJob from '#/routes/internal/jobs/patchJob.ts'
-import { ReportUnauthorized } from '#/services/jobService.ts'
+import { ReportUnauthorized, StatusRegression } from '#/services/jobService.ts'
 
 import type { FastifyInstance } from 'fastify'
 
@@ -37,6 +37,22 @@ describe('PATCH /internal/jobs/:jobId route', () => {
 
 		// Assert
 		expect(response.json()).toEqual({ status: 'killed', killed: true })
+	})
+
+	it('Responds 409 when the status would move backwards', async () => {
+		// Arrange
+		vi.spyOn(app.jobService, 'reportUpdate').mockRejectedValue(new StatusRegression('job-1'))
+
+		// Act
+		const response = await app.inject({
+			method: 'PATCH',
+			url,
+			headers,
+			payload: { status: 'planning' },
+		})
+
+		// Assert
+		expect(response.statusCode).toBe(409)
 	})
 
 	it('Rejects re-queueing, unknown fields and a bad timestamp with 400', async () => {

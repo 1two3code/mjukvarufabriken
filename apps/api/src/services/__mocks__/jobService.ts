@@ -16,6 +16,7 @@ const mockPlugin: FastifyPluginAsync = async app => {
 		),
 		listAll: vi.fn().mockResolvedValue([createMockJob()]),
 		authenticateReport: vi.fn((id: string) => Promise.resolve(createMockJob({ id }))),
+		rotateReportToken: vi.fn().mockResolvedValue('fresh-token'),
 		reportView: vi.fn((job: Job) => ({
 			id: job.id,
 			status: job.status,
