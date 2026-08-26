@@ -8,8 +8,32 @@ plan (Anthropic SDK, PLAN_MODEL)          → job_events: planned {plan}
        each: git worktree task/<id> → Agent SDK query() → npm run lint + npm test → commit
   └─ merge each finished branch into main  → merge {ok}
        (one repair session on conflict, fail closed otherwise)
-  └─ final npm run lint + npm test on main → verify → done | failed | killed
+  └─ QA gates on main (M4), fail closed, each → gate {GateReport}
+       verify (lint + test) → acceptance-tests → review → acceptance-check
+  └─ done | failed | killed (+ notify {to: 'admins', subject, text} on anything but done)
 ```
+
+## QA gates (M4)
+
+After the last merge `@mf/harness` `runGates` runs four gates in order; the first red one ends the job with status `failed` and a reason listing it. Every gate emits a `gate` event whose payload is a `GateReport` (`name, ok, startedAt, durationMs, tokens, summary, details`), counts toward the token budget and honours the abort signal (budget / wall clock / kill) like a task.
+
+| Gate | Session(s) | Passes when |
+|---|---|---|
+| `verify` | none | `npm run lint` + `npm test` green on main |
+| `acceptance-tests` | 1 writer (full tools) + at most 1 fix on app code | one `<id>.test.ts[x]` per criterion (`apps/app/src/acceptance/` or `apps/api/test/acceptance/`) exists and lint + test are green. The fix session may not touch the tests — they are restored from the test commit afterwards |
+| `review` | 1 read-only reviewer (structured `ReviewFinding[]`) + at most 1 fix + 1 re-review | no unwaived **high** finding open after the fix; medium/low are recorded in `details`. Finding ids are `<file>:<line>`; `jobs.gate_waivers` lists ids an admin has waived |
+| `acceptance-check` | 1 read-only session (structured `AcceptanceReport`) | every criterion id is `met` with evidence (test file + what it asserts) |
+
+On `failed`/`killed` the orchestrator also emits a `notify` event (`{ to: 'admins', subject, text }`); the api forwards it as an email once job events go through the api (TODO in `apps/api/src/services/jobService.ts`). Gate reports are meant to land on `jobs.gates` (migration `0005_jobs_gates.sql`) — the `@mf/db` mapping is pending (TODO in `src/index.ts`).
+
+### Running only the gates on a built repo
+
+```
+npm run gates:demo -- --repo /work/repo --spec spec.json [--seed <commit>] [--waive apps/api/src/x.ts:12]
+npm run gates:demo -- --repo /work/repo --job job.json      # { spec, gateWaivers? } e.g. a jobs row
+```
+
+Live Agent SDK sessions (needs `ANTHROPIC_API_KEY`, honours `WORKER_MODEL`); prints one report per gate, the JSON reports at the end, exit 0 only when all gates are green. `--seed` is the commit the review diffs against (default: the repo's root commit — the seed commit of a job repo).
 
 ## Configuration (env)
 

@@ -22,6 +22,14 @@ declare module 'fastify' {
 	}
 }
 
+/**
+ * TODO(m3-hardening): when the job reports its events through the api's per-job endpoint instead
+ * of writing to Postgres directly, forward every `notify` event (`NotifyPayload` from @mf/models:
+ * `{ to: 'admins', subject, text }`) to the admins through the api's email transport
+ * (`AUTH_ADMIN_EMAILS`), and persist `gate` event payloads onto `jobs.gates` (migration 0005).
+ * The job container has no email access by design.
+ */
+
 /** The spec must be frozen before a build starts */
 export class SpecNotFrozen extends EntityInvalid {
 	constructor(orderId: string) {

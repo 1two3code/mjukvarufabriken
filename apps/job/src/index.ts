@@ -6,7 +6,7 @@
  */
 import Anthropic from '@anthropic-ai/sdk'
 import { appendEvent, createDb, getJob, migrate, updateJob } from '@mf/db'
-import { createLivePorts, runJob } from '@mf/harness'
+import { createLivePorts, exec, runJob } from '@mf/harness'
 import { isActiveJobStatus } from '@mf/models'
 
 import { loadConfig } from '#/config.ts'
@@ -61,7 +61,11 @@ const setStatus = async (update: Parameters<typeof updateJob>[2]) => {
 let phaseStatus: 'planning' | 'building' | 'verifying' = 'planning'
 const trackPhase = async (event: NewJobEvent) => {
 	const next =
-		event.type === 'planned' ? 'building' : event.type === 'verify' ? 'verifying' : undefined
+		event.type === 'planned'
+			? 'building'
+			: event.type === 'verify' || event.type === 'gate'
+				? 'verifying'
+				: undefined
 	if (next && next !== phaseStatus) {
 		phaseStatus = next
 		await setStatus({ status: next })
@@ -86,6 +90,8 @@ try {
 	log('seeding repo', { jobId, templateDir: config.templateDir, workDir: config.workDir })
 	const repoDir = await seedRepo(config.templateDir, config.workDir, jobId)
 	await updateJob(db, jobId, { repositoryUrl: `file://${repoDir}` })
+	// The review gate diffs everything the workers did against this commit
+	const seedCommit = (await exec('git', ['rev-parse', 'HEAD'], { cwd: repoDir })).stdout.trim()
 
 	const ports = createLivePorts({
 		client: new Anthropic({ apiKey: config.anthropicApiKey }),
@@ -94,7 +100,14 @@ try {
 	})
 
 	const outcome = await runJob(
-		{ id: job.id, spec: job.spec, budget: job.budget, repoDir },
+		{
+			id: job.id,
+			spec: job.spec,
+			budget: job.budget,
+			gateWaivers: job.gateWaivers,
+			repoDir,
+			seedCommit,
+		},
 		{
 			ports,
 			hooks: {
@@ -113,7 +126,9 @@ try {
 	)
 
 	// The terminal write never overrides a kill that landed after the last poll; usage and the
-	// plan are still persisted on the killed row.
+	// plan are still persisted on the killed row. Gate reports (`outcome.gates`) are emitted as
+	// `gate` events; TODO(persistence): also write them to `jobs.gates` (migration 0005) once
+	// `@mf/db` `JobUpdate` carries `gates` — the m3-hardening/persistence streams own that mapping.
 	const finalRow = await setStatus({
 		status: outcome.status,
 		tokensUsed: outcome.tokensUsed,
@@ -123,7 +138,12 @@ try {
 	})
 	if (!finalRow) await updateJob(db, jobId, { tokensUsed: outcome.tokensUsed, plan: outcome.plan })
 	const status = finalRow?.status ?? 'killed'
-	log('job finished', { jobId, status, tokensUsed: outcome.tokensUsed })
+	log('job finished', {
+		jobId,
+		status,
+		tokensUsed: outcome.tokensUsed,
+		gates: outcome.gates.map(gate => `${gate.name}:${gate.ok ? 'ok' : 'failed'}`),
+	})
 	await db.close()
 	process.exit(status === 'delivered' ? 0 : 1)
 } catch (error) {

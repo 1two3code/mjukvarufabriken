@@ -8,7 +8,8 @@
   "scripts": {
     "lint": "eslint; tsgo --noemit",
     "test": "vitest run --reporter=verbose",
-    "spec:demo": "node scripts/spec-demo.ts"
+    "spec:demo": "node scripts/spec-demo.ts",
+    "gates:demo": "node scripts/gates-demo.ts"
   },
   "exports": {
     ".": "./src/index.ts",
