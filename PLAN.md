@@ -20,7 +20,7 @@ Everything that needs someone else's approval lives in TODO-EXTERNAL.md and is N
 - [x] Anthropic API key in root `.env` as `ANTHROPIC_API_KEY` (2026-08-26)
 - [ ] GitHub org `mjukvaruhuset` + token with repo/admin scope
 - [ ] Stripe account (test-mode keys are enough to build)
-- [ ] Domain: mjukvaruhuset.se purchase in progress (2026-08-26). Then delegate DNS to Route53.
+- [x] Domain: mjukvaruhuset.se registered via Route 53 Domains (exp. 2027-08-26), hosted zone + NS delegation in place — verified 2026-08-26
 - [x] Answers to open questions at the bottom of this file (2026-08-26, folded into Decisions)
 
 ## Milestones (checkbox = done and verified)
