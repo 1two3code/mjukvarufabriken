@@ -82,7 +82,7 @@ export const mergeTask = async ({
 		['merge', '--no-ff', '--no-edit', '-m', `merge(${task.id}): ${task.title}`, branch],
 		{ cwd: repoDir, signal }
 	)
-	if (merge.code === 0) return { ok: true, tokens }
+	if (merge.code === 0) return syncDependencies(repoDir, tokens, signal)
 
 	const files = await conflictedFiles(repoDir, signal)
 	if (!files.length || !(await mergeInProgress(repoDir))) {
@@ -140,6 +140,39 @@ export const mergeTask = async ({
 	if (commit.code !== 0) {
 		await exec('git', ['merge', '--abort'], { cwd: repoDir })
 		return { ok: false, tokens, reason: `merge commit failed:\n${tail(commit.stderr)}` }
+	}
+	return syncDependencies(repoDir, tokens, signal)
+}
+
+/** Manifest files whose change in a merge means main's node_modules is stale */
+const manifestPattern = /(^|\/)package(-lock)?\.json$/
+
+/**
+ * Workers install packages in their own worktree, so a merge can bring in a `package.json` /
+ * lock change that main's hard-linked `node_modules` does not have — the final verify (and every
+ * later worktree, which links main's node_modules) would then fail on a missing module. Runs
+ * `npm install` on main when the merge commit touched a manifest. Registry access goes through
+ * the egress allowlist (registry.npmjs.org).
+ */
+export const syncDependencies = async (
+	repoDir: string,
+	tokens: number,
+	signal?: AbortSignal
+): Promise<MergeOutcome> => {
+	const changed = await exec('git', ['diff', '--name-only', 'HEAD~1', 'HEAD'], { cwd: repoDir, signal })
+	const manifests = changed.stdout.split('\n').filter(file => manifestPattern.test(file))
+	if (!manifests.length) return { ok: true, tokens }
+	const install = await exec(
+		'npm',
+		['install', '--no-audit', '--no-fund', '--ignore-scripts', '--silent'],
+		{ cwd: repoDir, signal }
+	)
+	if (install.code !== 0) {
+		return {
+			ok: false,
+			tokens,
+			reason: `npm install after merging ${manifests.join(', ')} failed (${install.code}):\n${tail(install.stderr || install.stdout)}`,
+		}
 	}
 	return { ok: true, tokens }
 }

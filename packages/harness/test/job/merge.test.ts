@@ -96,6 +96,18 @@ describe('merge', () => {
 		expect(await repo.read('a.txt')).toBe('from a\n')
 		const log = await repo.run(['log', '--oneline', '-1'])
 		expect(log.stdout).toMatch(/merge\(a\): a/)
+		// No manifest changed → no npm install, so no lockfile appears
+		expect((await exec('test', ['-e', 'package-lock.json'], { cwd: repo.dir })).code).not.toBe(0)
+	})
+
+	it('Runs npm install on main when the merged branch changed a package manifest', async () => {
+		await repo.edit('task/deps', '{"name":"customer","private":true}\n', 'package.json')
+
+		const outcome = await mergeTask(input('deps'))
+
+		expect(outcome).toEqual({ ok: true, tokens: 0 })
+		// npm install ran on main after the merge: a lockfile now exists (dependency-free, offline)
+		expect((await exec('test', ['-e', 'package-lock.json'], { cwd: repo.dir })).code).toBe(0)
 	})
 
 	it('Runs one repair session on conflict and completes the merge when resolved', async () => {
