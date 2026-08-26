@@ -10,9 +10,12 @@ export function HomePage() {
 		<>
 			<h1>{t('page.home.title')}</h1>
 			<p>{t('page.home.body')}</p>
-			<Has permissions={['spec:write']}>
+			<p>
+				<Link to="/orders">{t('page.home.action.orders')}</Link>
+			</p>
+			<Has permissions={['job:admin']}>
 				<p>
-					<Link to="/orders/demo/spec">{t('page.home.action.newOrderDemo')}</Link>
+					<Link to="/admin">{t('page.admin.title')}</Link>
 				</p>
 			</Has>
 		</>

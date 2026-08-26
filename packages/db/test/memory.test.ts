@@ -130,6 +130,75 @@ describe('memory repositories', () => {
 			).resolves.toBeUndefined()
 			await expect(repos.orders.get('demo')).resolves.toMatchObject({ status: 'frozen' })
 		})
+
+		it('Creates an order record whose draft is empty and derives the spec status from it', async () => {
+			const order = await repos.orders.insert({ id: 'o1', orgId: 'a', name: 'Gym booking' })
+			expect(order).toMatchObject({ id: 'o1', status: 'drafting', name: 'Gym booking' })
+			await expect(repos.orders.get('o1')).resolves.toMatchObject({
+				orderId: 'o1',
+				orgId: 'a',
+				status: 'drafting',
+				spec: {},
+			})
+
+			const draft = (await repos.orders.get('o1'))!
+			await repos.orders.upsert({ ...draft, status: 'frozen', priceSek: 15_000 })
+			await expect(repos.orders.getOrder('o1')).resolves.toMatchObject({
+				status: 'frozen',
+				priceSek: 15_000,
+				name: 'Gym booking',
+			})
+		})
+
+		it('Transitions with compare-and-set and keeps the draft frozen past the spec phase', async () => {
+			await repos.orders.insert({ id: 'o1', orgId: 'a', name: 'x' })
+			await expect(
+				repos.orders.transition('o1', ['frozen'], 'deposit_paid')
+			).resolves.toBeUndefined()
+			await repos.orders.transition('o1', ['drafting', 'ready'], 'frozen')
+			await expect(
+				repos.orders.transition('o1', ['frozen'], 'deposit_paid')
+			).resolves.toMatchObject({ status: 'deposit_paid' })
+
+			// The spec engine sees a frozen draft, cannot write, and an upsert of "frozen" does not regress
+			await expect(repos.orders.get('o1')).resolves.toMatchObject({ status: 'frozen' })
+			const draft = (await repos.orders.get('o1'))!
+			await expect(repos.orders.updateUnlessFrozen(draft)).resolves.toBeUndefined()
+			await repos.orders.upsert(draft)
+			await expect(repos.orders.getOrder('o1')).resolves.toMatchObject({ status: 'deposit_paid' })
+			expect((await repos.orders.listOrders({ orgId: 'a' })).map(o => o.id)).toEqual(['o1'])
+		})
+
+		it('Stores payments per session, marks paid once and dedupes webhook events', async () => {
+			await repos.orders.insert({ id: 'o1', orgId: 'a', name: 'x' })
+			const payment = await repos.orders.insertPayment({
+				orderId: 'o1',
+				kind: 'deposit',
+				provider: 'fake',
+				amountSek: 7_500,
+				vatSek: 1_875,
+				totalSek: 9_375,
+				sessionId: 'fake_1',
+			})
+			expect(payment).toMatchObject({ id: expect.any(String), status: 'pending' })
+			await expect(
+				repos.orders.insertPayment({ ...payment, sessionId: 'fake_1' })
+			).rejects.toMatchObject({ code: '23505' })
+
+			await expect(repos.orders.findPaymentBySession('fake_1')).resolves.toMatchObject({
+				id: payment.id,
+			})
+			await expect(
+				repos.orders.markPaymentPaid(payment.id, { eventId: 'evt_1', receiptUrl: 'r' })
+			).resolves.toMatchObject({ status: 'paid', eventId: 'evt_1', paidAt: expect.any(String) })
+			await expect(
+				repos.orders.markPaymentPaid(payment.id, { eventId: 'evt_2' })
+			).resolves.toBeUndefined()
+			expect(await repos.orders.listPayments('o1')).toHaveLength(1)
+
+			await expect(repos.orders.recordPaymentEvent('evt_1', 't')).resolves.toBe(true)
+			await expect(repos.orders.recordPaymentEvent('evt_1', 't')).resolves.toBe(false)
+		})
 	})
 
 	describe('users', () => {

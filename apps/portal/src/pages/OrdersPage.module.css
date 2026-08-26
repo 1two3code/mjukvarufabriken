@@ -1,0 +1,13 @@
+.intro {
+	color: var(--secondary-text-color);
+}
+
+.toolbar {
+	display: flex;
+	flex-wrap: wrap;
+	gap: var(--spacing-base);
+	align-items: flex-end;
+	justify-content: space-between;
+
+	margin-bottom: var(--spacing-s);
+}

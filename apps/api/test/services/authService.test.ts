@@ -2,11 +2,7 @@ import { decodeProtectedHeader, jwtVerify } from 'jose'
 
 import { EntityInvalid } from '#/lib/entityError.ts'
 import { createMockUser } from '#/services/__mocks__/userService.ts'
-import {
-	magicLinkRateLimit,
-	magicLinkTtlMinutes,
-	pruneIntervalMs,
-} from '#/services/authService.ts'
+import { magicLinkRateLimit, magicLinkTtlMinutes, pruneIntervalMs } from '#/services/authService.ts'
 import { hashToken } from '#/services/authService.utils.ts'
 
 import type { FastifyInstance } from 'fastify'

@@ -12,10 +12,13 @@ import emailPlugin from '#/plugins/email.ts'
 import errorHandlingPlugin from '#/plugins/errorHandling.ts'
 import s3Plugin from '#/plugins/s3.ts'
 import secretsPlugin from '#/plugins/secrets.ts'
+import stripePlugin from '#/plugins/stripe.ts'
 import authService from '#/services/authService.ts'
 import contactService from '#/services/contactService.ts'
 import itemService from '#/services/itemService.ts'
 import jobService from '#/services/jobService.ts'
+import orderService from '#/services/orderService.ts'
+import paymentService from '#/services/paymentService.ts'
 import specService from '#/services/specService.ts'
 import userService from '#/services/userService.ts'
 
@@ -54,6 +57,7 @@ export async function createServer({ logLevel }: Options = {}): Promise<FastifyI
 		.register(anthropicPlugin)
 		.register(authKeysPlugin)
 		.register(emailPlugin)
+		.register(stripePlugin)
 
 		// Services
 		.register(itemService)
@@ -62,6 +66,8 @@ export async function createServer({ logLevel }: Options = {}): Promise<FastifyI
 		.register(userService)
 		.register(authService)
 		.register(contactService)
+		.register(orderService)
+		.register(paymentService)
 
 		// Request plugins
 		.register(errorHandlingPlugin)

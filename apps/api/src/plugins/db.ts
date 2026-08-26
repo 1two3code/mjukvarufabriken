@@ -59,7 +59,22 @@ const unavailableRepositories = (error: () => Error): Repositories => {
 		Object.fromEntries(keys.map(key => [key, reject])) as T
 	return {
 		jobs: repository(['insert', 'get', 'list', 'update', 'appendEvent', 'listEvents']),
-		orders: repository(['get', 'list', 'upsert', 'updateUnlessFrozen']),
+		orders: repository([
+			'get',
+			'list',
+			'upsert',
+			'updateUnlessFrozen',
+			'insert',
+			'getOrder',
+			'listOrders',
+			'transition',
+			'insertPayment',
+			'getPayment',
+			'findPaymentBySession',
+			'listPayments',
+			'markPaymentPaid',
+			'recordPaymentEvent',
+		]),
 		users: repository([
 			'get',
 			'findByEmail',
@@ -101,7 +116,10 @@ const plugin: FastifyPluginAsync = async app => {
 	// a task running on RAM behind a healthy ALB would lose logins and specs at the next restart
 	const [secretError, connectionString] = await tryCatch(resolveConnectionString())
 	if (secretError) {
-		app.log.error({ err: secretError }, 'Could not resolve the database secret — database unavailable')
+		app.log.error(
+			{ err: secretError },
+			'Could not resolve the database secret — database unavailable'
+		)
 		return decorateUnavailable(app, 'secret unresolvable', secretError)
 	}
 

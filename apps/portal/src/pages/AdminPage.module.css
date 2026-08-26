@@ -1,0 +1,7 @@
+.intro {
+	color: var(--secondary-text-color);
+}
+
+.jobsTitle {
+	margin-top: var(--spacing-base);
+}
