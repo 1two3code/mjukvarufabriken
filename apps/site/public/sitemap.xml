@@ -48,4 +48,28 @@
     <xhtml:link rel="alternate" hreflang="en" href="https://mjukvaruhuset.se/contact" />
     <xhtml:link rel="alternate" hreflang="x-default" href="https://mjukvaruhuset.se/kontakt" />
   </url>
+  <url>
+    <loc>https://mjukvaruhuset.se/villkor</loc>
+    <xhtml:link rel="alternate" hreflang="sv" href="https://mjukvaruhuset.se/villkor" />
+    <xhtml:link rel="alternate" hreflang="en" href="https://mjukvaruhuset.se/en/terms" />
+    <xhtml:link rel="alternate" hreflang="x-default" href="https://mjukvaruhuset.se/villkor" />
+  </url>
+  <url>
+    <loc>https://mjukvaruhuset.se/en/terms</loc>
+    <xhtml:link rel="alternate" hreflang="sv" href="https://mjukvaruhuset.se/villkor" />
+    <xhtml:link rel="alternate" hreflang="en" href="https://mjukvaruhuset.se/en/terms" />
+    <xhtml:link rel="alternate" hreflang="x-default" href="https://mjukvaruhuset.se/villkor" />
+  </url>
+  <url>
+    <loc>https://mjukvaruhuset.se/integritet</loc>
+    <xhtml:link rel="alternate" hreflang="sv" href="https://mjukvaruhuset.se/integritet" />
+    <xhtml:link rel="alternate" hreflang="en" href="https://mjukvaruhuset.se/en/privacy" />
+    <xhtml:link rel="alternate" hreflang="x-default" href="https://mjukvaruhuset.se/integritet" />
+  </url>
+  <url>
+    <loc>https://mjukvaruhuset.se/en/privacy</loc>
+    <xhtml:link rel="alternate" hreflang="sv" href="https://mjukvaruhuset.se/integritet" />
+    <xhtml:link rel="alternate" hreflang="en" href="https://mjukvaruhuset.se/en/privacy" />
+    <xhtml:link rel="alternate" hreflang="x-default" href="https://mjukvaruhuset.se/integritet" />
+  </url>
 </urlset>

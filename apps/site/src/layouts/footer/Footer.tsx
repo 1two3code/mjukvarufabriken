@@ -26,6 +26,10 @@ export function Footer() {
 					<Link to={pathTo('contact')}>{t('nav.contact')}</Link>
 					<a href={import.meta.env.VITE_PORTAL_URL}>{t('nav.action.portal')}</a>
 				</nav>
+				<nav className={styles.column} aria-label={t('nav.label.legal')}>
+					<Link to={pathTo('terms')}>{t('nav.terms')}</Link>
+					<Link to={pathTo('privacy')}>{t('nav.privacy')}</Link>
+				</nav>
 			</div>
 			<p className={styles.version}>
 				{t('footer.copyright', { year: new Date().getFullYear() })} · v

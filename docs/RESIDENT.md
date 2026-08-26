@@ -175,6 +175,17 @@ Billed by the factory from the daily records above (wave 4 `billing-and-tls`):
   `RESIDENT_USAGE_PRICE_ID`, informational). The cumulative cents reported per month are stored
   (`resident_usage_reports`), so a re-run only sends the difference and an unchanged month sends
   nothing. Without a Stripe key the fake provider records the report locally.
+- The portal page **`/admin/resident`** (admin role) wraps all three: it lists every
+  installation with its org / Stripe customer link editable in place, the usage per installation
+  and month (tokens, list price, billable = list price × 1.5), and a "Bill <month>" button that
+  runs the endpoint above. The billing column shows, per month: *Nothing to bill* (no usage,
+  nothing reported), *No billing customer* (unbilled usage but the installation is not linked
+  yet), *Not billed* (unbilled usage, nothing reported), *Billing in progress* (a report was
+  reserved within the last 5 minutes and is not confirmed yet), *Partly billed* (reported less
+  than the month is worth now — late records; bill again), *Billed* (reported = billable) and
+  *Over-reported — credit due* (a corrected day lowered the month below what was reported; the
+  provider cannot be reduced from here, credit the customer manually). The unbilled amount is
+  shown next to the status whenever it is above zero.
 
 - **Usage**: Anthropic list price of the tokens the resident used × **1.5**. The estimate in
   each daily record uses the per-model price table in `packages/resident/src/pricing.ts`

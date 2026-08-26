@@ -1,0 +1,96 @@
+/* stylelint-disable selector-max-type -- rendered Markdown carries no class names */
+
+/* MARK: Layout */
+.document {
+	display: flex;
+	flex-direction: column;
+	gap: var(--spacing-base);
+
+	width: 100%;
+	max-width: var(--breakpoint-medium);
+	margin: 0 auto;
+	padding: var(--spacing-base);
+}
+
+.draft {
+	margin: 0;
+	padding: var(--spacing-s) var(--spacing-base);
+	border-left: 0.3rem solid var(--caution);
+	border-radius: var(--border-radius-s);
+
+	background: var(--content-background);
+}
+
+.language {
+	margin: 0;
+	font-size: var(--font-size-s);
+	color: var(--secondary-text-color);
+}
+
+/* MARK: Rendered markdown */
+.markdown {
+	line-height: 1.6;
+	overflow-wrap: anywhere;
+
+	h1,
+	h2,
+	h3 {
+		margin: var(--spacing-base) 0 var(--spacing-xs);
+	}
+
+	p,
+	ul,
+	ol {
+		margin: 0 0 var(--spacing-s);
+	}
+
+	ul,
+	ol {
+		padding-left: var(--spacing-base);
+	}
+
+	blockquote {
+		margin: 0 0 var(--spacing-s);
+		padding: var(--spacing-xs) var(--spacing-s);
+		border-left: 0.3rem solid var(--caution);
+		color: var(--secondary-text-color);
+	}
+
+	code {
+		padding: 0 0.3em;
+		border-radius: var(--border-radius-xs);
+		font-size: 0.9em;
+		background: var(--content-background);
+	}
+
+	table {
+		overflow-x: auto;
+		display: block;
+		border-collapse: collapse;
+
+		margin: 0 0 var(--spacing-s);
+
+		font-size: var(--font-size-s);
+	}
+
+	th,
+	td {
+		padding: var(--spacing-xs) var(--spacing-s);
+		border: var(--border-width-xs) solid var(--divider-color);
+		text-align: left;
+		vertical-align: top;
+	}
+
+	th {
+		background: var(--content-background);
+	}
+
+	a {
+		color: var(--brand-500);
+	}
+}
+
+.summary {
+	padding-top: var(--spacing-base);
+	border-top: var(--border-width-xs) solid var(--divider-color);
+}
