@@ -1,0 +1,12 @@
+{
+  "api.error.refreshNotConfigured": "Din session kunde inte förnyas. Logga in igen.",
+  "common.action.close": "Stäng",
+  "error.body.pageNotFound": "Sidan du letar efter finns inte.",
+  "error.label.pageNotFound": "Sidan hittades inte",
+  "page.home.body": "Mjukvara byggd enligt spec.",
+  "page.home.title": "Mjukvarufabriken",
+  "theme.action.toggle": "Byt tema",
+  "theme.dark": "Mörkt",
+  "theme.light": "Ljust",
+  "theme.system": "System"
+}

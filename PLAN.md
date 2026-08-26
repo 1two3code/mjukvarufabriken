@@ -25,10 +25,10 @@ Everything that needs someone else's approval lives in TODO-EXTERNAL.md and is N
 
 ### M1 — Skeleton (day 1)
 - [x] `templates/web` extracted and green (lint + test) — 2026-08-26
-- [ ] Monorepo: `apps/site`, `apps/portal` (instantiated from templates/web), `packages/harness`, `packages/db`, `infra/`
-- [ ] CI (GitHub Actions): lint, test, build
-- [ ] CDK stack: VPC, RDS, S3, ECS cluster, App Runner, secrets
-- [ ] TOKENS.md ledger started
+- [x] Monorepo: `apps/site`, `apps/portal` (instantiated from templates/web), `packages/harness`, `packages/db`, `infra/` — 2026-08-26 (8 workspaces, lint + 68 tests + build green)
+- [x] CI (GitHub Actions): lint, test, build — 2026-08-26 (`ci.yml` lint/coverage/build/synth, `deploy.yml` OIDC dev→live; runs on first push to GitHub)
+- [ ] CDK stack: VPC, RDS, S3, ECS cluster, App Runner, secrets — partial 2026-08-26: VPC, S3, ECS cluster (api), CloudFront×2 synth offline (4 stacks); RDS, ECS-for-jobs, App Runner and Secrets Manager not yet in the stack
+- [x] TOKENS.md ledger started — 2026-08-26
 
 ### M2 — Spec engine
 - [ ] Spec chat → structured spec (JSON schema: goal, users, features, non-goals, acceptance criteria, stack constraints)

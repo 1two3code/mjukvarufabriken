@@ -1,0 +1,12 @@
+.vscode
+.github
+.claude
+.husky
+apps/site
+apps/portal
+docs
+infra
+dist
+**/node_modules
+**/dist
+.git

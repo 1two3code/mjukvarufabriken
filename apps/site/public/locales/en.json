@@ -1,0 +1,12 @@
+{
+  "api.error.refreshNotConfigured": "Your session could not be refreshed. Please sign in again.",
+  "common.action.close": "Close",
+  "error.body.pageNotFound": "The page you are looking for does not exist.",
+  "error.label.pageNotFound": "Page not found",
+  "page.home.body": "Software built to spec.",
+  "page.home.title": "Mjukvarufabriken",
+  "theme.action.toggle": "Toggle theme",
+  "theme.dark": "Dark",
+  "theme.light": "Light",
+  "theme.system": "System"
+}

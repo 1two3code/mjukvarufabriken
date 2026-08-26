@@ -1,0 +1,18 @@
+{
+  "name": "@mf/utils",
+  "version": "0.1.0",
+  "description": "Pure, sharable utility functions",
+  "private": true,
+  "type": "module",
+  "main": "index.ts",
+  "scripts": {
+    "lint": "eslint; tsgo --noemit",
+    "test": "vitest run --reporter=verbose"
+  },
+  "exports": {
+    ".": "./src/index.ts",
+    "./date": "./src/date.ts",
+    "./function": "./src/function.ts",
+    "./object": "./src/object.ts"
+  }
+}
