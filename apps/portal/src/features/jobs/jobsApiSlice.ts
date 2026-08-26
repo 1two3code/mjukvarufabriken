@@ -1,18 +1,13 @@
 import { ApiCaching, appApi } from '#/app/api.ts'
 
-import type { Job, JobEvent } from '@mf/models'
-
-/**
- * A download link from `GET /bff/jobs/:id/deliverables` (M5 delivery stream). Kept local
- * until the delivery stream lands its model; only these fields are relied upon.
- */
-export type JobDeliverable = { name: string; url: string; description?: string }
+import type { DeliverablesResponse, Job, JobEvent } from '@mf/models'
 
 export const jobsApiSlice = appApi
 	.enhanceEndpoints({ addTagTypes: ['job', 'jobEvents'] })
 	.injectEndpoints({
 		endpoints: build => ({
-			getJobDeliverables: build.query<JobDeliverable[], string>({
+			/** The delivery record with presigned links (M5); 404 until the job's bundle landed */
+			getJobDeliverables: build.query<DeliverablesResponse, string>({
 				query: jobId => `/jobs/${jobId}/deliverables`,
 				providesTags: (_result, _error, jobId) => [{ type: 'job', id: `deliverables-${jobId}` }],
 			}),
