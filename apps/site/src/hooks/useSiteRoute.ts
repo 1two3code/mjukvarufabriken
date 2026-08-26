@@ -1,6 +1,6 @@
-import { useMatches } from 'react-router-dom'
+import { useLocation, useMatches } from 'react-router-dom'
 
-import { defaultLanguage, pagePaths } from '#/app/routes.ts'
+import { languageFromPath, pagePaths } from '#/app/routes.ts'
 
 import type { Language, Page, RouteHandle } from '#/app/routes.ts'
 
@@ -10,12 +10,13 @@ const isRouteHandle = (handle: unknown): handle is RouteHandle =>
 /**
  * The language and page of the current route (from the route `handle`), plus path helpers
  * so links and the language toggle stay in the current language. Unknown routes (404)
- * fall back to the default language and no page.
+ * have no page and take their language from the URL (`/en/...` stays English).
  */
 export function useSiteRoute() {
 	const matches = useMatches()
+	const { pathname } = useLocation()
 	const handle = matches.map(match => match.handle).find(isRouteHandle)
-	const language = handle?.language ?? defaultLanguage
+	const language = handle?.language ?? languageFromPath(pathname)
 	const page = handle?.page
 
 	const pathTo = (target: Page, targetLanguage: Language = language) =>

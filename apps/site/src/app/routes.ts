@@ -23,12 +23,18 @@ export const isLanguage = (value: unknown): value is Language =>
 const normalizePath = (pathname: string) =>
 	pathname.length > 1 && pathname.endsWith('/') ? pathname.slice(0, -1) : pathname
 
-/** Language of a path (before the router has matched anything), default for unknown paths */
+/**
+ * Language of a path (before the router has matched anything). Unknown paths keep the
+ * language of the `/en` prefix so a 404 under an English URL stays English; anything else
+ * is the default.
+ */
 export const languageFromPath = (pathname: string): Language => {
 	const path = normalizePath(pathname)
 	for (const paths of Object.values(pagePaths)) {
 		const match = languages.find(language => paths[language] === path)
 		if (match) return match
 	}
+	const englishHome = pagePaths.home.en
+	if (path === englishHome || path.startsWith(`${englishHome}/`)) return 'en'
 	return defaultLanguage
 }

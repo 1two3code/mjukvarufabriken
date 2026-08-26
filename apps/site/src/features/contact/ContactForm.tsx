@@ -62,10 +62,9 @@ export function ContactForm() {
 		)
 	}
 
-	const errorKey =
-		isApiError(error) && error.code === 'contactRateLimited'
-			? 'contact.error.rateLimited'
-			: 'contact.error.failed'
+	// Coded api errors (e.g. `contactRateLimited`) are already shown as a translated toast by
+	// `apiErrorHandlingMiddleware`; the inline message covers the generic failures only
+	const showInlineError = isError && !(isApiError(error) && error.code)
 
 	return (
 		<form className={styles.form} onSubmit={handleSubmit} noValidate>
@@ -103,9 +102,9 @@ export function ContactForm() {
 				multiline
 				onChange={handleChange}
 			/>
-			{isError && (
+			{showInlineError && (
 				<p className={styles.error} role="alert">
-					{t(errorKey)}
+					{t('contact.error.failed')}
 				</p>
 			)}
 			<div className={styles.actions}>

@@ -64,7 +64,7 @@ Everything that needs someone else's approval lives in TODO-EXTERNAL.md and is N
 - [ ] Admin view: all jobs, budgets, kill switch
 
 ### M7 — Public site
-- [x] Landing, how it works, pricing, contact — sv/en (2026-08-26: built by hand in apps/site + `POST /bff/contact`; lint/test/build/smoke green)
+- [x] Landing, how it works, pricing, contact — sv/en (2026-08-26: built by hand in apps/site + `POST /bff/contact`; verified: api route/service tests, site tests for locale key parity + route paths + sitemap, lint/build, headless smoke of `/` only — the other pages are not smoke-rendered)
 - [ ] Built THROUGH the harness (first case study) — 2026-08-26: the site was built by hand tonight; it will be rebuilt through the factory as the M10 dogfood case
 
 ### M8 — Resident agent mode
