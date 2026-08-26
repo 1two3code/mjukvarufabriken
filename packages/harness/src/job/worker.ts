@@ -6,6 +6,7 @@ import { query } from '@anthropic-ai/claude-agent-sdk'
 import { exec, git, tail } from './exec.ts'
 import { renderSpecForPlanning } from './planner.ts'
 import { totalTokens } from './types.ts'
+import { createUsageAccumulator } from './usage.ts'
 
 import type { Options, SDKMessage } from '@anthropic-ai/claude-agent-sdk'
 import type { Plan, Spec, Task } from '@mf/models'
@@ -186,16 +187,17 @@ export const runSession = async ({
 		env: { ...process.env, CLAUDE_AGENT_SDK_CLIENT_APP: 'mf-harness/0.1' },
 	}
 
-	let streamed = 0
+	const usage = createUsageAccumulator(onUsage)
 	let ok = false
 	let result = ''
 	let reported = 0
+	let turns = 0
 	try {
 		for await (const message of query({ prompt, options })) {
-			const usage = messageUsage(message)
-			if (usage) {
-				streamed += totalTokens(usage)
-				onUsage(usage)
+			const messageUsageValue = messageUsage(message)
+			if (messageUsageValue && message.type === 'assistant') {
+				const delta = usage.add(message.message.id, messageUsageValue)
+				if (delta > 0) turns += 1
 			}
 			if (message.type === 'result') {
 				reported = Object.values(message.modelUsage ?? {}).reduce(
@@ -207,15 +209,25 @@ export const runSession = async ({
 					message.subtype === 'success'
 						? message.result
 						: `${message.subtype}: ${message.errors.join('; ')}`
+				console.log(
+					JSON.stringify({
+						message: 'session result',
+						subtype: message.subtype,
+						turns: message.num_turns,
+						assistantMessages: turns,
+						streamedTokens: usage.total,
+						reportedTokens: reported,
+						costUsd: message.total_cost_usd,
+					})
+				)
 			}
 		}
 	} finally {
 		signal.removeEventListener('abort', onAbort)
 	}
 	// Top up with anything the per-message stream missed (subagents, compaction)
-	const missing = reported - streamed
-	if (missing > 0) onUsage({ inputTokens: missing, outputTokens: 0 })
-	return { ok, tokens: Math.max(streamed, reported), result }
+	usage.reconcile(reported)
+	return { ok, tokens: usage.total, result }
 }
 
 // MARK: Task runner
