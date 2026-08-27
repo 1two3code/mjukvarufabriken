@@ -162,14 +162,17 @@ export const syncDependencies = async (
 	const changed = await exec('git', ['diff', '--name-only', 'HEAD~1', 'HEAD'], { cwd: repoDir, signal })
 	const manifests = changed.stdout.split('\n').filter(file => manifestPattern.test(file))
 	if (!manifests.length) return { ok: true, tokens }
-	// Installs whatever the workers added to the manifests: customer-chosen packages, so as the
-	// worker uid (scripts are off either way)
-	await ensureShared(repoDir)
+	// Installs whatever the workers added to the manifests. Runs as the job uid: main's
+	// node_modules (hard-linked from the template) belongs to the job, so the worker uid cannot
+	// replace files in it (npm exited 243 without output on Fargate run 6ff720d2, 2026-08-27).
+	// Lifecycle scripts stay off, so no package code runs with the job's privileges; the worktrees
+	// re-link the result for the next tasks (`ensureShared`).
 	const install = await exec(
 		'npm',
-		['install', '--no-audit', '--no-fund', '--ignore-scripts', '--silent'],
-		{ cwd: repoDir, signal, asWorker: true }
+		['install', '--no-audit', '--no-fund', '--ignore-scripts', '--loglevel=error'],
+		{ cwd: repoDir, signal }
 	)
+	await ensureShared(repoDir)
 	if (install.code !== 0) {
 		return {
 			ok: false,
