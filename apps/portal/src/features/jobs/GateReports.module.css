@@ -119,3 +119,95 @@
 	composes: composable-caption-font from global;
 	color: var(--secondary-text-color);
 }
+
+/* MARK: Structured details */
+.detailsBody {
+	display: flex;
+	flex-direction: column;
+	gap: var(--spacing-xs);
+}
+
+.stats {
+	display: flex;
+	flex-wrap: wrap;
+	gap: var(--spacing-s);
+}
+
+.stat {
+	display: flex;
+	flex-direction: column;
+}
+
+.statValue {
+	font-size: 1.4rem;
+	font-weight: 700;
+	line-height: 1.1;
+}
+
+.statLabel {
+	composes: composable-caption-font from global;
+	color: var(--secondary-text-color);
+}
+
+.findings,
+.criteria {
+	display: flex;
+	flex-direction: column;
+	gap: var(--spacing-xxs);
+
+	margin: 0;
+	padding: 0;
+
+	list-style: none;
+}
+
+.finding {
+	display: flex;
+	gap: var(--spacing-xs);
+	align-items: baseline;
+}
+
+.criterion {
+	display: flex;
+	gap: var(--spacing-xs);
+	align-items: baseline;
+	justify-content: space-between;
+}
+
+.findingText {
+	composes: composable-caption-font from global;
+}
+
+.findingId {
+	font-family: monospace;
+}
+
+.tag {
+	composes: composable-caption-font from global;
+
+	flex-shrink: 0;
+
+	padding: 0 var(--spacing-xxs);
+	border-radius: var(--border-radius-base);
+
+	color: var(--inverted-text-color);
+	text-transform: uppercase;
+}
+
+.high,
+.unmet {
+	background: var(--error);
+}
+
+.medium,
+.pending {
+	background: var(--caution);
+}
+
+.low {
+	background: var(--secondary-text-color);
+}
+
+.met {
+	background: var(--success);
+}
