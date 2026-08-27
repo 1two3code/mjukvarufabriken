@@ -69,6 +69,8 @@ export type PreviewAuth = {
 }
 
 export type ArtifactStore = {
+	/** Which backend backs the store — real S3, dry-run logger, in-memory fake, or unconfigured */
+	kind: 's3' | 'dry-run' | 'fake' | 'none'
 	bucket: string
 	/** Public HTTPS URL of an object (virtual-hosted style) */
 	urlOf: (key: string) => string

@@ -9,6 +9,7 @@ export const objectUrl = (bucket: string, region: string, key: string) =>
 export const createS3ArtifactStore = (bucket: string, region: string): ArtifactStore => {
 	const client = new S3Client({ region })
 	return {
+		kind: 's3',
 		bucket,
 		urlOf: key => objectUrl(bucket, region, key),
 		putObject: async ({ key, body, contentType }) => {
@@ -27,6 +28,7 @@ export type FakeArtifactStore = ArtifactStore & {
 
 export const createFakeArtifactStore = (bucket = 'mf-artifacts-test', fail = false) => {
 	const fake: FakeArtifactStore = {
+		kind: 'fake',
 		bucket,
 		objects: new Map(),
 		urlOf: key => objectUrl(bucket, 'eu-north-1', key),
@@ -42,6 +44,7 @@ export const createDryRunArtifactStore = (
 	bucket: string,
 	log: (line: string) => void
 ): ArtifactStore => ({
+	kind: 'dry-run',
 	bucket,
 	urlOf: key => objectUrl(bucket, 'eu-north-1', key),
 	putObject: async ({ key, body, contentType }) => {

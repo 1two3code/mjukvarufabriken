@@ -94,10 +94,16 @@ export const createLiveDeliveryClients = ({
 	log = line => console.log(JSON.stringify({ message: line })),
 }: LiveDeliveryOptions): DeliveryClients => {
 	if (dryRun) {
+		// Dry-run means "skip the external accounts we do not have yet" — GitHub and App Runner.
+		// The S3 bundle is OUR artifacts bucket (the job task role already writes it) and needs no
+		// external prerequisite, so it is uploaded for real whenever a bucket is configured; only
+		// without one does it fall back to logging. The repo push / deploy stay faked.
 		return {
 			github: createDryRunGitHubClient(log),
 			deploy: createDryRunDeployClient(log),
-			artifacts: createDryRunArtifactStore(artifactsBucket ?? 'mf-artifacts-dry-run', log),
+			artifacts: artifactsBucket
+				? createS3ArtifactStore(artifactsBucket, region)
+				: createDryRunArtifactStore('mf-artifacts-dry-run', log),
 			prose: process.env.ANTHROPIC_API_KEY
 				? createLiveProseWriter({ model: workerModel })
 				: undefined,
@@ -125,6 +131,7 @@ export const createLiveDeliveryClients = ({
 		artifacts: artifactsBucket
 			? createS3ArtifactStore(artifactsBucket, region)
 			: {
+					kind: 'none',
 					bucket: '',
 					urlOf: key => key,
 					putObject: notConfigured('ARTIFACTS_BUCKET'),

@@ -464,11 +464,8 @@ describe('deliver', () => {
 	it('Dry run: logs every external call instead of making it and marks the events', async () => {
 		// Arrange
 		const lines: string[] = []
-		const clients = createLiveDeliveryClients({
-			dryRun: true,
-			artifactsBucket: 'mf-artifacts-dev',
-			log: line => lines.push(line),
-		})
+		// No bucket → the S3 bundle is dry-run logged too (fully offline)
+		const clients = createLiveDeliveryClients({ dryRun: true, log: line => lines.push(line) })
 		const input = createInput(repoDir)
 
 		// Act
@@ -477,6 +474,7 @@ describe('deliver', () => {
 		// Assert
 		expect(outcome.ok).toBe(true)
 		expect(outcome.steps.every(step => step.dryRun)).toBe(true)
+		expect(clients.artifacts.kind).toBe('dry-run')
 		expect(lines).toEqual(
 			expect.arrayContaining([
 				'[dry-run] github: create private repo mjukvaruhuset/gym-booking',
@@ -484,13 +482,21 @@ describe('deliver', () => {
 				'[dry-run] github: add octocat as admin on mjukvaruhuset/gym-booking',
 				'[dry-run] app runner: create service mf-11111111-gym-booking from https://github.com/mjukvaruhuset/gym-booking#main',
 				expect.stringMatching(
-					/^\[dry-run\] s3: put s3:\/\/mf-artifacts-dev\/deliverables\/.*\/repo\.zip \(application\/zip, \d+ bytes\)$/
+					/^\[dry-run\] s3: put s3:\/\/mf-artifacts-dry-run\/deliverables\/.*\/repo\.zip \(application\/zip, \d+ bytes\)$/
 				),
 			])
 		)
 		expect(outcome.deliverable?.deployUrl).toBe(
 			'https://mf-11111111-gym-booking.eu-north-1.awsapprunner.com'
 		)
+	})
+
+	it('Dry run with a bucket uploads the S3 bundle for real (our bucket, no external account)', () => {
+		const clients = createLiveDeliveryClients({ dryRun: true, artifactsBucket: 'mf-artifacts-dev' })
+		// GitHub and App Runner stay faked; the artifact store is the real S3 client
+		expect(clients.dryRun).toBe(true)
+		expect(clients.artifacts.kind).toBe('s3')
+		expect(clients.artifacts.bucket).toBe('mf-artifacts-dev')
 	})
 
 	it('Live clients without configuration fail the repo step with a TODO-EXTERNAL reason', async () => {
