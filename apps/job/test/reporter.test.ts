@@ -87,6 +87,17 @@ describe('api reporter', () => {
 		])
 	})
 
+	it('Does not retry the token exchange (a rotated bootstrap token never re-authenticates)', async () => {
+		// A 5xx that every other request would retry: the token endpoint rotates on its first hit, so
+		// a retry re-presenting the now-stale bootstrap token only earns a misleading 401 — claim must
+		// make a single attempt and surface the failure for the caller to fail the job cleanly.
+		const { fetchStub } = createFetchStub([{ status: 502, body: { error: {} } }])
+		const reporter = createApiReporter(options(fetchStub))
+
+		await expect(reporter.claim!()).rejects.toMatchObject({ status: 502 })
+		expect(fetchStub).toHaveBeenCalledTimes(1)
+	})
+
 	it('Posts events one at a time, in order and numbered, and patches updates', async () => {
 		const { fetchStub, calls } = createFetchStub([
 			{ status: 200, body: { lastEventId: 1 } },

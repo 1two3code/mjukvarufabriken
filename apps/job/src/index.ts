@@ -55,8 +55,16 @@ log('reporting via ' + config.report.mode, { jobId })
 
 // One-shot exchange before anything else runs: the token in the task environment (still
 // readable through /proc/*/environ by every worker session, and through ecs:DescribeTasks /
-// CloudTrail) is dead from here on; the replacement lives only in this process.
-await reporter.claim?.()
+// CloudTrail) is dead from here on; the replacement lives only in this process. A failed
+// exchange must exit cleanly — this runs before the SIGTERM/unhandledRejection handlers below
+// are registered, so an unhandled rejection here would crash the container with no clear log.
+try {
+	await reporter.claim?.()
+} catch (error) {
+	log('token claim failed, aborting before run', { jobId, reason: (error as Error).message })
+	await reporter.close().catch(() => {})
+	process.exit(4)
+}
 
 const job = await reporter.load()
 if (!job) {
@@ -179,9 +187,11 @@ try {
 	// A job that failed AFTER the build (the plan ran) leaves a real repository behind. Archive it
 	// and the gate reports to `deliverables/<jobId>/debug/` so the build can be pulled once and its
 	// gates re-run locally forever (`gates-demo --repo <dir>`) — no rebuild. Best-effort, and only
-	// when the artifact store is real (a bucket is configured; dry-run with a bucket still uploads,
-	// the same rule as the delivery bundle), so a job without ARTIFACTS_BUCKET is unaffected.
-	if (outcome.status !== 'delivered' && outcome.plan && deliveryClients.artifacts.kind !== 'none') {
+	// when the artifact store persists to a real bucket (`s3`): dry-run WITH a bucket still uploads
+	// (that path yields the s3 store), the same rule as the delivery bundle, but dry-run WITHOUT a
+	// bucket is the in-memory dry-run store, so a job without ARTIFACTS_BUCKET is unaffected — it
+	// would otherwise run a full `git archive` and log "debug bundle uploaded" while storing nothing.
+	if (outcome.status !== 'delivered' && outcome.plan && deliveryClients.artifacts.kind === 's3') {
 		try {
 			const files = await uploadDebugBundle({
 				jobId,

@@ -92,9 +92,14 @@ export const createApiReporter = ({
 	 * to `undefined` (unknown job) — a 404 on a write means events would silently vanish, so
 	 * it throws like any other 4xx.
 	 */
-	const request = async <T>(path: string, method: 'GET' | 'POST' | 'PATCH', body?: unknown) => {
+	const request = async <T>(
+		path: string,
+		method: 'GET' | 'POST' | 'PATCH',
+		body?: unknown,
+		attempts = retries
+	) => {
 		let lastError: Error = new Error('no attempt made')
-		for (let attempt = 0; attempt <= retries; attempt += 1) {
+		for (let attempt = 0; attempt <= attempts; attempt += 1) {
 			if (attempt > 0) await sleep(retryDelayMs * 2 ** (attempt - 1))
 			try {
 				// No content-type without a body: Fastify rejects an empty JSON body with 400
@@ -134,8 +139,13 @@ export const createApiReporter = ({
 	let seq = 0
 
 	return {
+		// Single attempt (retries=0): the endpoint rotates the report token on the first hit, so a
+		// retry that still presents the bootstrap token (this closure only swaps `authorization` after
+		// a success) would meet the already-rotated hash and 401. Retrying cannot recover a lost
+		// response — the minted token is gone server-side — so surface the failure once and let the
+		// caller fail the job cleanly rather than compound it with a misleading 401.
 		claim: async () => {
-			const result = await request<JobReportTokenResponse>('/token', 'POST')
+			const result = await request<JobReportTokenResponse>('/token', 'POST', undefined, 0)
 			if (!result) throw new ApiReportError(404, 'job not found')
 			headers.authorization = `Bearer ${result.token}`
 		},
