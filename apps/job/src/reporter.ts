@@ -97,9 +97,12 @@ export const createApiReporter = ({
 		for (let attempt = 0; attempt <= retries; attempt += 1) {
 			if (attempt > 0) await sleep(retryDelayMs * 2 ** (attempt - 1))
 			try {
+				// No content-type without a body: Fastify rejects an empty JSON body with 400
+				// (FST_ERR_CTP_EMPTY_JSON_BODY) — the first Fargate run with api reporting died on it
+				const { 'content-type': contentType, ...bodiless } = headers
 				const response = await fetchImpl(`${base}${path}`, {
 					method,
-					headers,
+					headers: body === undefined ? bodiless : { ...bodiless, 'content-type': contentType },
 					body: body === undefined ? undefined : JSON.stringify(body),
 				})
 				if (response.ok) return (await response.json()) as T
