@@ -137,6 +137,23 @@ describe('Job Service', () => {
 			await expect(app.jobService.get('job-1', admin)).resolves.toMatchObject({ id: 'job-1' })
 		})
 
+		it('Strips gate details from a customer job read but not an admin\'s', async () => {
+			const gated = createMockJob({
+				id: 'job-1',
+				gates: [
+					{ name: 'review', ok: true, tokens: 10, durationMs: 5, startedAt: '2026-08-28T00:00:00.000Z', summary: 'ok', details: { findings: [{ file: 'apps/api/src/x.ts', line: 1 }] } },
+				],
+			})
+			vi.spyOn(app.db.jobs, 'get').mockResolvedValue(gated)
+
+			const forUser = await app.jobService.get('job-1', user)
+			expect(forUser.gates?.[0]).not.toHaveProperty('details')
+			expect(forUser.gates?.[0]).toMatchObject({ name: 'review', ok: true, tokens: 10 })
+
+			const forAdmin = await app.jobService.get('job-1', admin)
+			expect(forAdmin.gates?.[0]).toHaveProperty('details')
+		})
+
 		it('Hides jobs of other orgs as not found', async () => {
 			const other = { ...user, orgId: 'org-2' }
 			await expect(app.jobService.get('job-1', other)).rejects.toBeInstanceOf(EntityNotFound)

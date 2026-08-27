@@ -164,6 +164,16 @@ export const redactEventsForCustomer = (events: JobEvent[]): JobEvent[] =>
 		})
 
 /**
+ * The same rule for a job row's stored gate reports: `gates[].details` carry the review findings
+ * and test output of the delivered code, so a customer sees only each gate's name, verdict,
+ * timing, tokens and one-line summary. Admins get the row unchanged.
+ */
+export const redactJobForCustomer = (job: Job): Job =>
+	job.gates
+		? { ...job, gates: job.gates.map(({ details: _details, ...gate }) => gate) }
+		: job
+
+/**
  * The delivery record lives in the last successful `bundle` delivery event (the job writes
  * events only; no job column for it). Undefined until the job delivered.
  */
@@ -222,8 +232,10 @@ const plugin: FastifyPluginAsync = async app => {
 		return job
 	}
 
-	const get: FastifyInstance['jobService']['get'] = async (jobId, session) =>
-		scoped(await db.jobs.get(jobId), session, jobId)
+	const get: FastifyInstance['jobService']['get'] = async (jobId, session) => {
+		const job = scoped(await db.jobs.get(jobId), session, jobId)
+		return isAdmin(session) ? job : redactJobForCustomer(job)
+	}
 
 	/**
 	 * Forwards a `notify` event to every admin; a mail failure never fails the report. Capped
@@ -321,7 +333,8 @@ const plugin: FastifyPluginAsync = async app => {
 		},
 		listForOrder: async (orderId, session) => {
 			const jobs = await db.jobs.list({ orderId })
-			return isAdmin(session) ? jobs : jobs.filter(job => job.orgId === session.orgId)
+			if (isAdmin(session)) return jobs
+			return jobs.filter(job => job.orgId === session.orgId).map(redactJobForCustomer)
 		},
 		listEvents: async (jobId, after, session) => {
 			await get(jobId, session)
