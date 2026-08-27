@@ -48,3 +48,4 @@ Format: date | milestone | session tokens (in/out) | notes
 | 2026-08-27 | overnight wave 5 (workflow) | ~1.82M | n/a | 21 agents / 48 min: two-uid sandbox, licence gate, portal legal/admin/order polish + route smoke, CI/deploy bootstrap guard + README; 677 → 818 tests |
 | 2026-08-27 | overnight main session | ~250k | ~35k | budget stack → us-east-1 + bootstrap, parameter-property boot crash fix + lint rule, 4 deploys, worktree cleanup |
 | 2026-08-27 | overnight main session (morning) | ~200k | ~25k | Fargate runs #8–#9 (each found one bug: empty-JSON token claim, SDK max-turns thrown as error), reporter + turn-cap fixes, 3 job-image deploys, memory + PLAN liveness item |
+| 2026-08-27 | overnight main session (afternoon) | ~180k | ~25k | Fargate runs #10–#13 (setpriv caps on fetch, worker-uid npm install, repair staging, CLI json-schema $schema) — #13 built 3 tasks, verify + acceptance-tests gates green; ~USD 30 Anthropic across runs #8–#13; M3 box 2 ticked |
