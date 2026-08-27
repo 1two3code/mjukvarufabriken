@@ -104,7 +104,7 @@ const unavailableRepositories = (error: () => Error): Repositories => {
 			'insertRefreshToken',
 			'consumeRefreshToken',
 			'revokeRefreshToken',
-			'prune',
+			'pruneExpired',
 		]),
 		resident: repository([
 			'getInstallation',
@@ -117,7 +117,7 @@ const unavailableRepositories = (error: () => Error): Repositories => {
 			'listUsageReports',
 			'upsertUsageReport',
 		]),
-		rateLimits: repository(['count', 'record', 'prune']),
+		rateLimits: repository(['count', 'record', 'pruneExpired']),
 	}
 }
 

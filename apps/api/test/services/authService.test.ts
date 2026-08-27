@@ -11,14 +11,7 @@ import {
 import { hashToken } from '#/services/authService.utils.ts'
 
 import type { FastifyInstance } from 'fastify'
-import type * as housekeeping from '#/lib/housekeeping.ts'
 import type { OutgoingEmail } from '#/plugins/email.ts'
-
-// The scheduler is unit-tested in test/lib/housekeeping.test.ts; here only its wiring matters
-vi.mock('#/lib/housekeeping.ts', async importOriginal => ({
-	...(await importOriginal<typeof housekeeping>()),
-	scheduleHousekeeping: vi.fn().mockResolvedValue(undefined),
-}))
 
 const email = 'anna@acme.se'
 
@@ -38,24 +31,6 @@ describe('Auth Service', () => {
 
 	afterEach(() => {
 		vi.useRealTimers()
-	})
-
-	describe('housekeeping', () => {
-		it('Prunes expired links and tokens through the shared scheduler (Postgres only)', async () => {
-			// Arrange
-			const { scheduleHousekeeping } = await import('#/lib/housekeeping.ts')
-			const schedule = vi.mocked(scheduleHousekeeping)
-			app = await createTestApp({ skipMock: '#/services/authService.ts' })
-			const prune = vi.spyOn(app.db.auth, 'prune')
-
-			// Act
-			const call = schedule.mock.calls.findLast(([, name]) => name === 'Auth prune')
-			await call?.[2]()
-
-			// Assert
-			expect(call).toBeDefined()
-			expect(prune).toHaveBeenCalledTimes(1)
-		})
 	})
 
 	describe('requestMagicLink', () => {
