@@ -7,6 +7,8 @@
  */
 import { isActiveJobStatus, isOrderSpecFrozen, toSpecStatus } from '@mf/models'
 
+import { rateLimitRetentionMs } from './rateLimits.ts'
+
 import type {
 	Job,
 	JobEvent,
@@ -54,8 +56,12 @@ export class UniqueViolation extends Error {
 
 /** Upper bound on tracked keys per scope; beyond it the oldest keys are evicted (memory guard) */
 export const memoryRateLimitMaxKeys = 10_000
-/** Hits older than this are dropped on every `record` — longer than any window a service counts over */
-export const memoryRateLimitRetentionMs = 60 * 60 * 1000
+/**
+ * Hits older than this are dropped on every `record` — longer than any window a service counts over.
+ * Aliases {@link rateLimitRetentionMs} so the in-memory sweep and the Postgres pruner share one
+ * literal and cannot drift.
+ */
+export const memoryRateLimitRetentionMs = rateLimitRetentionMs
 
 export type MemoryRepositories = Repositories & {
 	rateLimits: Repositories['rateLimits'] & {
