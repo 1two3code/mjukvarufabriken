@@ -195,25 +195,31 @@ export const createMemoryRepositories = (): MemoryRepositories => {
 	}
 
 	// MARK: Auth helpers
-	/** Drops expired links and expired or long-revoked tokens — the same rule as `pruneAuth` */
+	/**
+	 * Drops expired links and expired or long-revoked tokens — the same rule as `pruneAuth` —
+	 * and returns how many rows it removed
+	 */
 	const sweepAuth = () => {
 		const cutoff = Date.now()
 		const weekAgo = cutoff - 7 * 24 * 60 * 60 * 1000
+		let deleted = 0
 		for (const [hash, link] of magicLinks) {
-			if (Date.parse(link.expiresAt) < weekAgo) magicLinks.delete(hash)
+			if (Date.parse(link.expiresAt) < weekAgo && magicLinks.delete(hash)) deleted++
 		}
 		for (const [hash, token] of refreshTokens) {
 			const revokedAt = token.revokedAt ? Date.parse(token.revokedAt) : undefined
 			if (
-				Date.parse(token.expiresAt) < cutoff ||
-				(revokedAt !== undefined && revokedAt < weekAgo)
-			) {
+				(Date.parse(token.expiresAt) < cutoff ||
+					(revokedAt !== undefined && revokedAt < weekAgo)) &&
 				refreshTokens.delete(hash)
+			) {
+				deleted++
 			}
 		}
+		return deleted
 	}
-	/** Nothing schedules `auth.prune()` on the memory backend, so inserts sweep (at most once a
-	 * minute) — otherwise every unclicked link and every rotated token would live forever */
+	/** Nothing schedules `auth.pruneExpired()` on the memory backend, so inserts sweep (at most
+	 * once a minute) — otherwise every unclicked link and every rotated token would live forever */
 	const sweepAuthIfDue = () => {
 		const now = Date.now()
 		if (now - authSweptAt < 60_000) return
@@ -222,16 +228,21 @@ export const createMemoryRepositories = (): MemoryRepositories => {
 	}
 
 	// MARK: Rate limits helpers
-	/** Drops hits at or before `since` and keys left without any, so the map only holds keys
-	 * with hits inside the retention */
+	/**
+	 * Drops hits at or before `since` and keys left without any, so the map only holds keys with
+	 * hits inside the retention. Returns how many hits it removed.
+	 */
 	const sweepRateLimits = (scope: string, since: number) => {
 		const keys = rateLimits.get(scope)
-		if (!keys) return
+		if (!keys) return 0
+		let removed = 0
 		for (const [key, times] of keys) {
 			const recent = times.filter(time => time > since)
+			removed += times.length - recent.length
 			if (recent.length) keys.set(key, recent)
 			else keys.delete(key)
 		}
+		return removed
 	}
 
 	return {
@@ -504,7 +515,7 @@ export const createMemoryRepositories = (): MemoryRepositories => {
 				const token = refreshTokens.get(tokenHash)
 				if (token && !token.revokedAt) token.revokedAt = now()
 			},
-			prune: async () => sweepAuth(),
+			pruneExpired: async () => sweepAuth(),
 		},
 
 		rateLimits: {
@@ -535,8 +546,11 @@ export const createMemoryRepositories = (): MemoryRepositories => {
 					keys.delete(oldest)
 				}
 			},
-			prune: async before => {
-				for (const scope of rateLimits.keys()) sweepRateLimits(scope, before.getTime())
+			pruneExpired: async () => {
+				const since = Date.now() - memoryRateLimitRetentionMs
+				let removed = 0
+				for (const scope of rateLimits.keys()) removed += sweepRateLimits(scope, since)
+				return removed
 			},
 			size: scope => rateLimits.get(scope)?.size ?? 0,
 		},

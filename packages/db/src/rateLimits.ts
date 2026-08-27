@@ -1,6 +1,13 @@
 import type { Db } from './index.ts'
 import type { RateLimitsRepository } from './repositories.ts'
 
+/**
+ * Retention for the housekeeping prune: hits older than this count for nothing (longer than any
+ * window a service counts over — the contact form's is 10 min), so dropping them never changes a
+ * verdict. Kept generous so a new, longer window does not silently start losing hits.
+ */
+export const rateLimitRetentionMs = 60 * 60 * 1000
+
 // MARK: Rate limits (one row per counted hit)
 
 export const countRateLimitHits = async (
@@ -26,13 +33,17 @@ export const recordRateLimitHit = async (
 	await db.sql`insert into rate_limits (scope, key, hit_at) values (${scope}, ${key}, ${at})`
 }
 
-/** Housekeeping: drops hits older than `before` (nothing counts them any more) */
-export const pruneRateLimits = async (db: Db, before: Date): Promise<void> => {
-	await db.sql`delete from rate_limits where hit_at < ${before}`
+/**
+ * Housekeeping: drops hits older than `before` (nothing counts them any more). Returns the number
+ * of rows deleted so the caller can log a summary.
+ */
+export const pruneRateLimits = async (db: Db, before: Date): Promise<number> => {
+	const deleted = await db.sql`delete from rate_limits where hit_at < ${before}`
+	return deleted.count
 }
 
 export const createRateLimitsRepository = (db: Db): RateLimitsRepository => ({
 	count: (scope, key, since) => countRateLimitHits(db, scope, key, since),
 	record: (scope, key, at = new Date()) => recordRateLimitHit(db, scope, key, at),
-	prune: before => pruneRateLimits(db, before),
+	pruneExpired: () => pruneRateLimits(db, new Date(Date.now() - rateLimitRetentionMs)),
 })

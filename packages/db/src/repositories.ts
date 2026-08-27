@@ -171,8 +171,11 @@ export type AuthRepository = {
 	/** Revokes the token and returns it; `undefined` when unknown or already revoked */
 	consumeRefreshToken: (tokenHash: string) => Promise<RefreshToken | undefined>
 	revokeRefreshToken: (tokenHash: string) => Promise<void>
-	/** Housekeeping: drops expired links and revoked/expired tokens older than a week */
-	prune: () => Promise<void>
+	/**
+	 * Housekeeping: drops expired links and revoked/expired tokens older than a week. Resolves to
+	 * the number of rows deleted (0 on the memory backend, which sweeps itself on insert).
+	 */
+	pruneExpired: () => Promise<number>
 }
 
 // MARK: Resident (M8)
@@ -258,14 +261,17 @@ export type ResidentRepository = {
  * Sliding-window counters shared by every api task: one hit per row, scoped by feature
  * (`contact`) and keyed by the client (ip). Counting without a key gives the global total for
  * the scope. The memory implementation caps the number of keys it tracks and sweeps old hits
- * on every call; Postgres relies on the hourly `prune`.
+ * on every call; Postgres relies on the hourly `pruneExpired`.
  */
 export type RateLimitsRepository = {
 	/** Hits for `scope` (and `key` when given) strictly after `since` */
 	count: (scope: string, key: string | undefined, since: Date) => Promise<number>
 	record: (scope: string, key: string, at?: Date) => Promise<void>
-	/** Housekeeping: drops hits older than `before` */
-	prune: (before: Date) => Promise<void>
+	/**
+	 * Housekeeping: drops hits older than the retention (longer than any counted window), which no
+	 * longer affect any verdict. Resolves to the number of rows deleted (0 on the memory backend).
+	 */
+	pruneExpired: () => Promise<number>
 }
 
 export type Repositories = {
