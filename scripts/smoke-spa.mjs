@@ -102,7 +102,38 @@ const job = {
 	tokensUsed: 4_200_000,
 	gates: [
 		gate('verify', true, 'Lint and tests green\n12 tests passed', { tests: 12 }),
-		gate('review', true, 'No high findings', { findings: [{ id: 'a.ts:1', severity: 'low' }] }),
+		gate('acceptance-tests', true, '1 acceptance test green', {
+			files: { 'f0.c0': ['apps/app/test/renders.test.ts'] },
+			fixed: false,
+		}),
+		gate('review', true, '1 finding, none high/medium open', {
+			range: 'root..HEAD',
+			findings: [
+				{
+					id: 'apps/app/src/x.ts:12',
+					severity: 'low',
+					file: 'apps/app/src/x.ts',
+					line: 12,
+					claim: 'Prefer a named constant here',
+					failureScenario: 'Magic number drifts from the copy elsewhere',
+				},
+			],
+			waived: [],
+			fixed: false,
+		}),
+		gate('licence', true, '42 package(s), 3 licence(s)', {
+			packages: 42,
+			byLicence: { MIT: 30, ISC: 8, 'Apache-2.0': 4 },
+			violations: [],
+			waived: [],
+			missing: [],
+			file: 'THIRD-PARTY-LICENCES.md',
+		}),
+		gate('acceptance-check', true, '1 criterion(s) met with evidence', {
+			report: {
+				'f0.c0': { evidence: ['apps/app/test/renders.test.ts'], status: 'met' },
+			},
+		}),
 	],
 	repositoryUrl: 'https://github.com/example/smoke',
 	startedAt: now,
@@ -160,7 +191,8 @@ const deliverables = {
 
 const jobEvents = [
 	{ id: 1, jobId, type: 'started', payload: {}, createdAt: now },
-	{ id: 2, jobId, type: 'done', payload: {}, createdAt: now },
+	{ id: 2, jobId, type: 'delivery', payload: { step: 'repo', ok: true }, createdAt: now },
+	{ id: 3, jobId, type: 'done', payload: {}, createdAt: now },
 ]
 
 const installation = {
