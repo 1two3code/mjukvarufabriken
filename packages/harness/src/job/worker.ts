@@ -801,10 +801,12 @@ const hasCommits = async (repoDir: string, branch: string, signal: AbortSignal) 
 /** Commit whatever the agent left uncommitted so the branch is complete (in the worker's clone) */
 const commitLeftovers = async (dir: string, task: Task, signal: AbortSignal) => {
 	const options = { cwd: dir, signal, asWorker: true }
-	// A session's git process that was killed (turn cap, abort) can leave a stale lock behind; and
-	// the clone must stay worker-writable across sessions
-	await exec('rm', ['-f', join(dir, '.git', 'index.lock')], options)
-	await ensureShared(dir)
+	// A session's git process that was killed (turn cap, abort) can leave a stale lock behind; the
+	// job (which owns the clone's .git) removes it, then re-opens the clone's .git to the worker —
+	// `shareWithWorker`, NOT `ensureShared` (that would run `protectGitDir` on this already-shared
+	// clone and lock the worker out of its own .git, EACCES on index.lock, Fargate run cd94220e).
+	await exec('rm', ['-f', join(dir, '.git', 'index.lock')], { cwd: dir, signal })
+	await shareWithWorker(dir, { gitDir: 'shared' })
 	const add = await exec('git', ['add', '-A'], options)
 	const commit = await exec(
 		'git',
@@ -826,6 +828,11 @@ const commitLeftovers = async (dir: string, task: Task, signal: AbortSignal) => 
 	)
 	// A git error other than "nothing to commit" (e.g. a lock/permission problem) is a real
 	// failure — surface it so the task fails with the cause instead of an empty "no commits" branch
+	if (add.code || (commit.code && !nothingToCommit)) {
+		const ls = await exec('ls', ['-ldn', join(dir, '.git'), join(dir, '.git/index')], { cwd: dir })
+		const id = await exec('id', [], { ...options })
+		console.log(JSON.stringify({ message: 'commit failure diag', taskId: task.id, git: ls.stdout.trim(), worker: id.stdout.trim() }))
+	}
 	if (add.code) throw new Error(`git add failed in the task clone: ${tail(add.stderr, 5)}`)
 	if (commit.code && !nothingToCommit) {
 		throw new Error(`git commit failed in the task clone: ${tail(commit.stderr || commit.stdout, 5)}`)
