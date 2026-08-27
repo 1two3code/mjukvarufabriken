@@ -39,7 +39,7 @@ export type ReviewGateSummary = {
 	findings: ReviewFinding[]
 	/** Number of findings per severity, in `reviewSeverity` order */
 	counts: Record<ReviewSeverity, number>
-	/** Findings whose id an admin waived for this job */
+	/** Findings whose id an admin waived, matched to the finding set shown (post-fix when present) */
 	waived: number
 }
 
@@ -67,7 +67,10 @@ export const reviewGateSummary = (gate: GateReport): ReviewGateSummary | undefin
 	>
 	for (const finding of findings) counts[finding.severity] += 1
 
-	return { findings, counts, waived: asStringArray(details.waived).length }
+	// Prefer the post-fix waiver set (`waiversAfterFix`) so the count matches the post-fix findings
+	// shown above; the harness only writes `waiversAfterFix` when a fix pass ran, else `waived` holds.
+	const waived = asStringArray(details.waiversAfterFix ?? details.waived).length
+	return { findings, counts, waived }
 }
 
 // MARK: Licence (third-party-licences gate)
@@ -80,13 +83,17 @@ export const licenceGateSummary = (gate: GateReport): LicenceGateDetails | undef
 // MARK: Acceptance check (acceptance-check gate)
 export type AcceptanceGateEntry = { id: string; status: AcceptanceStatus }
 
-/** The acceptance-check gate's `details.report` as a criterion → status list, sorted by id */
+/**
+ * The acceptance-check gate's `details.report` as a criterion → status list, in numeric feature
+ * order. Ids are `f<n>.c<m>`, so a plain lexical sort would put `f10.c0` before `f2.c0`; the
+ * `numeric` collation compares each digit run as a number so feature 10 follows feature 9.
+ */
 export const acceptanceGateSummary = (gate: GateReport): AcceptanceGateEntry[] | undefined => {
 	const parsed = AcceptanceReportSchema.safeParse(asRecord(gate.details).report)
 	if (!parsed.success) return undefined
 	return Object.entries(parsed.data)
 		.map(([id, evidence]) => ({ id, status: evidence.status }))
-		.sort((a, b) => a.id.localeCompare(b.id))
+		.sort((a, b) => a.id.localeCompare(b.id, undefined, { numeric: true }))
 }
 
 /** Detail keys the structured renderers already cover, so the generic fallback skips them */

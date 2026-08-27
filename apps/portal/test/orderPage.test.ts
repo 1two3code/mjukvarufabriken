@@ -69,15 +69,31 @@ describe('Gate reports', () => {
 	})
 
 	it('Tallies review findings by severity, preferring the post-fix set', () => {
+		// After a fix pass the harness writes a fresh `findingsAfterFix`/`waiversAfterFix` pair; the
+		// pre-fix `waived` ids generally do not survive into the post-fix set. The waived count must
+		// come from `waiversAfterFix` (here b.ts:2, present post-fix), not the stale pre-fix `waived`
+		// (a.ts:1, which no longer appears) — otherwise it maps to no finding in the shown list.
 		const gate = makeGate('review', {
 			findings: [finding('a.ts:1', 'high')],
 			findingsAfterFix: [finding('b.ts:2', 'low'), finding('c.ts:3', 'medium')],
-			waived: ['b.ts:2'],
+			waived: ['a.ts:1'],
+			waiversAfterFix: ['b.ts:2'],
 		})
 		const summary = reviewGateSummary(gate)
 		expect(summary?.counts).toEqual({ high: 0, medium: 1, low: 1 })
 		expect(summary?.waived).toBe(1)
 		expect(summary?.findings).toHaveLength(2)
+	})
+
+	it('Falls back to the pre-fix waiver count when no fix pass ran', () => {
+		// No fix pass: only `findings` + `waived` are present, no `findingsAfterFix`/`waiversAfterFix`.
+		const gate = makeGate('review', {
+			findings: [finding('a.ts:1', 'high'), finding('b.ts:2', 'low')],
+			waived: ['b.ts:2'],
+		})
+		const summary = reviewGateSummary(gate)
+		expect(summary?.counts).toEqual({ high: 1, medium: 0, low: 1 })
+		expect(summary?.waived).toBe(1)
 	})
 
 	it('Drops malformed review findings and returns undefined when none are present', () => {
@@ -100,16 +116,22 @@ describe('Gate reports', () => {
 		expect(licenceGateSummary(makeGate('licence', { packages: 'lots' }))).toBeUndefined()
 	})
 
-	it('Lists acceptance criteria as id → status, sorted by id', () => {
+	it('Lists acceptance criteria as id → status, in numeric feature order', () => {
+		// f10 must follow f2/f9, not sort lexically between f1 and f2 — the criterion list stays in
+		// numeric feature order once a spec reaches 10+ features.
 		const gate = makeGate('acceptance-check', {
 			report: {
-				'f1.c0': { evidence: [], status: 'unmet' },
+				'f10.c0': { evidence: [], status: 'unmet' },
+				'f2.c1': { evidence: [], status: 'met' },
+				'f2.c0': { evidence: [], status: 'unmet' },
 				'f0.c0': { evidence: ['t.test.ts'], status: 'met' },
 			},
 		})
 		expect(acceptanceGateSummary(gate)).toEqual([
 			{ id: 'f0.c0', status: 'met' },
-			{ id: 'f1.c0', status: 'unmet' },
+			{ id: 'f2.c0', status: 'unmet' },
+			{ id: 'f2.c1', status: 'met' },
+			{ id: 'f10.c0', status: 'unmet' },
 		])
 		expect(acceptanceGateSummary(makeGate('acceptance-check'))).toBeUndefined()
 	})
