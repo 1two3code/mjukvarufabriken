@@ -71,6 +71,14 @@ const eventText = (event: JobEvent, t: TFunction) => {
 				name: payload.name,
 				summary: payload.summary ?? '',
 			})
+		case 'delivery':
+			return t(payload.ok ? 'job.event.deliveryOk' : 'job.event.deliveryFailed', {
+				step: t(`delivery.step.${String(payload.step)}`),
+				reason: payload.reason ?? '',
+			})
+		case 'notify':
+			// Admin-only: customers never receive `notify` events (redacted by the api)
+			return t('job.event.notify', { subject: payload.subject ?? '' })
 		default:
 			return JSON.stringify(payload)
 	}
