@@ -61,8 +61,22 @@ export const noHooksEnv: NodeJS.ProcessEnv = {
 	HUSKY: '0',
 }
 
+/**
+ * Git identity for every commit made inside the job — the workers' own commits and the harness's
+ * auto-commits alike. Env, not repo config: a task clone starts without config, and a worker whose
+ * commits fail with "please tell me who you are" ends its session with no commits at all
+ * (Fargate run 7e60423e, 2026-08-27: 156 turns, empty branch). Overridable by the caller's env.
+ */
+export const gitIdentityEnv: NodeJS.ProcessEnv = {
+	GIT_AUTHOR_NAME: 'Mjukvaruhuset build',
+	GIT_AUTHOR_EMAIL: 'build@mjukvaruhuset.se',
+	GIT_COMMITTER_NAME: 'Mjukvaruhuset build',
+	GIT_COMMITTER_EMAIL: 'build@mjukvaruhuset.se',
+}
+
 /** `process.env` minus credentials and cloud config — what child processes and agent sessions get */
 export const sandboxEnv = (env: NodeJS.ProcessEnv = process.env): NodeJS.ProcessEnv => ({
+	...gitIdentityEnv,
 	...Object.fromEntries(Object.entries(env).filter(([key]) => !secretEnvKey.test(key))),
 	...noHooksEnv,
 })

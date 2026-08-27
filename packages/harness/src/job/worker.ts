@@ -797,8 +797,25 @@ const hasCommits = async (repoDir: string, branch: string, signal: AbortSignal) 
 /** Commit whatever the agent left uncommitted so the branch is complete (in the worker's clone) */
 const commitLeftovers = async (dir: string, task: Task, signal: AbortSignal) => {
 	const options = { cwd: dir, signal, asWorker: true }
-	await exec('git', ['add', '-A'], options)
-	await exec('git', ['commit', '-q', '-m', `chore(${task.id}): ${task.title} (auto-commit)`], options)
+	const add = await exec('git', ['add', '-A'], options)
+	const commit = await exec(
+		'git',
+		['commit', '-q', '-m', `chore(${task.id}): ${task.title} (auto-commit)`],
+		options
+	)
+	const ahead = await exec('git', ['rev-list', '--count', 'main..HEAD'], options)
+	// Observable: which branch the clone is on and how far ahead of main it is after the auto-commit
+	const head = await exec('git', ['rev-parse', '--abbrev-ref', 'HEAD'], options)
+	console.log(
+		JSON.stringify({
+			message: 'leftovers committed',
+			taskId: task.id,
+			branch: head.stdout.trim(),
+			commitsAhead: Number(ahead.stdout.trim()) || 0,
+			addError: add.code ? tail(add.stderr, 5) : undefined,
+			commitOutput: commit.code ? tail(commit.stderr || commit.stdout, 5) : undefined,
+		})
+	)
 }
 
 /**

@@ -55,6 +55,10 @@ describe('exec', () => {
 		})
 
 		expect(env).toEqual({
+			// git identity defaults (the caller's GIT_AUTHOR_NAME wins)
+			GIT_AUTHOR_EMAIL: 'build@mjukvaruhuset.se',
+			GIT_COMMITTER_NAME: 'Mjukvaruhuset build',
+			GIT_COMMITTER_EMAIL: 'build@mjukvaruhuset.se',
 			PATH: '/usr/bin',
 			HOME: '/home/job',
 			ANTHROPIC_API_KEY: 'sk-ant',
