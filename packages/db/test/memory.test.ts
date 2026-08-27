@@ -408,7 +408,8 @@ describe('memory repositories', () => {
 			await repos.auth.insertRefreshToken({ tokenHash: 'live', userId: 'u', expiresAt: future })
 			await repos.auth.revokeRefreshToken('revoked')
 
-			await repos.auth.prune()
+			// One expired link + one expired token dropped; the just-revoked token is kept a week
+			await expect(repos.auth.pruneExpired()).resolves.toBe(2)
 
 			await expect(repos.auth.getMagicLink('old')).resolves.toBeUndefined()
 			await expect(repos.auth.getMagicLink('recent')).resolves.toBeDefined()
@@ -483,13 +484,20 @@ describe('memory repositories', () => {
 			await expect(repos.rateLimits.count('contact', 'key-600', at(-1))).resolves.toBe(1)
 		})
 
-		it('Prunes hits older than the given instant', async () => {
-			await repos.rateLimits.record('contact', 'ip-1', at(-3000))
-			await repos.rateLimits.record('contact', 'ip-1', at(-1000))
+		it('Prunes hits older than the retention window and reports how many it dropped', async () => {
+			vi.useFakeTimers({ toFake: ['Date'] })
+			try {
+				vi.setSystemTime(now)
+				await repos.rateLimits.record('contact', 'ip-1', new Date())
+				expect(repos.rateLimits.size('contact')).toBe(1)
 
-			await repos.rateLimits.prune(at(-2000))
-
-			await expect(repos.rateLimits.count('contact', 'ip-1', at(-10_000))).resolves.toBe(1)
+				// Past the retention the hit counts for nothing, so pruneExpired drops it
+				vi.setSystemTime(new Date(now.getTime() + memoryRateLimitRetentionMs + 1000))
+				await expect(repos.rateLimits.pruneExpired()).resolves.toBe(1)
+				expect(repos.rateLimits.size('contact')).toBe(0)
+			} finally {
+				vi.useRealTimers()
+			}
 		})
 	})
 })

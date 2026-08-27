@@ -1,7 +1,5 @@
 import fp from 'fastify-plugin'
-import { createMemoryRepositories } from '@mf/db'
-
-import { scheduleHousekeeping } from '#/lib/housekeeping.ts'
+import { createMemoryRepositories, rateLimitWindowStart } from '@mf/db'
 
 import type { FastifyPluginAsync } from 'fastify'
 import type { Repositories } from '@mf/db'
@@ -85,16 +83,16 @@ const plugin: FastifyPluginAsync = async app => {
 
 	/** Whether a send from `ip` right now would exceed the per-ip or global limit */
 	const isLimited = async (ip: string, now: Date) => {
-		const since = new Date(now.getTime() - windowMs)
+		// `rateLimitWindowStart` enforces the retention invariant: it throws if the window ever
+		// outgrows what the pruner keeps, so a mis-set window fails loudly instead of under-counting.
+		const since = rateLimitWindowStart(windowMs, now)
 		const global = await rateLimits().count(contactRateLimitScope, undefined, since)
 		if (global >= contactRateLimit.globalMax) return true
 		return (await rateLimits().count(contactRateLimitScope, ip, since)) >= contactRateLimit.max
 	}
 
-	// Rows older than the window count for nothing: drop them hourly (Postgres only)
-	scheduleHousekeeping(app, 'Rate-limit prune', () =>
-		db.rateLimits.prune(new Date(Date.now() - windowMs))
-	)
+	// Rows older than the window count for nothing: the `pruner` plugin drops them hourly (Postgres
+	// only) via `db.rateLimits.pruneExpired()`.
 
 	app.decorate('contactService', {
 		submit: async (message, ip) => {

@@ -2,7 +2,6 @@ import fp from 'fastify-plugin'
 import { SignJWT } from 'jose'
 
 import { EntityInvalid } from '#/lib/entityError.ts'
-import { scheduleHousekeeping } from '#/lib/housekeeping.ts'
 import { authAlgorithm } from '#/plugins/authKeys.utils.ts'
 import {
 	addDays,
@@ -87,10 +86,8 @@ const plugin: FastifyPluginAsync = async app => {
 		return { token: await signAccessToken(user), refreshToken }
 	}
 
-	// Housekeeping: nothing else deletes magic_links / refresh_tokens rows (every request and
-	// every refresh inserts one). Shortly after boot, then hourly with jitter, Postgres only — the
-	// memory repository sweeps itself on insert.
-	scheduleHousekeeping(app, 'Auth prune', () => db.auth.prune())
+	// Housekeeping: nothing else deletes magic_links / refresh_tokens rows (every request and every
+	// refresh inserts one). The `pruner` plugin runs `db.auth.pruneExpired()` hourly (Postgres only).
 
 	app.decorate('authService', {
 		requestMagicLink: async rawEmail => {

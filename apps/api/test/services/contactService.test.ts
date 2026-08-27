@@ -2,13 +2,6 @@ import { createMockContactMessage } from '#/services/__mocks__/contactService.ts
 import { contactEmail, contactRateLimit, contactRateLimitScope } from '#/services/contactService.ts'
 
 import type { FastifyInstance } from 'fastify'
-import type * as housekeeping from '#/lib/housekeeping.ts'
-
-// The scheduler is unit-tested in test/lib/housekeeping.test.ts; here only its wiring matters
-vi.mock('#/lib/housekeeping.ts', async importOriginal => ({
-	...(await importOriginal<typeof housekeeping>()),
-	scheduleHousekeeping: vi.fn().mockResolvedValue(undefined),
-}))
 
 const ip = '203.0.113.7'
 
@@ -259,26 +252,6 @@ describe('Contact Service', () => {
 			expect(limited).toBe('rateLimited')
 			expect(afterWindow).toBe('sent')
 			expect(app.email.send).toHaveBeenCalledTimes(1)
-		})
-
-		it('Prunes hits older than the window through the shared scheduler (Postgres only)', async () => {
-			// Arrange
-			vi.useFakeTimers({ toFake: ['Date'] })
-			vi.setSystemTime(new Date('2026-08-26T10:00:00.000Z'))
-			const { scheduleHousekeeping } = await import('#/lib/housekeeping.ts')
-			const call = vi
-				.mocked(scheduleHousekeeping)
-				.mock.calls.findLast(([, name]) => name === 'Rate-limit prune')
-			const prune = vi.spyOn(app.db.rateLimits, 'prune')
-
-			// Act
-			await call?.[2]()
-
-			// Assert
-			expect(call).toBeDefined()
-			expect(prune).toHaveBeenCalledWith(
-				new Date(Date.now() - contactRateLimit.windowMinutes * 60 * 1000)
-			)
 		})
 	})
 })

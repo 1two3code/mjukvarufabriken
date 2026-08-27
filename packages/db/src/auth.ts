@@ -108,12 +108,16 @@ export const revokeRefreshToken = async (db: Db, tokenHash: string): Promise<voi
 		where token_hash = ${tokenHash} and revoked_at is null`
 }
 
-/** Housekeeping: drops expired links and revoked/expired tokens older than a week */
-export const pruneAuth = async (db: Db): Promise<void> => {
-	await db.sql`delete from magic_links where expires_at < now() - interval '7 days'`
-	await db.sql`
+/**
+ * Housekeeping: drops expired links and revoked/expired tokens older than a week. Returns the
+ * number of rows deleted (links + tokens) so the caller can log a summary.
+ */
+export const pruneAuth = async (db: Db): Promise<number> => {
+	const links = await db.sql`delete from magic_links where expires_at < now() - interval '7 days'`
+	const tokens = await db.sql`
 		delete from refresh_tokens
 		where expires_at < now() or revoked_at < now() - interval '7 days'`
+	return links.count + tokens.count
 }
 
 export const createAuthRepository = (db: Db): AuthRepository => ({
@@ -127,5 +131,5 @@ export const createAuthRepository = (db: Db): AuthRepository => ({
 			: Promise.reject(new Error(`refresh token: user id "${token.userId}" is not a uuid`)),
 	consumeRefreshToken: tokenHash => consumeRefreshToken(db, tokenHash),
 	revokeRefreshToken: tokenHash => revokeRefreshToken(db, tokenHash),
-	prune: () => pruneAuth(db),
+	pruneExpired: () => pruneAuth(db),
 })
