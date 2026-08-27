@@ -144,6 +144,8 @@ type NpmLsNode = {
 	name?: string
 	version?: string
 	path?: string
+	/** Real location after symlink resolution — a workspace member points into the repo, not node_modules */
+	realpath?: string
 	private?: boolean
 	missing?: boolean
 	dependencies?: Record<string, NpmLsNode>
@@ -217,11 +219,13 @@ export const repositoryUrlOf = (pkg: PackageJson): string | undefined => {
  * `node_modules`. Only those are the customer's own code; a `private: true` flag on a package
  * fetched into `node_modules` (git/file dependency) says nothing about its licence.
  */
-const isWorkspaceOf = (repoDir: string, path: string) => {
-	const inside = relative(repoDir, path)
-	if (!inside || inside.startsWith('..')) return false
-	return !inside.split(sep).includes('node_modules')
-}
+const isWorkspaceOf = (repoDir: string, ...paths: (string | undefined)[]) =>
+	paths.some(path => {
+		if (!path) return false
+		const inside = relative(repoDir, path)
+		if (!inside || inside.startsWith('..')) return false
+		return !inside.split(sep).includes('node_modules')
+	})
 
 export type CollectedLicences = {
 	entries: LicenceEntry[]
@@ -251,16 +255,24 @@ export const collectLicences = async (
 		const path = node.path ?? join(parentPath, 'node_modules', ...name.split('/'))
 		if (node.missing || !node.version) {
 			if (name) missing.add(`${name}@${node.version ?? '?'}`)
-		} else if (!isWorkspaceOf(repoDir, path)) {
+		} else if (!isWorkspaceOf(repoDir, path, node.realpath)) {
 			const key = `${name}@${node.version}`
 			if (!seen.has(key)) {
-				const pkg = await readManifest(path, key)
-				seen.set(key, {
-					name,
-					version: node.version,
-					licence: pkg ? licenceOf(pkg) : unknownLicence,
-					repository: pkg ? repositoryUrlOf(pkg) : undefined,
-				})
+				const pkg = await readManifest(node.realpath ?? path, key)
+				const licence = pkg ? licenceOf(pkg) : unknownLicence
+				// A private package with no real licence is the repo's own code (its workspaces are
+				// symlinked into node_modules and carry no `license` field) — never published, so its
+				// UNKNOWN licence is not a redistribution concern. A private package that DOES declare
+				// a licence (a git/file dependency) is still evaluated on that licence.
+				const ownPrivateCode = (node.private || pkg?.private) && noLicence.test(licence)
+				if (!ownPrivateCode) {
+					seen.set(key, {
+						name,
+						version: node.version,
+						licence,
+						repository: pkg ? repositoryUrlOf(pkg) : undefined,
+					})
+				}
 			}
 		}
 		for (const [childName, child] of Object.entries(node.dependencies ?? {})) {
