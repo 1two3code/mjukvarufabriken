@@ -47,3 +47,4 @@ Format: date | milestone | session tokens (in/out) | notes
 | 2026-08-27 | overnight wave 4 (workflow) | ~1.99M | n/a | 21 agents / 45 min: GitHub sign-in (env-gated), resident usage billing + RDS verify-full, db-backed rate limits + prune, legal drafts; 586 → 677 tests |
 | 2026-08-27 | overnight wave 5 (workflow) | ~1.82M | n/a | 21 agents / 48 min: two-uid sandbox, licence gate, portal legal/admin/order polish + route smoke, CI/deploy bootstrap guard + README; 677 → 818 tests |
 | 2026-08-27 | overnight main session | ~250k | ~35k | budget stack → us-east-1 + bootstrap, parameter-property boot crash fix + lint rule, 4 deploys, worktree cleanup |
+| 2026-08-27 | overnight main session (morning) | ~200k | ~25k | Fargate runs #8–#9 (each found one bug: empty-JSON token claim, SDK max-turns thrown as error), reporter + turn-cap fixes, 3 job-image deploys, memory + PLAN liveness item |
