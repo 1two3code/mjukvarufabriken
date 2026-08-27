@@ -191,6 +191,16 @@ describe('parseNpmLs', () => {
 		expect(() => parseNpmLs(JSON.stringify({ name: 'x', dependencies: {} }))).toThrow(
 			'npm ls listed no dependencies'
 		)
+	})
+
+	it('Proceeds when npm reports ELSPROBLEMS but still ships the dependency tree', () => {
+		const tree = parseNpmLs(
+			JSON.stringify({
+				error: { code: 'ELSPROBLEMS', summary: 'invalid: ajv@6.15.0' },
+				dependencies: { ajv: { version: '6.15.0' } },
+			})
+		)
+		expect(Object.keys(tree.dependencies ?? {})).toEqual(['ajv'])
 		expect(() => parseNpmLs('not json')).toThrow()
 	})
 

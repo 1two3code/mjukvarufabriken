@@ -177,17 +177,33 @@ const runNpmLs: NpmLsRunner = async (repoDir, signal) => {
 	return result.stdout
 }
 
-/** Parses the `npm ls` JSON and refuses an npm-level error payload or a tree without packages */
+/**
+ * Parses the `npm ls` JSON. `npm ls` reports peer/version/extraneous problems as a top-level
+ * `error` (ELSPROBLEMS) while still emitting the whole dependency tree — a worker's install can
+ * leave such a mismatch (invalid ajv peer, Fargate run 2026-08-27) and it must not crash the gate.
+ * We only fail when there is no usable tree at all (e.g. node_modules missing).
+ */
 export const parseNpmLs = (json: string): NpmLsNode => {
 	const tree = JSON.parse(json) as NpmLsNode
+	const hasTree = Object.keys(tree.dependencies ?? {}).length > 0
+	if (hasTree) {
+		if (tree.error) {
+			const { code, summary, detail } = tree.error
+			console.log(
+				JSON.stringify({
+					message: 'npm ls reported problems (tree still usable)',
+					code: code ?? 'unknown',
+					summary: (summary ?? detail ?? '').slice(0, 300),
+				})
+			)
+		}
+		return tree
+	}
 	if (tree.error) {
 		const { code, summary, detail } = tree.error
 		throw new Error(`npm ls failed (${code ?? 'unknown'}): ${summary ?? detail ?? ''}`.trim())
 	}
-	if (!Object.keys(tree.dependencies ?? {}).length) {
-		throw new Error('npm ls listed no dependencies — is node_modules installed?')
-	}
-	return tree
+	throw new Error('npm ls listed no dependencies — is node_modules installed?')
 }
 
 const licenceOf = (pkg: PackageJson): string => {
