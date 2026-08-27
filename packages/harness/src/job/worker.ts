@@ -25,6 +25,25 @@ import type { Options, SDKMessage } from '@anthropic-ai/claude-agent-sdk'
 import type { Plan, SizeClass, Spec, Task } from '@mf/models'
 import type { TaskOutcome, TokenUsage, VerifyOutcome } from './types.ts'
 
+// MARK: Session query seam (record/replay)
+//
+// Every worker/merge/gate session reaches the Agent SDK through `runSession`, which streams from
+// `query`. It does so through this one indirection so a record/replay cassette
+// (`packages/harness/src/testing/cassette.ts`) can wrap `query` for ONE live recording or an
+// offline replay — `setSessionQuery(wrapper)` — without any other change to the session path, and
+// `setSessionQuery()` restores the real SDK. Nothing but the cassette wiring touches it.
+export type SessionQuery = (input: {
+	prompt: string
+	options: Options
+}) => AsyncIterable<SDKMessage>
+
+/** The real Agent SDK `query`, typed as a `SessionQuery` — what a record wrapper passes through to */
+export const sdkSessionQuery = query as unknown as SessionQuery
+let sessionQuery: SessionQuery = sdkSessionQuery
+export const setSessionQuery = (impl?: SessionQuery) => {
+	sessionQuery = impl ?? sdkSessionQuery
+}
+
 // MARK: Model + prompt
 
 export const defaultWorkerModel = 'claude-sonnet-5'
@@ -714,7 +733,7 @@ export const runSession = async ({
 	let reported = 0
 	let turns = 0
 	try {
-		for await (const message of query({ prompt, options })) {
+		for await (const message of sessionQuery({ prompt, options })) {
 			const messageUsageValue = messageUsage(message)
 			if (messageUsageValue && message.type === 'assistant') {
 				const delta = usage.add(message.message.id, messageUsageValue)
