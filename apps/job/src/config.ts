@@ -19,6 +19,12 @@ export type JobConfig = {
 	planModel?: string
 	workerModel?: string
 	env: string
+	/**
+	 * Record a replay cassette of this run's two model seams (planner + sessions) to this directory
+	 * (`MF_CASSETTE=<dir>` or `--record <dir>`). Off by default; a normal run is unaffected. The
+	 * captured cassette replays offline through the real `runJob` with no tokens (see docs/TESTING.md).
+	 */
+	cassetteDir?: string
 	/** M5 delivery (all optional: a missing value fails the delivery step, never the build) */
 	delivery: {
 		/** `GITHUB_TOKEN` or resolved from `GITHUB_TOKEN_SECRET_ARN`; undefined for an empty placeholder */
@@ -104,10 +110,17 @@ const resolveOptionalSecret = async (envName: string, arnEnvName: string) => {
  * `npm run job:dev -- <id>` argument.
  */
 export const loadConfig = async (argv: string[]): Promise<JobConfig> => {
-	const jobId = argv[0] || process.env.JOB_ID
+	// `--record <dir>` (or `MF_CASSETTE`) is an optional record seam; strip it from the positionals
+	const recordFlag = argv.indexOf('--record')
+	const cassetteDir = process.env.MF_CASSETTE || (recordFlag >= 0 ? argv[recordFlag + 1] : undefined)
+	const positional = argv.filter(
+		(arg, index) => !arg.startsWith('--') && !(recordFlag >= 0 && index === recordFlag + 1)
+	)
+	const jobId = positional[0] || process.env.JOB_ID
 	if (!jobId) throw new Error('JOB_ID env or a job id argument is required')
 	return {
 		jobId,
+		cassetteDir,
 		report: resolveReportTarget(),
 		anthropicApiKey: await resolveAnthropicKey(),
 		workDir: process.env.WORK_DIR || '/work',

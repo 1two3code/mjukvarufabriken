@@ -12,6 +12,7 @@
     "lint": "npm run lint --workspaces --if-present",
     "test": "vitest run",
     "e2e": "vitest run packages/harness/test/job/e2e.offline.test.ts",
+    "e2e:replay": "node --env-file-if-exists=.env packages/harness/scripts/replay-run.ts",
     "coverage": "vitest run --coverage --reporter=dot",
     "clean": "find . -maxdepth 3 -name 'package-lock.json' -exec rm -r {} \\;; find . -maxdepth 3 -name 'node_modules' -prune -exec rm -rf {} \\;; npm run clean:output",
     "clean:output": "rm -rf apps/site/dist apps/portal/dist; find . -maxdepth 3 -name 'coverage' -prune -exec rm -rf {} \\;; find . -maxdepth 3 -name 'cdk.out' -prune -exec rm -rf {} \\;",

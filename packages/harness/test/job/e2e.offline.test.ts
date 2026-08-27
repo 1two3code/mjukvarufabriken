@@ -3,15 +3,18 @@ import { tmpdir } from 'node:os'
 import { basename, dirname, join } from 'node:path'
 import { fileURLToPath } from 'node:url'
 
+import { createDryRunDeployClient } from '#job/delivery/appRunner.ts'
+import { debugKeyOf, uploadDebugBundle } from '#job/delivery/bundle.ts'
 import { createFakeDeliveryClients } from '#job/delivery/index.ts'
-import { exec } from '#job/exec.ts'
+import { exec, sandboxUser } from '#job/exec.ts'
 import { runJob } from '#job/orchestrator.ts'
 import { createLivePorts } from '#job/ports.ts'
 import { createPlanner, planToolName } from '#job/planner.ts'
 import { mergeTask } from '#job/merge.ts'
 import { reviewGate } from '#job/gateSessions.ts'
-import { runTask } from '#job/worker.ts'
+import { runSession, runTask, sessionEnv } from '#job/worker.ts'
 
+import type { ChildProcess } from 'node:child_process'
 import type Anthropic from '@anthropic-ai/sdk'
 import type { NewJobEvent, Plan, Spec } from '@mf/models'
 import type { FakeArtifactStore } from '#job/delivery/artifacts.ts'
@@ -500,6 +503,254 @@ describe('offline build-job e2e — failure paths', () => {
 
 			expect(outcome.ok).toBe(false)
 			expect(outcome.summary).toMatch(/high finding\(s\) still open/)
+		} finally {
+			await rm(root, { recursive: true, force: true })
+		}
+	}, 180_000)
+})
+
+// MARK: Abort paths — kill switch and budget, driven through the real orchestrator
+
+describe('offline build-job e2e — abort paths', () => {
+	it('kills every session and ends `killed` with no delivery when the job is killed mid-build', async () => {
+		// Pins: the kill poll (`hooks.isKilled`) aborts the shared signal, and the job ends `killed`
+		const { root, repoDir, seedCommit } = await seedRepo()
+		try {
+			// A slow worker keeps the build in flight long enough for the 5 ms kill poll to fire
+			const green = defaultHandler()
+			sessionHandler = async function* (input) {
+				if (sessionRoleOf(input.options.systemPrompt ?? '') === 'worker') {
+					await new Promise(resolve => setTimeout(resolve, 150))
+				}
+				yield* green(input)
+			}
+			const delivery = createFakeDeliveryClients()
+			const artifacts = delivery.artifacts as FakeArtifactStore
+			const { client } = fakePlanClient(plan)
+			const ports = createLivePorts({ client, delivery })
+
+			const events: NewJobEvent[] = []
+			let building = false
+			const hooks: RunJobOptions['hooks'] = {
+				emit: async event => {
+					events.push(event)
+					if (event.type === 'task_started') building = true
+				},
+				// The api flips the row to `killed`; the orchestrator sees it on the next poll
+				isKilled: async () => building,
+				pollIntervalMs: 5,
+			}
+
+			const outcome = await runJob(jobInput(repoDir, seedCommit), { ports, hooks })
+
+			expect(outcome.status).toBe('killed')
+			expect(outcome.reason).toBe('killed')
+			expect(outcome.deliverable).toBeUndefined()
+			expect(outcome.gates).toHaveLength(0)
+			const types = events.map(event => event.type)
+			expect(types).toContain('killed')
+			expect(types).toContain('notify')
+			expect(types).not.toContain('done')
+			expect(types).not.toContain('delivery')
+			// Nothing was delivered — the fake store is untouched
+			expect(artifacts.objects.size).toBe(0)
+		} finally {
+			await rm(root, { recursive: true, force: true })
+		}
+	}, 180_000)
+
+	it('aborts on the first budget breach and fails with reason `budget exceeded`, no delivery', async () => {
+		// Pins: a token breach aborts the shared signal; the plan call alone already exceeds maxTokens=1
+		const { root, repoDir, seedCommit } = await seedRepo()
+		try {
+			const delivery = createFakeDeliveryClients()
+			const artifacts = delivery.artifacts as FakeArtifactStore
+			const { client } = fakePlanClient(plan)
+			const ports = createLivePorts({ client, delivery })
+			const { hooks, types } = collectEvents()
+
+			const outcome = await runJob(
+				{
+					...jobInput(repoDir, seedCommit),
+					budget: { maxTokens: 1, maxDurationMinutes: 30, maxWorkers: 2 },
+				},
+				{ ports, hooks }
+			)
+
+			expect(outcome.status).toBe('failed')
+			expect(outcome.reason).toBe('budget exceeded')
+			expect(outcome.deliverable).toBeUndefined()
+			expect(outcome.gates).toHaveLength(0)
+			expect(types()).not.toContain('done')
+			expect(types()).not.toContain('delivery')
+			expect(artifacts.objects.size).toBe(0)
+		} finally {
+			await rm(root, { recursive: true, force: true })
+		}
+	}, 180_000)
+})
+
+// MARK: Sandbox — the two-uid setpriv/launch branch (command wrapping only, no real uid switch)
+
+describe('offline build-job e2e — sandbox uid', () => {
+	it('wraps a worker session in setpriv for the sandbox uid and points it at the worker HOME', async () => {
+		// Pins: with WORKER_UID set (a second uid), `runSession` installs the setpriv worker spawner
+		// and the worker's own HOME. We assert the command WRAPPING, not a real uid switch (that
+		// needs root and stays in exec.test.ts) — the setpriv child is spawned and killed at once.
+		const uid = process.getuid?.() ?? 0
+		const gid = process.getgid?.() ?? 0
+		vi.stubEnv('WORKER_UID', String(uid + 1))
+		vi.stubEnv('WORKER_GID', String(gid + 2))
+		const stderrSpy = vi.spyOn(process.stderr, 'write').mockImplementation(() => true)
+		try {
+			// The sandbox seam is active (a second uid, distinct from the job's own)
+			expect(sandboxUser()).toEqual({ uid: uid + 1, gid: gid + 2, home: '/home/worker' })
+			const env = sessionEnv()
+			expect(env.HOME).toBe('/home/worker')
+			expect(env.CLAUDE_CONFIG_DIR).toBe('/home/worker/.claude')
+
+			let launched: { file: string; args: string[] } | undefined
+			sessionHandler = async function* (input) {
+				const options = input.options as unknown as {
+					env: NodeJS.ProcessEnv
+					spawnClaudeCodeProcess?: (spawn: {
+						command: string
+						args: string[]
+						cwd: string
+						env: NodeJS.ProcessEnv
+						signal: AbortSignal
+					}) => ChildProcess
+				}
+				// runSession installed the worker spawner + the worker's HOME (a sandbox uid is set)
+				expect(options.env.HOME).toBe('/home/worker')
+				expect(typeof options.spawnClaudeCodeProcess).toBe('function')
+				const child = options.spawnClaudeCodeProcess!({
+					command: 'true',
+					args: ['--probe'],
+					cwd: input.options.cwd,
+					env: process.env,
+					signal: new AbortController().signal,
+				})
+				child.on('error', () => {})
+				launched = { file: child.spawnfile, args: child.spawnargs }
+				child.kill('SIGKILL')
+				yield assistantMessage()
+				yield successResult()
+			}
+
+			const dir = await mkdtemp(join(tmpdir(), 'mf-sandbox-'))
+			try {
+				const outcome = await runSession({
+					cwd: dir,
+					systemPrompt: 'You are the worker',
+					prompt: 'x',
+					signal: new AbortController().signal,
+					onUsage: () => {},
+				})
+				expect(outcome.ok).toBe(true)
+			} finally {
+				await rm(dir, { recursive: true, force: true })
+			}
+
+			// setpriv switches to the worker uid/gid, drops every capability and sets no_new_privs
+			expect(launched?.file).toBe('setpriv')
+			expect(launched?.args).toEqual([
+				'setpriv',
+				`--reuid=${uid + 1}`,
+				`--regid=${gid + 2}`,
+				'--init-groups',
+				'--inh-caps=-all',
+				'--ambient-caps=-all',
+				'--no-new-privs',
+				'--',
+				'true',
+				'--probe',
+			])
+		} finally {
+			stderrSpy.mockRestore()
+			vi.unstubAllEnvs()
+		}
+	}, 60_000)
+})
+
+// MARK: Delivery — dry-run deploy, and the failed-build debug bundle
+
+describe('offline build-job e2e — delivery variants', () => {
+	it('delivers with the dry-run deploy client: a deployUrl is produced, repo + bundle are the contract', async () => {
+		// Pins: a faked (dry-run) App Runner deploy still yields a deployUrl and never blocks delivery
+		const { root, repoDir, seedCommit } = await seedRepo()
+		try {
+			const logs: string[] = []
+			const delivery = {
+				...createFakeDeliveryClients(),
+				deploy: createDryRunDeployClient(line => logs.push(line)),
+			}
+			const artifacts = delivery.artifacts as FakeArtifactStore
+			const { client } = fakePlanClient(plan)
+			const ports = createLivePorts({ client, delivery })
+			const { events, hooks } = collectEvents()
+			const job = jobInput(repoDir, seedCommit)
+
+			const outcome = await runJob(job, { ports, hooks })
+
+			expect(outcome.status, outcome.reason).toBe('delivered')
+			// The dry-run App Runner client produced a deploy URL
+			expect(outcome.deliverable?.deployUrl).toMatch(/awsapprunner\.com$/)
+			expect(logs.some(line => line.includes('[dry-run] app runner'))).toBe(true)
+			const deployStep = events
+				.filter(event => event.type === 'delivery')
+				.map(event => event.payload as { step: string; ok: boolean })
+				.find(step => step.step === 'deploy')
+			expect(deployStep?.ok).toBe(true)
+			// Repo push + bundle are still the contract
+			expect((delivery.github as FakeGitHub).pushes).toHaveLength(1)
+			expect([...artifacts.objects.keys()]).toContain(`deliverables/${job.id}/repo.zip`)
+		} finally {
+			await rm(root, { recursive: true, force: true })
+		}
+	}, 180_000)
+
+	it('a gate that fails closed leaves a debug bundle (repo.zip + gate reports) for offline replay', async () => {
+		// Pins: apps/job archives a FAILED build (`uploadDebugBundle`) so its gates re-run locally
+		const { root, repoDir, seedCommit } = await seedRepo()
+		try {
+			const high = {
+				severity: 'high',
+				file: 'apps/api/src/index.ts',
+				line: 1,
+				claim: 'unauthenticated write',
+				failureScenario: 'anonymous request → data change',
+			}
+			sessionHandler = defaultHandler({ reviewFindings: [high] })
+			const delivery = createFakeDeliveryClients()
+			const artifacts = delivery.artifacts as FakeArtifactStore
+			const { client } = fakePlanClient(plan)
+			const ports = createLivePorts({ client, delivery })
+			const { hooks, types } = collectEvents()
+			const job = jobInput(repoDir, seedCommit)
+
+			const outcome = await runJob(job, { ports, hooks })
+
+			// The review gate fails the build closed, before delivery
+			expect(outcome.status).toBe('failed')
+			expect(outcome.gates.find(gate => gate.name === 'review')?.ok).toBe(false)
+			expect(outcome.deliverable).toBeUndefined()
+			expect(types()).not.toContain('delivery')
+
+			// apps/job/src/index.ts uploads the failed build the same way after the run
+			const files = await uploadDebugBundle({ jobId: job.id, repoDir, gates: outcome.gates, artifacts })
+			const prefix = debugKeyOf(job.id)
+			expect(prefix).toBe(`deliverables/${job.id}/debug/`)
+			expect(files.map(file => file.name)).toEqual(['repo.zip', 'gates.json', 'acceptance.json'])
+			for (const name of ['repo.zip', 'gates.json', 'acceptance.json']) {
+				expect([...artifacts.objects.keys()], name).toContain(`${prefix}${name}`)
+			}
+			const gatesJson = JSON.parse(artifacts.objects.get(`${prefix}gates.json`)!.body as string)
+			expect(gatesJson.map((gate: { name: string }) => gate.name)).toEqual([
+				'verify',
+				'acceptance-tests',
+				'review',
+			])
 		} finally {
 			await rm(root, { recursive: true, force: true })
 		}
