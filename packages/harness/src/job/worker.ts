@@ -637,6 +637,17 @@ const messageUsage = (message: SDKMessage): TokenUsage | undefined => {
 	}
 }
 
+/**
+ * Zod's `toJSONSchema` stamps `$schema: https://json-schema.org/draft/2020-12/schema` (and an `$id`
+ * when given) on the root; the CLI's validator has no 2020-12 meta-schema and refuses the whole
+ * schema ("--json-schema is not a valid JSON Schema: no schema with key or ref …", review gate,
+ * Fargate run eed8d93d 2026-08-27). The keywords carry nothing the validator needs — drop them.
+ */
+export const cliJsonSchema = (schema: Record<string, unknown>): Record<string, unknown> => {
+	const { $schema: _schema, $id: _id, ...rest } = schema
+	return rest
+}
+
 /** The CLI's own wording when it stops on `maxTurns` (surfaces as a thrown error, see runSession) */
 const maxTurnsPattern = /Reached maximum number of turns/i
 
@@ -674,7 +685,7 @@ export const runSession = async ({
 		tools: [...tools],
 		allowedTools: [...tools],
 		...(outputSchema
-			? { outputFormat: { type: 'json_schema' as const, schema: outputSchema } }
+			? { outputFormat: { type: 'json_schema' as const, schema: cliJsonSchema(outputSchema) } }
 			: {}),
 		permissionMode: 'bypassPermissions',
 		allowDangerouslySkipPermissions: true,

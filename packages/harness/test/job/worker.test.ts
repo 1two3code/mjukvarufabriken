@@ -4,6 +4,7 @@ import { join } from 'node:path'
 
 import { exec } from '#job/exec.ts'
 import {
+	cliJsonSchema,
 	createWorkerSpawner,
 	createWorktree,
 	ensureShared,
@@ -588,5 +589,13 @@ describe('hasTestFiles', () => {
 		expect(await hasTestFiles(dir)).toBe(true)
 		expect(await hasTestFiles(join(dir, 'missing'))).toBe(false)
 		await rm(dir, { recursive: true, force: true })
+	})
+})
+
+describe('cliJsonSchema', () => {
+	it('Drops the $schema/$id keywords Zod adds, keeps everything else', () => {
+		expect(
+			cliJsonSchema({ $schema: 'https://json-schema.org/draft/2020-12/schema', $id: 'x', type: 'object', properties: { a: { type: 'string' } } })
+		).toEqual({ type: 'object', properties: { a: { type: 'string' } } })
 	})
 })
