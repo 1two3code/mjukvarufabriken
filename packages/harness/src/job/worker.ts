@@ -58,10 +58,26 @@ export const workerLimits = {
 	// Measured 2026-08-26/27: a first "cleanup + i18n" task on the template takes 86–120 turns
 	// regardless of size class, so the caps leave room for it; the continuation session is the valve
 	maxTurnsBySize: { S: 80, M: 120, L: 160 } satisfies Record<SizeClass, number>,
+	/**
+	 * The foundation task (no dependencies — it owns the shared scaffolding, cleanup and i18n) costs
+	 * a size-independent 86–120 turns, so gating it on the S cap of 80 guarantees a cap on every
+	 * small build's first task. Give it this floor regardless of size class; the smaller size caps
+	 * still apply to the later, size-scaled tasks.
+	 */
+	foundationTurns: 120,
 	/** Turn cap of the one repair session — the safety valve when the cap above cut the worker off */
 	repairTurns: 60,
 	/** `verifyRepo` shows the worker at most this many lines of a failing gate */
 	gateOutputLines: 80,
+	/**
+	 * When the SDK throws on the turn cap instead of yielding the `error_max_turns` result, the
+	 * authoritative `modelUsage` never arrives (`reported` stays 0, so `usage.reconcile` is a no-op)
+	 * and only the per-assistant-message stream — which misses subagents and compaction — is counted.
+	 * Top the streamed total up by this fraction on that path so a capped-via-throw session errs
+	 * toward over- rather than under-charging the budget. Estimate until a dogfood run measures the
+	 * real reconcile delta; the yielded cap path still reconciles against the exact `modelUsage`.
+	 */
+	cappedThrowUplift: 0.1,
 }
 
 /**
@@ -751,7 +767,21 @@ export const runSession = async ({
 		// (N)" instead (Fargate run a05f333d, 2026-08-27). Same outcome for the caller: capped, not
 		// failed — the continuation session takes over.
 		if (error instanceof Error && maxTurnsPattern.test(error.message)) {
-			usage.reconcile(reported)
+			// `reported` is still 0 here — the thrown path never delivered the `result` message that
+			// carries the authoritative `modelUsage`, so `usage.reconcile(reported)` would be a no-op
+			// and the compaction/subagent top-up the yielded cap path applies would be lost, silently
+			// under-charging the budget. A precise figure is unavailable, so charge a conservative
+			// estimate (errs toward over-charging) and log the gap so the undercount is observable.
+			const streamed = usage.total
+			const topUp = usage.reconcile(Math.ceil(streamed * (1 + workerLimits.cappedThrowUplift)))
+			console.log(
+				JSON.stringify({
+					message: 'capped-via-throw: modelUsage unavailable, auxiliary usage estimated',
+					streamedTokens: streamed,
+					estimatedTopUp: topUp,
+					uplift: workerLimits.cappedThrowUplift,
+				})
+			)
 			return {
 				ok: false,
 				tokens: usage.total,
@@ -806,7 +836,11 @@ const commitLeftovers = async (dir: string, task: Task, signal: AbortSignal) => 
 	// `shareWithWorker`, NOT `ensureShared` (that would run `protectGitDir` on this already-shared
 	// clone and lock the worker out of its own .git, EACCES on index.lock, Fargate run cd94220e).
 	await exec('rm', ['-f', join(dir, '.git', 'index.lock')], { cwd: dir, signal })
-	await shareWithWorker(dir, { gitDir: 'shared' })
+	// Re-open only the clone's `.git` (new lock files need the shared group + setgid), NOT the whole
+	// tree: passing the repo root re-ran three full-tree `find` passes over node_modules on every
+	// leftover-commit — thousands of now-worker-owned entries the job can no longer chgrp/chmod, so
+	// the sweep EPERM-failed silently while paying the full traversal cost.
+	await shareWithWorker(join(dir, '.git'), { gitDir: 'shared' })
 	const add = await exec('git', ['add', '-A'], options)
 	const commit = await exec(
 		'git',
@@ -867,7 +901,10 @@ export const runTask = async ({
 	const plannedScope = gateScopeForAreas(task.areas)
 	const [lint, test] = gateCommands(plannedScope).map(renderCommand)
 	const systemPrompt = workerSystemPrompt(spec, plan, task, plannedScope)
-	const { size, maxTurns } = maxTurnsForSpec(spec)
+	const { size, maxTurns: sizeCap } = maxTurnsForSpec(spec)
+	// The foundation task (dependency-free) carries the size-independent scaffolding cost, so floor
+	// its cap at the measured foundation turns instead of the (possibly smaller) size cap.
+	const maxTurns = task.dependsOn.length === 0 ? Math.max(sizeCap, workerLimits.foundationTurns) : sizeCap
 	const notes: string[] = []
 	const noteCap = (outcome: SessionOutcome, label: string, cap: number) => {
 		if (!outcome.maxTurnsReached) return

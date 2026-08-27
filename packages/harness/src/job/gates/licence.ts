@@ -1,4 +1,4 @@
-import { readFile, writeFile } from 'node:fs/promises'
+import { readFile, realpath, writeFile } from 'node:fs/promises'
 import { join, relative, sep } from 'node:path'
 
 import { exec } from '#job/exec.ts'
@@ -259,6 +259,8 @@ export const collectLicences = async (
 	const seen = new Map<string, LicenceEntry>()
 	const unreadable: string[] = []
 	const missing = new Set<string>()
+	// The on-disk real path (follows a workspace symlink); undefined when the path is gone/unresolvable
+	const realpathOf = (path: string) => realpath(path).then(resolved => resolved, () => undefined)
 	const readManifest = async (path: string, key: string) => {
 		try {
 			return JSON.parse(await readFile(join(path, 'package.json'), 'utf8')) as PackageJson
@@ -271,24 +273,29 @@ export const collectLicences = async (
 		const path = node.path ?? join(parentPath, 'node_modules', ...name.split('/'))
 		if (node.missing || !node.version) {
 			if (name) missing.add(`${name}@${node.version ?? '?'}`)
-		} else if (!isWorkspaceOf(repoDir, path, node.realpath)) {
+			for (const [childName, child] of Object.entries(node.dependencies ?? {})) {
+				await visit(child, childName, path)
+			}
+			return
+		}
+		// `npm ls --long` omits `realpath` for symlinked workspaces (it reports `path` under
+		// node_modules and a `file:` `resolved`), so resolve the real location from disk. A node whose
+		// real path is inside the repo but outside node_modules is the customer's own workspace (their
+		// symlinked code, private and licence-less by design) and is skipped. Everything else — a real
+		// dir in node_modules, or a link pointing outside the repo — is a third-party dependency and is
+		// evaluated even when `private: true` (a private git/file dep still needs listing), so an
+		// unlicensed one never escapes both THIRD-PARTY-LICENCES.md and the violation check.
+		const real = node.realpath ?? (await realpathOf(path))
+		if (!isWorkspaceOf(repoDir, path, real)) {
 			const key = `${name}@${node.version}`
 			if (!seen.has(key)) {
-				const pkg = await readManifest(node.realpath ?? path, key)
-				const licence = pkg ? licenceOf(pkg) : unknownLicence
-				// A private package with no real licence is the repo's own code (its workspaces are
-				// symlinked into node_modules and carry no `license` field) — never published, so its
-				// UNKNOWN licence is not a redistribution concern. A private package that DOES declare
-				// a licence (a git/file dependency) is still evaluated on that licence.
-				const ownPrivateCode = (node.private || pkg?.private) && noLicence.test(licence)
-				if (!ownPrivateCode) {
-					seen.set(key, {
-						name,
-						version: node.version,
-						licence,
-						repository: pkg ? repositoryUrlOf(pkg) : undefined,
-					})
-				}
+				const pkg = await readManifest(real ?? path, key)
+				seen.set(key, {
+					name,
+					version: node.version,
+					licence: pkg ? licenceOf(pkg) : unknownLicence,
+					repository: pkg ? repositoryUrlOf(pkg) : undefined,
+				})
 			}
 		}
 		for (const [childName, child] of Object.entries(node.dependencies ?? {})) {

@@ -399,6 +399,26 @@ describe('licenceGate', () => {
 		expect(details.violations.map(v => v.waiverId)).toEqual(['licence:gpl-lib@0.0.0'])
 	})
 
+	// A private, UNLICENSED third-party dep (a git/file dependency) lives under node_modules, not in
+	// the repo's workspaces, so `private: true` must not exempt it: it is a real redistribution
+	// concern and must be flagged, not silently dropped from both the report and the violation check.
+	it('Flags a private + UNLICENSED package installed under node_modules', async () => {
+		const tree = await installFixture(root, [
+			mit('a'),
+			{
+				name: 'closed-lib',
+				version: '2.3.4',
+				private: true,
+				manifest: { private: true, license: 'UNLICENSED' },
+			},
+		])
+
+		const { outcome, details } = await runGate(root, tree)
+
+		expect(outcome.ok).toBe(false)
+		expect(details.violations.map(v => v.waiverId)).toEqual(['licence:closed-lib@2.3.4'])
+	})
+
 	it('Fails on deprecated GPL ids and free-text licences with a reason per package', async () => {
 		const tree = await installFixture(root, [
 			{ name: 'old', version: '1.0.0', manifest: { license: 'GPL-3.0' } },

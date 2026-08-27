@@ -26,4 +26,23 @@ describe('runSession', () => {
 		expect(outcome.tokens).toBeGreaterThan(0)
 		expect(outcome.result).toMatch(/maximum number of turns/)
 	})
+
+	// The thrown cap path never delivers the `result` message, so the authoritative `modelUsage`
+	// (which the yielded cap path reconciles against for subagents/compaction) is unavailable. It
+	// must still top the streamed total up by the conservative uplift, not leave it under-charged.
+	it('Applies the conservative auxiliary top-up on the thrown cap path', async () => {
+		const deltas: number[] = []
+		const outcome = await runSession({
+			cwd: '/tmp',
+			systemPrompt: 'x',
+			prompt: 'y',
+			signal: new AbortController().signal,
+			onUsage: usage => deltas.push(usage.inputTokens + usage.outputTokens),
+			maxTurns: 100,
+		})
+
+		// Streamed 15 (10 + 5), uplifted by 10 % → ceil(16.5) = 17, so a 2-token top-up follows.
+		expect(outcome.tokens).toBe(17)
+		expect(deltas).toEqual([15, 2])
+	})
 })

@@ -32,7 +32,8 @@ const task: Task = {
 	id: 'app-landing',
 	title: 'Landing page',
 	description: 'Build it',
-	dependsOn: [],
+	// A dependent (non-foundation) task: gated on the size cap, not the foundation floor
+	dependsOn: ['app-foundation'],
 	areas: ['apps/app'],
 	acceptanceCriteriaIds: ['f0.c0'],
 }
@@ -223,6 +224,29 @@ describe('runTask', () => {
 			'apps/app/src/x.ts',
 			'packages/models/schemas/Order.ts',
 		])
+	})
+
+	it('Floors the foundation task (no dependencies) at the foundation turn count, above the S cap', async () => {
+		const foundationTask: Task = { ...task, id: 'app-foundation', dependsOn: [] }
+		const foundationPlan: Plan = { summary: 'one task', tasks: [foundationTask] }
+		const sessions = fakeSessions([
+			{ edits: { 'apps/app/src/x.ts': 'x' }, outcome: capped },
+			{ edits: { 'apps/app/src/y.ts': 'y' }, outcome: {} },
+		])
+		const outcome = await runTask({
+			task: foundationTask,
+			spec,
+			plan: foundationPlan,
+			repoDir,
+			signal,
+			onUsage,
+			ports: { ...sessions, ...fakeVerify([]) },
+		})
+		// Size S caps at 80, but the dependency-free foundation task is floored at the foundation cost
+		expect(outcome.notes).toEqual([
+			`worker session hit its turn cap (${workerLimits.foundationTurns} turns for size S)`,
+		])
+		expect(workerLimits.foundationTurns).toBeGreaterThan(workerLimits.maxTurnsBySize.S)
 	})
 
 	it('Fails a session that errored without hitting its cap', async () => {
