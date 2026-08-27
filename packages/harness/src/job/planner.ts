@@ -104,7 +104,7 @@ export const renderSpecForPlanning = (spec: Spec) => {
 		.join('\n\n')
 }
 
-const findToolInput = (message: Anthropic.Message) => {
+const findToolUse = (message: Anthropic.Message) => {
 	const block = message.content.find(
 		(item): item is Anthropic.ToolUseBlock => item.type === 'tool_use' && item.name === planToolName
 	)
@@ -113,8 +113,10 @@ const findToolInput = (message: Anthropic.Message) => {
 			`Planner: model did not call ${planToolName} (stop_reason ${message.stop_reason})`
 		)
 	}
-	return block.input
+	return block
 }
+
+const findToolInput = (message: Anthropic.Message) => findToolUse(message).input
 
 /** Zod + DAG validation of a raw plan; throws with a precise reason */
 export const parsePlan = (input: unknown): Plan => {
@@ -188,13 +190,23 @@ export const createPlanner = ({ client, model, maxTokens = 16_000 }: PlannerOpti
 				return parsePlan(findToolInput(first))
 			} catch (error) {
 				const reason = error instanceof Error ? error.message : String(error)
+				// The correction must come back as a tool_result for the first call's tool_use id;
+				// a plain-text user turn after an assistant tool_use is a 400 (Fargate run 2026-08-27)
+				const toolUseId = findToolUse(first).id
 				const retry = await call(
 					[
 						...messages,
 						{ role: 'assistant', content: first.content },
 						{
 							role: 'user',
-							content: `The plan was rejected: ${reason}. Submit a corrected plan.`,
+							content: [
+								{
+									type: 'tool_result',
+									tool_use_id: toolUseId,
+									is_error: true,
+									content: `The plan was rejected: ${reason}. Submit a corrected plan.`,
+								},
+							],
 						},
 					],
 					signal,

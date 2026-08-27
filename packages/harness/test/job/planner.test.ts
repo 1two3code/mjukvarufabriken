@@ -121,7 +121,13 @@ describe('planner', () => {
 		expect(create).toHaveBeenCalledTimes(2)
 		const retryMessages = create.mock.calls[1]![0].messages
 		expect(retryMessages).toHaveLength(3)
-		expect(String(retryMessages[2]!.content)).toMatch(/rejected: .*cycle/)
+		// The correction is a tool_result answering the first call's tool_use (a plain-text turn
+		// after an assistant tool_use is a 400 from the API)
+		const correction = retryMessages[2]!.content as Anthropic.ToolResultBlockParam[]
+		expect(correction[0]!.type).toBe('tool_result')
+		expect(correction[0]!.tool_use_id).toBe('toolu_1')
+		expect(correction[0]!.is_error).toBe(true)
+		expect(String(correction[0]!.content)).toMatch(/rejected: .*cycle/)
 	})
 
 	it('Fails when the corrected plan is still invalid', async () => {
