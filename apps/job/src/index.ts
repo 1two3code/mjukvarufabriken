@@ -4,6 +4,9 @@
  * `npm run job:dev`), seeds the customer repo from the template, runs the `@mf/harness`
  * orchestrator and streams status / tokens / events back the same way.
  */
+import { writeFile } from 'node:fs/promises'
+import { join } from 'node:path'
+
 import Anthropic from '@anthropic-ai/sdk'
 import {
 	appNameOf,
@@ -12,15 +15,19 @@ import {
 	debugKeyOf,
 	exec,
 	runJob,
+	sdkSessionQuery,
+	setSessionQuery,
 	slugify,
 	uploadDebugBundle,
 } from '@mf/harness'
+import { Cassette, recordQuery, recordSpecEngineClient } from '@mf/harness/testing'
 
 import { loadConfig } from '#/config.ts'
 import { gitIdentity, seedRepo } from '#/repo.ts'
 import { createApiReporter, createDbReporter } from '#/reporter.ts'
 
 import type { NewJobEvent } from '@mf/models'
+import type { SpecEngineClient } from '@mf/harness'
 import type { JobReporter } from '#/reporter.ts'
 
 const log = (message: string, extra?: Record<string, unknown>) =>
@@ -140,8 +147,22 @@ try {
 		...config.delivery,
 		workerModel: config.workerModel,
 	})
+	// Record seam (off unless `MF_CASSETTE`/`--record <dir>`): wrap the planner client and the Agent
+	// SDK `query()` so this one live run writes a cassette that replays offline with no tokens.
+	let client: SpecEngineClient = new Anthropic({ apiKey: config.anthropicApiKey })
+	if (config.cassetteDir) {
+		const cassette = await Cassette.open(config.cassetteDir, 'record')
+		client = recordSpecEngineClient(client, cassette)
+		setSessionQuery(recordQuery(sdkSessionQuery, cassette))
+		// Persist the job so the cassette replays standalone (`npm run e2e:replay -- <dir>`)
+		await writeFile(
+			join(config.cassetteDir, 'job.json'),
+			JSON.stringify({ id: jobId, spec: job.spec, budget: job.budget, delivery: deliveryTarget() }, null, 2)
+		)
+		log('recording cassette', { jobId, dir: config.cassetteDir })
+	}
 	const ports = createLivePorts({
-		client: new Anthropic({ apiKey: config.anthropicApiKey }),
+		client,
 		planModel: config.planModel,
 		workerModel: config.workerModel,
 		delivery: deliveryClients,
