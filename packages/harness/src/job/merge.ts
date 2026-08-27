@@ -41,7 +41,7 @@ export const repairSystemPrompt = (spec: Spec, task: Task, files: string[]) =>
 Conflicted files:
 ${files.map(file => `- ${file}`).join('\n')}
 
-Resolve every conflict so that BOTH the existing main behaviour and the task's work are kept, remove all conflict markers, make sure the project still lints and tests (\`npm run lint\`, \`npm test\`), then \`git add\` the resolved files. Do NOT run \`git commit\`, \`git merge --abort\` or change branches — the harness completes the merge.
+Resolve every conflict so that BOTH the existing main behaviour and the task's work are kept, remove all conflict markers and make sure the project still lints and tests (\`npm run lint\`, \`npm test\`). Edit the files only — do NOT run \`git add\`, \`git commit\`, \`git merge --abort\` or change branches (the repository index is not yours to write; the harness stages the files and completes the merge).
 
 Task description for context:
 ${task.description}
@@ -97,7 +97,7 @@ export const mergeTask = async ({
 	const session = await runSession({
 		cwd: repoDir,
 		systemPrompt: repairSystemPrompt(spec, task, files),
-		prompt: `Resolve the merge conflicts in: ${files.join(', ')}. Then run lint + tests and git add the files.`,
+		prompt: `Resolve the merge conflicts in: ${files.join(', ')}. Then run lint + tests. Do not stage or commit — the harness does.`,
 		signal,
 		onUsage: usage => {
 			tokens += totalTokens(usage)
@@ -107,6 +107,12 @@ export const mergeTask = async ({
 		maxTurns: 60,
 	})
 
+	// The session runs as the worker uid and cannot write main's index (the job's own .git), so
+	// the job stages the repaired files itself before checking what is still unmerged
+	// (Fargate run 43e7f528, 2026-08-27: six files "still conflicted" that were resolved on disk)
+	if (!signal.aborted && session.ok) {
+		await exec('git', ['add', '--', ...files], { cwd: repoDir, signal })
+	}
 	const remaining = signal.aborted
 		? files
 		: [

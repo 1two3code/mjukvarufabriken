@@ -26,7 +26,8 @@ It ships with an example "Item" entity that workers replace or remove.
 
 Rules for the plan:
 - 2 to 12 tasks. Every task is a self-contained unit of work a worker can finish in one session with no context except the spec and the task description. Be concrete: name files, components, routes, schemas.
-- Split by AREA so parallel tasks rarely touch the same files (e.g. one task for models + api routes, another for the SPA feature). Tasks that touch the same files must depend on each other.
+- Split by AREA so parallel tasks NEVER edit the same files (e.g. one task for models + api routes, another for the SPA feature). Tasks that touch the same files must depend on each other.
+- The first (foundation) task owns every shared file: it sets up the page/route composition with placeholder sections that later tasks fill in (each later task edits only its own component/section files, never the page that composes them), installs the test setup (vitest + testing library) and every dependency the plan needs, and adds the shared i18n keys' structure. Parallel tasks must not edit package.json, the lockfile, tsconfig, test setup files or a page/layout another task also edits — put such work in a task the others depend on.
 - Shared foundations first: a task other tasks build on (models, scaffolding, removing the Item example, i18n keys) must be a dependency of the tasks that use it.
 - Every acceptance criterion of the spec must be covered by at least one task via acceptanceCriteriaIds ("f<feature index>.c<criterion index>", zero-based).
 - Each task description must say what "done" means: which acceptance criteria it satisfies and that lint + tests must pass.
