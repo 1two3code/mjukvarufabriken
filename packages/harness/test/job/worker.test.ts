@@ -156,14 +156,14 @@ describe('gateCommands', () => {
 })
 
 describe('maxTurnsForSpec', () => {
-	it('Caps by the spec size class, S 60 / M 100 / L 150', () => {
-		expect(maxTurnsForSpec({ ...spec, sizeClass: 'S' })).toEqual({ size: 'S', maxTurns: 60 })
-		expect(maxTurnsForSpec({ ...spec, sizeClass: 'M' })).toEqual({ size: 'M', maxTurns: 100 })
-		expect(maxTurnsForSpec({ ...spec, sizeClass: 'L' })).toEqual({ size: 'L', maxTurns: 150 })
+	it('Caps by the spec size class, S 80 / M 120 / L 160', () => {
+		expect(maxTurnsForSpec({ ...spec, sizeClass: 'S' })).toEqual({ size: 'S', maxTurns: 80 })
+		expect(maxTurnsForSpec({ ...spec, sizeClass: 'M' })).toEqual({ size: 'M', maxTurns: 120 })
+		expect(maxTurnsForSpec({ ...spec, sizeClass: 'L' })).toEqual({ size: 'L', maxTurns: 160 })
 	})
 
 	it('Estimates the size when the spec has none (an empty spec is S)', () => {
-		expect(maxTurnsForSpec(spec)).toEqual({ size: 'S', maxTurns: 60 })
+		expect(maxTurnsForSpec(spec)).toEqual({ size: 'S', maxTurns: 80 })
 	})
 })
 

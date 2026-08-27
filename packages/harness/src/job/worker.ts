@@ -55,7 +55,9 @@ export const workerLimits = {
 	 */
 	scopedTaskGate: true,
 	/** Turn cap of the implementation session per spec size class */
-	maxTurnsBySize: { S: 60, M: 100, L: 150 } satisfies Record<SizeClass, number>,
+	// Measured 2026-08-26/27: a first "cleanup + i18n" task on the template takes 86–120 turns
+	// regardless of size class, so the caps leave room for it; the continuation session is the valve
+	maxTurnsBySize: { S: 80, M: 120, L: 160 } satisfies Record<SizeClass, number>,
 	/** Turn cap of the one repair session — the safety valve when the cap above cut the worker off */
 	repairTurns: 60,
 	/** `verifyRepo` shows the worker at most this many lines of a failing gate */
@@ -634,6 +636,9 @@ const messageUsage = (message: SDKMessage): TokenUsage | undefined => {
 	}
 }
 
+/** The CLI's own wording when it stops on `maxTurns` (surfaces as a thrown error, see runSession) */
+const maxTurnsPattern = /Reached maximum number of turns/i
+
 /**
  * One Claude Agent SDK `query()` session, confined to `cwd`, non-interactive
  * (`bypassPermissions` — the container is the sandbox; there is nobody to ask) and limited to the
@@ -725,6 +730,20 @@ export const runSession = async ({
 			}
 		}
 	} catch (error) {
+		// The SDK (0.3.x) does not always yield the `error_max_turns` result: when the CLI exits on
+		// the cap it throws "Claude Code returned an error result: Reached maximum number of turns
+		// (N)" instead (Fargate run a05f333d, 2026-08-27). Same outcome for the caller: capped, not
+		// failed — the continuation session takes over.
+		if (error instanceof Error && maxTurnsPattern.test(error.message)) {
+			usage.reconcile(reported)
+			return {
+				ok: false,
+				tokens: usage.total,
+				result: withStderr(error.message),
+				maxTurnsReached: true,
+				structuredOutput,
+			}
+		}
 		if (error instanceof Error) error.message = withStderr(error.message)
 		throw error
 	} finally {

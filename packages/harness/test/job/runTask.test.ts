@@ -138,9 +138,9 @@ describe('runTask', () => {
 			ok: true,
 			tokens: 30,
 			branch: 'task/app-landing',
-			notes: ['worker session hit its turn cap (60 turns for size S)'],
+			notes: ['worker session hit its turn cap (80 turns for size S)'],
 		})
-		expect(sessions.prompts[1]).toContain('cut off by its turn cap (60 turns for size S)')
+		expect(sessions.prompts[1]).toContain('cut off by its turn cap (80 turns for size S)')
 		expect(sessions.prompts[1]).toContain('the gate (`npm run lint --if-present -w apps/app`')
 		expect(verify.calls).toHaveLength(2)
 		expect(log).toHaveBeenCalledWith(
@@ -148,7 +148,7 @@ describe('runTask', () => {
 				message: 'turn cap reached',
 				taskId: 'app-landing',
 				session: 'worker session',
-				cap: 60,
+				cap: 80,
 				size: 'S',
 			})
 		)
@@ -170,9 +170,9 @@ describe('runTask', () => {
 			ports: { ...sessions, ...verify },
 		})
 		expect(outcome.ok).toBe(true)
-		expect(outcome.notes).toEqual(['worker session hit its turn cap (60 turns for size S)'])
+		expect(outcome.notes).toEqual(['worker session hit its turn cap (80 turns for size S)'])
 		expect(sessions.prompts[1]).toContain(
-			'Verification failed after your work (your session hit its turn cap: 60 turns for size S)'
+			'Verification failed after your work (your session hit its turn cap: 80 turns for size S)'
 		)
 		expect(sessions.prompts[1]).toContain('eslint: boom')
 	})
@@ -197,7 +197,7 @@ describe('runTask', () => {
 		})
 		expect(outcome.ok).toBe(false)
 		expect(outcome.reason).toBe(
-			`eslint: still boom (worker session hit its turn cap (60 turns for size S); repair session hit its turn cap (${workerLimits.repairTurns} turns for size S))`
+			`eslint: still boom (worker session hit its turn cap (80 turns for size S); repair session hit its turn cap (${workerLimits.repairTurns} turns for size S))`
 		)
 	})
 
