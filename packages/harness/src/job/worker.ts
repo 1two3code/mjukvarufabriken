@@ -370,7 +370,8 @@ export const fetchTaskBranch = async (
 			dir,
 			`+refs/heads/${branch}:refs/heads/${branch}`,
 		],
-		{ cwd: repoDir, signal }
+		// The job's git keeps its ambient caps so the upload-pack child can switch to the worker uid
+		{ cwd: repoDir, signal, keepCapabilities: true }
 	)
 }
 

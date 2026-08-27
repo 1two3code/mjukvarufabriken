@@ -295,4 +295,11 @@ describe('shared work dir', () => {
 			await rm(dir, { recursive: true, force: true })
 		}
 	})
+
+	it('launch: keepCapabilities spawns the command as is even with a sandbox user (never as worker)', () => {
+		const user = { uid: 1001, gid: 1001, home: '/home/worker' }
+		expect(launch('git', ['fetch'], { user, keepCapabilities: true })).toEqual({ command: 'git', args: ['fetch'] })
+		expect(launch('git', ['fetch'], { user }).command).toBe('setpriv')
+		expect(() => launch('git', [], { user, asWorker: true, keepCapabilities: true })).toThrow(/asWorker/)
+	})
 })

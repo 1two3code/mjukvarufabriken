@@ -16,6 +16,14 @@ export type ExecOptions = {
 	 */
 	asWorker?: boolean
 	/**
+	 * Spawn the command as is, keeping the job's ambient capabilities (CAP_SETUID/SETGID/KILL).
+	 * Only for the job's own trusted commands whose *children* must still be able to switch to the
+	 * worker uid — `git fetch --upload-pack=setpriv --reuid=worker …` (`fetchTaskBranch`): wrapped
+	 * in `setpriv --ambient-caps=-all` like everything else, the upload-pack child cannot setresuid
+	 * (Fargate run 20baf983, 2026-08-27). Never combined with `asWorker`.
+	 */
+	keepCapabilities?: boolean
+	/**
 	 * Run the command in its own process group, killed whole on timeout/abort/exit (default: on
 	 * for `asWorker` with a sandbox user — the worker's children must not outlive the command)
 	 */
@@ -113,9 +121,17 @@ export const launchCommandLine = ({ command, args }: Launch) => [command, ...arg
 export const launch = (
 	command: string,
 	args: string[],
-	{ asWorker = false, user = sandboxUser() }: { asWorker?: boolean; user?: SandboxUser } = {}
+	{
+		asWorker = false,
+		keepCapabilities = false,
+		user = sandboxUser(),
+	}: { asWorker?: boolean; keepCapabilities?: boolean; user?: SandboxUser } = {}
 ): Launch => {
 	if (!user) return { command, args }
+	if (keepCapabilities) {
+		if (asWorker) throw new Error('launch: keepCapabilities cannot be combined with asWorker')
+		return { command, args }
+	}
 	const switchUser = asWorker
 		? [`--reuid=${user.uid}`, `--regid=${user.gid}`, '--init-groups']
 		: []
@@ -172,12 +188,13 @@ export const exec = (
 		env,
 		timeoutMs = 15 * 60_000,
 		asWorker = false,
+		keepCapabilities = false,
 		processGroup = asWorker && sandboxUser() !== undefined,
 	}: ExecOptions
 ): Promise<ExecResult> =>
 	new Promise((resolve, reject) => {
 		applySharedUmask()
-		const launched = launch(command, args, { asWorker })
+		const launched = launch(command, args, { asWorker, keepCapabilities })
 		const grouped = processGroup
 		const child = spawn(launched.command, launched.args, {
 			cwd,
