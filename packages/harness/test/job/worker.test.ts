@@ -278,7 +278,7 @@ describe('shareWithWorker', () => {
 			await shareWithWorker(dir)
 			expect(await mode(join(dir, 'node_modules/pkg/index.js'))).toBe(0o644)
 			expect(await mode(join(dir, 'template/node_modules/pkg/index.js'))).toBe(0o644)
-			expect(await mode(join(dir, 'node_modules/pkg'))).toBe(0o775)
+			expect(await mode(join(dir, 'node_modules/pkg'))).toBe(0o2775)
 			expect(await mode(join(dir, 'src/a.ts'))).toBe(0o664)
 		} finally {
 			restore()
@@ -305,7 +305,8 @@ describe('shareWithWorker', () => {
 			await fakeGit(clone)
 			await shareWithWorker(clone, { gitDir: 'shared' })
 			expect(await mode(join(clone, '.git/config'))).toBe(0o664)
-			expect(await mode(join(clone, '.git'))).toBe(0o775)
+			// shared dirs are setgid so worker-created entries stay in the shared group
+			expect(await mode(join(clone, '.git'))).toBe(0o2775)
 			await rm(clone, { recursive: true, force: true })
 		} finally {
 			restore()

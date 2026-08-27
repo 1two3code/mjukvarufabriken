@@ -275,6 +275,10 @@ export const shareWithWorker = async (dir: string, { gitDir = 'private' }: Share
 	await exec('find', [dir, ...prune, ...select, '-exec', 'chmod', 'g+rwX', '{}', '+'], {
 		cwd: dir,
 	})
+	// setgid on directories: everything either uid creates under a shared dir inherits the shared
+	// group and stays group-writable, so a worker can always create `.git/index.lock` (EACCES on
+	// it failed worker commits on Fargate run b6a5c09f, 2026-08-27)
+	await exec('find', [dir, ...prune, '-type', 'd', '-exec', 'chmod', 'g+s', '{}', '+'], { cwd: dir })
 	if (gitDir === 'private') await protectGitDir(dir)
 	shared.add(dir)
 }
@@ -797,6 +801,10 @@ const hasCommits = async (repoDir: string, branch: string, signal: AbortSignal) 
 /** Commit whatever the agent left uncommitted so the branch is complete (in the worker's clone) */
 const commitLeftovers = async (dir: string, task: Task, signal: AbortSignal) => {
 	const options = { cwd: dir, signal, asWorker: true }
+	// A session's git process that was killed (turn cap, abort) can leave a stale lock behind; and
+	// the clone must stay worker-writable across sessions
+	await exec('rm', ['-f', join(dir, '.git', 'index.lock')], options)
+	await ensureShared(dir)
 	const add = await exec('git', ['add', '-A'], options)
 	const commit = await exec(
 		'git',
@@ -804,8 +812,8 @@ const commitLeftovers = async (dir: string, task: Task, signal: AbortSignal) => 
 		options
 	)
 	const ahead = await exec('git', ['rev-list', '--count', 'main..HEAD'], options)
-	// Observable: which branch the clone is on and how far ahead of main it is after the auto-commit
 	const head = await exec('git', ['rev-parse', '--abbrev-ref', 'HEAD'], options)
+	const nothingToCommit = /nothing to commit/i.test(commit.stdout + commit.stderr)
 	console.log(
 		JSON.stringify({
 			message: 'leftovers committed',
@@ -813,9 +821,15 @@ const commitLeftovers = async (dir: string, task: Task, signal: AbortSignal) => 
 			branch: head.stdout.trim(),
 			commitsAhead: Number(ahead.stdout.trim()) || 0,
 			addError: add.code ? tail(add.stderr, 5) : undefined,
-			commitOutput: commit.code ? tail(commit.stderr || commit.stdout, 5) : undefined,
+			commitError: commit.code && !nothingToCommit ? tail(commit.stderr || commit.stdout, 5) : undefined,
 		})
 	)
+	// A git error other than "nothing to commit" (e.g. a lock/permission problem) is a real
+	// failure — surface it so the task fails with the cause instead of an empty "no commits" branch
+	if (add.code) throw new Error(`git add failed in the task clone: ${tail(add.stderr, 5)}`)
+	if (commit.code && !nothingToCommit) {
+		throw new Error(`git commit failed in the task clone: ${tail(commit.stderr || commit.stdout, 5)}`)
+	}
 }
 
 /**
