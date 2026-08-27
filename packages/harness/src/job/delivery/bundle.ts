@@ -5,10 +5,15 @@ import { extname, join, relative } from 'node:path'
 import { exec, git, tail } from '#job/exec.ts'
 import { ensureShared } from '#job/worker.ts'
 
-import type { DeliverableFile, DeliverableFileName } from '@mf/models'
+import { acceptanceReportOf } from './types.ts'
+
+import type { DeliverableFile, DeliverableFileName, GateReport } from '@mf/models'
 import type { ArtifactStore } from './types.ts'
 
 export const deliverableKeyOf = (jobId: string) => `deliverables/${jobId}/`
+
+/** Where a failed build's debug archive goes, so its gates can be re-run locally without a rebuild */
+export const debugKeyOf = (jobId: string) => `${deliverableKeyOf(jobId)}debug/`
 
 /** `git archive` of `main` as a zip in a temp dir; returns the bytes */
 export const archiveMain = async (repoDir: string, signal?: AbortSignal) => {
@@ -65,6 +70,45 @@ export const uploadBundle = async ({
 		['TEST-REPORT.md', docs['TEST-REPORT.md']],
 		['gates.json', gatesJson],
 		['acceptance.json', acceptanceJson],
+	]
+	const files: DeliverableFile[] = []
+	for (const [name, body] of entries) {
+		const key = `${prefix}${name}`
+		await artifacts.putObject({ key, body, contentType: contentTypeOf(name) })
+		const size = typeof body === 'string' ? Buffer.byteLength(body) : body.byteLength
+		files.push({ name, key, size })
+	}
+	return files
+}
+
+export type DebugBundleInput = {
+	jobId: string
+	repoDir: string
+	artifacts: ArtifactStore
+	/** Gate reports gathered so far (may be empty when the build failed before the gates) */
+	gates: GateReport[]
+	signal?: AbortSignal
+}
+
+/**
+ * Uploads the built repository (`git archive` of `main`) and the gate/acceptance reports of a
+ * FAILED job under `deliverables/<jobId>/debug/`, so a real build can be pulled once and its gates
+ * re-run locally forever (`gates-demo --repo <dir>`) instead of paying for another live rebuild.
+ * Best-effort: the caller swallows its errors and only invokes it when the artifact store is real
+ * (a bucket is configured) — the same real-S3-in-dry-run rule as the delivery bundle.
+ */
+export const uploadDebugBundle = async ({
+	jobId,
+	repoDir,
+	artifacts,
+	gates,
+	signal,
+}: DebugBundleInput): Promise<DeliverableFile[]> => {
+	const prefix = debugKeyOf(jobId)
+	const entries: [DeliverableFileName, Uint8Array | string][] = [
+		['repo.zip', await archiveMain(repoDir, signal)],
+		['gates.json', JSON.stringify(gates, null, 2)],
+		['acceptance.json', JSON.stringify(acceptanceReportOf(gates) ?? {}, null, 2)],
 	]
 	const files: DeliverableFile[] = []
 	for (const [name, body] of entries) {

@@ -9,9 +9,11 @@ import {
 	appNameOf,
 	createLiveDeliveryClients,
 	createLivePorts,
+	debugKeyOf,
 	exec,
 	runJob,
 	slugify,
+	uploadDebugBundle,
 } from '@mf/harness'
 
 import { loadConfig } from '#/config.ts'
@@ -134,11 +136,15 @@ try {
 	// The review gate diffs everything the workers did against this commit
 	const seedCommit = (await exec('git', ['rev-parse', 'HEAD'], { cwd: repoDir })).stdout.trim()
 
+	const deliveryClients = createLiveDeliveryClients({
+		...config.delivery,
+		workerModel: config.workerModel,
+	})
 	const ports = createLivePorts({
 		client: new Anthropic({ apiKey: config.anthropicApiKey }),
 		planModel: config.planModel,
 		workerModel: config.workerModel,
-		delivery: createLiveDeliveryClients({ ...config.delivery, workerModel: config.workerModel }),
+		delivery: deliveryClients,
 	})
 	const delivery = deliveryTarget()
 	log('delivery target', { jobId, ...delivery, dryRun: config.delivery.dryRun })
@@ -169,6 +175,30 @@ try {
 			},
 		}
 	)
+
+	// A job that failed AFTER the build (the plan ran) leaves a real repository behind. Archive it
+	// and the gate reports to `deliverables/<jobId>/debug/` so the build can be pulled once and its
+	// gates re-run locally forever (`gates-demo --repo <dir>`) — no rebuild. Best-effort, and only
+	// when the artifact store is real (a bucket is configured; dry-run with a bucket still uploads,
+	// the same rule as the delivery bundle), so a job without ARTIFACTS_BUCKET is unaffected.
+	if (outcome.status !== 'delivered' && outcome.plan && deliveryClients.artifacts.kind !== 'none') {
+		try {
+			const files = await uploadDebugBundle({
+				jobId,
+				repoDir,
+				gates: outcome.gates,
+				artifacts: deliveryClients.artifacts,
+			})
+			log('debug bundle uploaded', {
+				jobId,
+				key: debugKeyOf(jobId),
+				store: deliveryClients.artifacts.kind,
+				files: files.map(file => file.name),
+			})
+		} catch (error) {
+			log('debug bundle upload failed', { jobId, reason: (error as Error).message })
+		}
+	}
 
 	// The terminal write never overrides a kill that landed after the last poll; usage, the plan
 	// and the gate reports are still persisted on the killed row (the reporter keeps them).
