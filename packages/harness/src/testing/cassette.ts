@@ -1,6 +1,6 @@
 import { createHash } from 'node:crypto'
 import { appendFile, mkdir, readdir, readFile, rm, writeFile } from 'node:fs/promises'
-import { dirname, join, relative } from 'node:path'
+import { dirname, join, relative, resolve, sep } from 'node:path'
 
 import type { Options, SDKMessage } from '@anthropic-ai/claude-agent-sdk'
 import type Anthropic from '@anthropic-ai/sdk'
@@ -97,6 +97,8 @@ export class Cassette {
 	// Replay state: ordered entries per (t + systemHash), with a consume cursor.
 	private readonly buckets = new Map<string, CassetteEntry[]>()
 	private readonly cursor = new Map<string, number>()
+	// Record state: a serialize-appends queue so parallel worker sessions can't interleave lines.
+	private writeChain: Promise<void> = Promise.resolve()
 
 	private constructor(dir: string, mode: CassetteMode) {
 		this.dir = dir
@@ -136,8 +138,23 @@ export class Cassette {
 		}
 	}
 
+	/**
+	 * Append one JSONL line. A single `appendFile` opens with O_APPEND and loops `write()` until the
+	 * whole buffer is flushed; a session entry (base64 of every changed file) easily spans several
+	 * `write()` syscalls, so two concurrent record calls — real parallel workers each awaiting
+	 * `recordSession()` — could interleave their chunks into a line that is not valid JSON. Chaining
+	 * every append behind the previous one serializes the writes so each line lands whole and in call
+	 * order. The chain swallows its own rejections so one failed write can't wedge later appends, while
+	 * each caller still awaits — and so still sees — its own write's outcome.
+	 */
 	private async append(entry: CassetteEntry) {
-		await appendFile(this.file, `${JSON.stringify(entry)}\n`)
+		const line = `${JSON.stringify(entry)}\n`
+		const done = this.writeChain.then(() => appendFile(this.file, line))
+		this.writeChain = done.then(
+			() => {},
+			() => {}
+		)
+		await done
 	}
 
 	// MARK: record
@@ -235,10 +252,31 @@ export const captureTreeChanges = async (
 	return { writes, deletes }
 }
 
+/**
+ * Resolve a cassette-supplied path under `cwd` and refuse anything that escapes it. A cassette the
+ * recorder produced can't hold an escaping path (`snapshotTree` keys on `relative(dir, full)` and
+ * skips symlinks), but replay re-applies writes and deletes taken verbatim from a JSONL file that a
+ * replay run accepts from an arbitrary directory. A hand-crafted or tampered entry with `..` (or an
+ * absolute path) would otherwise let `rm`/`writeFile` touch files outside the throwaway replay repo,
+ * so confine every applied path to `cwd` and fail loudly on the ones that don't stay inside it.
+ */
+const resolveConfined = (cwd: string, segments: string[]): string => {
+	const base = resolve(cwd)
+	const full = resolve(base, ...segments)
+	if (full !== base && !full.startsWith(base + sep)) {
+		throw new Error(
+			`cassette: refusing to apply a recorded change outside the replay repo: ${segments.join('/')}`
+		)
+	}
+	return full
+}
+
 const applyTreeChanges = async (cwd: string, writes: FileWrite[], deletes: string[]) => {
-	for (const del of deletes) await rm(join(cwd, del), { force: true }).catch(() => {})
+	for (const del of deletes) {
+		await rm(resolveConfined(cwd, del.split(/[\\/]/)), { force: true }).catch(() => {})
+	}
 	for (const write of writes) {
-		const full = join(cwd, ...write.path.split(/[\\/]/))
+		const full = resolveConfined(cwd, write.path.split(/[\\/]/))
 		await mkdir(dirname(full), { recursive: true })
 		await writeFile(full, Buffer.from(write.base64, 'base64'))
 	}

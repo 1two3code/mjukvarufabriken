@@ -63,6 +63,31 @@ describe('cassette — record', () => {
 		})
 	})
 
+	it('Serializes concurrent appends so parallel workers can not interleave a line', async () => {
+		await withDir(async dir => {
+			const cassette = await Cassette.open(dir, 'record')
+			// Each session carries a large body (base64 of a changed file spans several write()
+			// syscalls); firing them at once is what interleaves un-serialized appendFile calls.
+			const big = 'x'.repeat(256 * 1024)
+			const sessions = Array.from({ length: 12 }, (_, i) =>
+				cassette.recordSession({
+					systemHash: systemHashOf(`worker-${i}`),
+					request: { prompt: `task ${i}` },
+					messages: [result()],
+					writes: [{ path: `changed-${i}.ts`, base64: Buffer.from(big + i).toString('base64') }],
+					deletes: [],
+				})
+			)
+			await Promise.all(sessions)
+
+			const lines = (await readFile(join(dir, 'cassette.jsonl'), 'utf8')).trim().split('\n')
+			expect(lines).toHaveLength(12)
+			// Every line is a whole, valid JSON object — no chunk of one landed inside another.
+			const prompts = lines.map(line => (JSON.parse(line) as { request: { prompt: string } }).request.prompt)
+			expect(prompts.sort()).toEqual(Array.from({ length: 12 }, (_, i) => `task ${i}`).sort())
+		})
+	})
+
 	it('systemHashOf is stable and prompt-sensitive, over strings and text blocks', () => {
 		expect(systemHashOf('abc')).toBe(systemHashOf('abc'))
 		expect(systemHashOf('abc')).not.toBe(systemHashOf('abd'))
@@ -163,6 +188,58 @@ describe('cassette — query wrapper (session side effects)', () => {
 				play.assertDrained()
 			})
 			await rm(recCwd + '.cassette', { recursive: true, force: true })
+		})
+	})
+
+	it('Replay refuses a recorded write whose path escapes the replay repo', async () => {
+		await withDir(async parent => {
+			const cwd = join(parent, 'repo')
+			await mkdir(cwd, { recursive: true })
+			const outside = join(parent, 'outside.txt')
+			await writeFile(outside, 'original')
+
+			// A hand-crafted / tampered cassette whose write path climbs out of cwd with `..`.
+			const cassetteDir = join(parent, 'cassette')
+			await mkdir(cassetteDir, { recursive: true })
+			const entry = {
+				t: 'session',
+				systemHash: systemHashOf('evil'),
+				request: { prompt: 'p' },
+				messages: [],
+				writes: [{ path: '../outside.txt', base64: Buffer.from('pwned').toString('base64') }],
+				deletes: [],
+			}
+			await writeFile(join(cassetteDir, 'cassette.jsonl'), `${JSON.stringify(entry)}\n`)
+
+			const play = await Cassette.open(cassetteDir, 'replay')
+			await expect(drain(replayQuery(play), 'evil', cwd)).rejects.toThrow(/outside the replay repo/)
+			// The file outside cwd is untouched.
+			expect(await readFile(outside, 'utf8')).toBe('original')
+		})
+	})
+
+	it('Replay refuses a recorded delete whose path escapes the replay repo', async () => {
+		await withDir(async parent => {
+			const cwd = join(parent, 'repo')
+			await mkdir(cwd, { recursive: true })
+			const outside = join(parent, 'secret.txt')
+			await writeFile(outside, 'keep me')
+
+			const cassetteDir = join(parent, 'cassette')
+			await mkdir(cassetteDir, { recursive: true })
+			const entry = {
+				t: 'session',
+				systemHash: systemHashOf('evil'),
+				request: { prompt: 'p' },
+				messages: [],
+				writes: [],
+				deletes: ['../secret.txt'],
+			}
+			await writeFile(join(cassetteDir, 'cassette.jsonl'), `${JSON.stringify(entry)}\n`)
+
+			const play = await Cassette.open(cassetteDir, 'replay')
+			await expect(drain(replayQuery(play), 'evil', cwd)).rejects.toThrow(/outside the replay repo/)
+			expect(await readFile(outside, 'utf8')).toBe('keep me')
 		})
 	})
 
