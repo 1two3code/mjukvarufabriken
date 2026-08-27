@@ -38,6 +38,11 @@ need Anthropic. The e2e's negative cases pin those classes so a regression fails
 | merge conflict → repair session → staged + merged | merge-repair staging (“still conflicted” after on-disk resolution) |
 | first plan invalid → retry sends a `tool_result` | the planner `tool_result` 400 (plain-text correction after a tool_use) |
 | review returns an unwaived high finding → gate fails closed | the independent review gate failing open |
+| job killed mid-build → ends `killed`, no delivery | the kill poll (`hooks.isKilled`) aborts every session |
+| tiny `maxTokens` → first breach aborts `failed` (`budget exceeded`) | the shared budget aborting on the first over-limit usage |
+| `WORKER_UID` set → a session is wrapped in `setpriv --reuid …` | the two-uid sandbox spawner (command wrapping asserted, no real uid switch) |
+| a gate fails closed → `uploadDebugBundle` writes `debug/repo.zip` + reports | the failed-build archive apps/job uploads for offline gate replay |
+| dry-run App Runner deploy → a `deployUrl` and repo + bundle still the contract | delivery never blocked by a faked deploy |
 
 The e2e is part of the normal `npm test` run (it lives in the `@mf/harness` vitest project) and is
 kept fast on purpose (< ~60 s): `node_modules` is hard-linked into the seeded repo, and the tasks
@@ -52,9 +57,33 @@ day-to-day loop. When a live build fails after the build phase, the job uploads 
 build can be pulled **once** and its gates re-run locally forever with `npm run gates:demo -- --repo <dir>`
 — no rebuild.
 
-## Future: record/replay cassettes
+## Record/replay cassettes — seed an offline run from one real build
 
-A `--record`/replay cassette over the two seams (`SpecEngineClient` + `query()`) could seed offline
-runs from a single real build — capture one live run's plan and session streams, then replay them
-into the offline harness for a higher-fidelity regression. Designed later; the canned handler above
-is enough for the plumbing.
+The offline e2e's handler is hand-written. A **cassette**
+(`packages/harness/src/testing/cassette.ts`, exported as `@mf/harness/testing`) captures one real
+run instead, over the same two seams — the planner's `SpecEngineClient` and the Agent SDK `query()`
+each session streams from (reached through the `setSessionQuery` seam in `worker.ts`) — and replays
+it through the **real** `runJob` with zero tokens and zero network.
+
+```sh
+npm run e2e:replay                 # replay the committed fixture (test/fixtures/cassette)
+npm run e2e:replay -- <dir>        # replay a cassette apps/job recorded (see below)
+```
+
+A cassette is a directory with `cassette.jsonl` (one JSON line per interaction: the plan, then each
+session) plus `job.json` (the `{ spec, budget, delivery }` needed to drive `runJob`). Each **session**
+line carries not only the SDK message stream but the files the session changed under its worktree —
+the agent's edits are the point of the build — so replay re-applies them, then the real merges,
+`verify`/licence gates, the replayed model gates and delivery run exactly as they would live. The
+matcher is deterministic (`systemHashOf`): the **next** unconsumed entry whose kind + system-prompt
+hash matches, so parallel tasks (distinct prompts) never collide and a planner retry (same prompt)
+still replays in order. Git SHAs and temp paths are normalised out of the hash so it is stable
+across the recorded and replayed repos. A request with no recorded entry, or a recorded entry never
+replayed, is a clear error.
+
+**Recording** one live build: run `apps/job` with `MF_CASSETTE=<dir>` (or `--record <dir>`). The two
+seams pass through to the real client/SDK and every request+response is appended; `job.json` is
+written alongside. Normal runs (no flag) are untouched. Then `npm run e2e:replay -- <dir>` replays
+it offline forever. The committed fixture under `packages/harness/test/fixtures/cassette/` is a tiny
+one-task build used by `e2e.replay.test.ts` (record→replay round-trip + committed-fixture replay);
+regenerate it with `MF_WRITE_FIXTURE=1 vitest run …/e2e.replay.test.ts -t "records one build"`.
