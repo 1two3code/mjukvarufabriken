@@ -18,6 +18,16 @@ Phased: first **qa + live**, then full **dev / qa / live**.
   with a **resident LLM wired into that running server**. The customer chats with the LLM; it makes
   changes (aesthetic first, then broader), the running app updates live (hot reload), they see it
   immediately. The customer may simply call this "dev" and spend most of their time here.
+  - **Resident LLM as a requirements journal (Hasse 2026-08-28).** The resident does more than
+    live frontend tweaks: as it works with the customer it **notices and asks the questions that go
+    beyond "just frontend"** — data model, backend/API, integrations, auth/roles, business rules,
+    infra, scale, edge cases — and **writes down the answers**. It maintains a structured
+    *iteration brief* (open questions + decisions + context) for this specific customer/project, and
+    **delivers that brief back to mjukvaruhuset as the input to the next full factory iteration**.
+    This bridges the two loops: the fast in-dev live-edit loop and the next one-shot(ish) factory
+    build. It also turns the customer's ad-hoc requests into captured requirements the factory can
+    build against — so v0.1 → v0.2 is a real spec, not a re-guess. Ties to the spec engine
+    (`@mf/harness` planner) consuming the brief, and to per-customer project memory.
 - **qa** — a release-candidate mirror of live. Changes promoted from dev land here; the QA gates
   (M4) run against it before it can go to live. "qa and live are the same most of the time."
 - **live** — production, the URL the customer's users hit. Promotion is dev → qa → live.
