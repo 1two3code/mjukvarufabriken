@@ -1,5 +1,5 @@
 import { spawn } from 'node:child_process'
-import { access } from 'node:fs/promises'
+import { access, readFile, readdir } from 'node:fs/promises'
 import { join } from 'node:path'
 
 import { killProcessGroup, launch, sandboxEnv, tail } from '#job/exec.ts'
@@ -25,7 +25,7 @@ export const defaultReadyPattern = /Server listening/i
 
 // MARK: Boot target
 
-/** The server entry the delivered container runs (`node <entry>`); the template api's `src/index.ts` */
+/** The server entry the delivered container runs by default (`node <entry>`); the template api's */
 export const serverEntry = 'apps/api/src/index.ts'
 
 const exists = async (path: string) => {
@@ -37,17 +37,77 @@ const exists = async (path: string) => {
 	}
 }
 
+/** File extensions Node can run directly (`.ts` via type-stripping) — a start-script entry must be one */
+const runnableExtensions = ['.ts', '.mts', '.cts', '.mjs', '.cjs', '.js']
+const isRunnableEntry = (token: string) => runnableExtensions.some(extension => token.endsWith(extension))
+
+/**
+ * The server entry named by the repo's root `package.json` `start` script, when it runs a file
+ * that exists on disk (`"start": "node apps/server/src/index.ts"`, `"node dist/index.js"`, …). The
+ * first token of the script that looks runnable and exists wins; node flags and non-existent paths
+ * are skipped. Returns undefined when there is no package.json, no start script, or its entry is
+ * absent (e.g. `npm run -w …` indirection) — the caller then scans the apps.
+ */
+const startScriptEntry = async (repoDir: string): Promise<string | undefined> => {
+	let start: string | undefined
+	try {
+		const pkg = JSON.parse(await readFile(join(repoDir, 'package.json'), 'utf8')) as {
+			scripts?: Record<string, string>
+		}
+		start = pkg.scripts?.start
+	} catch {
+		return undefined
+	}
+	if (!start) return undefined
+	for (const token of start.split(/\s+/)) {
+		if (isRunnableEntry(token) && (await exists(join(repoDir, token)))) return token
+	}
+	return undefined
+}
+
+/**
+ * The first `apps/<app>/src/index.ts` that exists, preferring an app literally named `api` (the
+ * template's), then any other app — so a generated app that renamed its api (`apps/server`, …)
+ * still boots. Returns undefined when there is no `apps/` dir or no such entry (a static site).
+ */
+const scanAppEntries = async (repoDir: string): Promise<string | undefined> => {
+	let apps: string[]
+	try {
+		apps = (await readdir(join(repoDir, 'apps'), { withFileTypes: true }))
+			.filter(entry => entry.isDirectory())
+			.map(entry => entry.name)
+	} catch {
+		return undefined
+	}
+	const ordered = [...apps].sort((a, b) => (a === 'api' ? -1 : b === 'api' ? 1 : a.localeCompare(b)))
+	for (const app of ordered) {
+		const entry = join('apps', app, 'src', 'index.ts')
+		if (await exists(join(repoDir, entry))) return entry
+	}
+	return undefined
+}
+
+/** The real server entry (relative to `repoDir`), or undefined when the repo has no server to boot */
+export const serverEntryOf = async (repoDir: string): Promise<string | undefined> => {
+	const fromStart = await startScriptEntry(repoDir)
+	if (fromStart) return fromStart
+	const fromScan = await scanAppEntries(repoDir)
+	if (fromScan) return fromScan
+	return (await exists(join(repoDir, serverEntry))) ? serverEntry : undefined
+}
+
 /**
  * The command that boots the built server, or `undefined` when the repo has no server to boot
- * (a purely static site delivered without an api). Only the template's `apps/api/src/index.ts`
- * is recognised today; a generated app that renamed its entry needs the env/boot manifest (TODO).
+ * (a purely static site). Finds the real entry from the repo's `start` script or by scanning
+ * `apps/<app>/src/index.ts` (not only the fixed template path), so a generated app that renamed its
+ * api still smoke-boots.
  */
 export const resolveBootTarget = async (
 	repoDir: string
-): Promise<{ command: string; args: string[] } | undefined> =>
-	(await exists(join(repoDir, serverEntry)))
-		? { command: process.execPath, args: [serverEntry] }
-		: undefined
+): Promise<{ command: string; args: string[] } | undefined> => {
+	const entry = await serverEntryOf(repoDir)
+	return entry ? { command: process.execPath, args: [entry] } : undefined
+}
 
 // MARK: Boot primitive
 
@@ -145,10 +205,11 @@ export const bootArtifact = ({
 /**
  * !!! LIVE-UNVERIFIED — spawns the built repo's server, never exercised by a test. !!!
  *
- * The delivery `BootCheck` that boots `apps/api/src/index.ts` of the built repo. A repo with no
- * server entry (a static-only delivery) is a pass — there is nothing to crash. The required
- * runtime env is passed in by delivery (today: the preview auth contract only — the full
- * app-declared env manifest is a follow-up, TODO).
+ * The delivery `BootCheck` that boots the built repo's real server entry (`resolveBootTarget`:
+ * the `start` script or a scanned `apps/<app>/src/index.ts`, not only the template path). A repo with
+ * no server entry (a static-only delivery) is a pass — there is nothing to crash. The required
+ * runtime env is passed in by delivery, resolved from the app's own env manifest (generated app
+ * secrets + auth contract + placeholders), so an app requiring arbitrary secrets boots here too.
  */
 export const createNodeBootCheck = (
 	options: { readyPattern?: RegExp; timeoutMs?: number } = {}

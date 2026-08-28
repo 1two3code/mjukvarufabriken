@@ -35,6 +35,19 @@ const previewAuthEnv = (auth?: PreviewAuth) =>
 			]
 		: []
 
+/**
+ * The container `environment` list: the auth contract first, then the app's full required runtime
+ * env (`env`, from delivery's env manifest — generated secrets + placeholders) overriding it, so an
+ * app requiring arbitrary secrets runs live. `env` last wins, and a Map dedupes by name. Without an
+ * `env` (older callers / static deliveries) it falls back to the fixed generated app-secret set.
+ */
+const containerEnvironment = (previewAuth?: PreviewAuth, env?: Record<string, string>) => {
+	const appEnv = env ? Object.entries(env).map(([name, value]) => ({ name, value })) : appSecretsEnv()
+	const merged = new Map<string, string>()
+	for (const { name, value } of [...previewAuthEnv(previewAuth), ...appEnv]) merged.set(name, value)
+	return [...merged].map(([name, value]) => ({ name, value }))
+}
+
 /** The PUBLIC ingress endpoint of the active configuration, once ECS has populated it */
 /** The endpoint may already carry a scheme (real AWS returns `https://…on.aws`); don't double it */
 const toHttpsUrl = (endpoint: string) => (/^https?:\/\//i.test(endpoint) ? endpoint : `https://${endpoint}`)
@@ -179,7 +192,7 @@ export const createEcsExpressDeployClient = ({
 	}
 
 	return {
-		deployFromRepo: async ({ serviceName, source, signal }) => {
+		deployFromRepo: async ({ serviceName, source, env, signal }) => {
 			const name = expressServiceName(serviceName)
 			const { imageUri } = await imageBuilder.build({ imageTag: name, source, signal })
 			if (signal?.aborted) throw abortError()
@@ -198,7 +211,7 @@ export const createEcsExpressDeployClient = ({
 				primaryContainer: {
 					image: imageUri,
 					containerPort,
-					environment: [...previewAuthEnv(previewAuth), ...appSecretsEnv()],
+					environment: containerEnvironment(previewAuth, env),
 					// Always wire the log group so a boot crash lands in CloudWatch, not just an exit code
 					awsLogsConfiguration: { logGroup, logStreamPrefix: name },
 				},
@@ -216,6 +229,8 @@ export const createEcsExpressDeployClient = ({
 
 export type FakeDeploy = DeployClient & {
 	deployments: { serviceName: string; repositoryUrl: string; branch: string; source: { bucket: string; key: string } }[]
+	/** The runtime env passed alongside each deployment (the app's required set), parallel to `deployments` */
+	envs: (Record<string, string> | undefined)[]
 }
 
 /** Placeholder preview URL for the fakes/dry-run (cosmetic — the shape ECS Express hands out) */
@@ -225,9 +240,12 @@ const fakeUrl = (name: string, region = 'eu-north-1') =>
 export const createFakeDeployClient = (fail = false): FakeDeploy => {
 	const fake: FakeDeploy = {
 		deployments: [],
-		deployFromRepo: async ({ signal: _signal, ...input }) => {
+		envs: [],
+		// `env` is recorded separately so `deployments` keeps its stable four-key shape for assertions
+		deployFromRepo: async ({ signal: _signal, env, ...input }) => {
 			if (fail) throw new Error('fake: ECS Express deploy failed')
 			fake.deployments.push(input)
+			fake.envs.push(env)
 			return { url: fakeUrl(input.serviceName) }
 		},
 	}
