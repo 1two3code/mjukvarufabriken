@@ -55,6 +55,14 @@ export type CodeBuildOptions = {
  * `BatchGetBuilds` until it reaches a terminal status, honouring `signal`. It returns the
  * `<ecrRepositoryUri>:<imageTag>` the buildspec pushed to. The CodeBuild API is stable and
  * pre-cutoff; this is marked live-unverified only because it is never run in CI.
+ *
+ * GAP — NOT YET WIRED (finalize when live delivery is turned on): the build has no PER-JOB source.
+ * `StartBuild` passes no `sourceLocationOverride`, so it would rebuild the CodeBuild project's
+ * fixed source every time, not this job's repo. Before a real multi-customer deploy, either (a)
+ * upload this job's built repo to S3 (e.g. `deliverables/<jobId>/source.zip`, before the deploy
+ * step) and pass `sourceTypeOverride:'S3'` + `sourceLocationOverride:'<bucket>/<key>'`, or (b) point
+ * the CodeBuild project at the pushed GitHub repo with a source-credential. This needs the
+ * `mjukvaruhuset` org + a live run to verify, so it is intentionally left for that step.
  */
 export const createCodeBuildImageBuilder = ({
 	project,
