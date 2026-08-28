@@ -93,6 +93,17 @@ Express URL, but the container **crashlooped (exit 1) → 503**. Three real gaps
    `/mf/<env>/express` + a per-service stream prefix (verify the job path does too).
 Areas: `packages/harness/src/job/delivery/ecsExpress.ts`, delivery config, harness worker (env
 manifest), acceptance gate (boot the container).
+4. **CJS/ESM interop crashes the runtime (masked in-process).** After fixing the env, the container
+   still crashlooped: `import { RRule } from 'rrule'` (a CommonJS-only package) throws *"does not
+   provide an export named 'RRule'"* under Node's type-stripping runtime — in **two** files
+   (`apps/api/src/lib/recurringTodos.ts`, `packages/models/schemas/Todo.ts`). It **passed `verify`
+   + `acceptance-tests` in-process** (vitest/esbuild wraps CJS interop) but crashes the real
+   `node src/index.ts`. Fixes: (a) the acceptance gate MUST **boot the built artifact** — a smoke
+   `node src/index.ts` (or `docker run`) with the required env, asserting `Server listening`, as a
+   CodeBuild/gate step; running it locally caught both crashes in seconds. (b) a lint rule / worker
+   guidance: no named ESM imports of CJS-only deps — use `import pkg from 'x'; const {Y}=pkg`. (c)
+   the template should document the Node-type-stripping runtime constraints workers must honour.
+   **The overarching lesson from this whole salvage: in-process green ≠ the artifact boots.**
 
 ## Not in this wave (bigger, separate)
 - **Org account vending** ([org-accounts.md](org-accounts.md)) — its own focused build.
