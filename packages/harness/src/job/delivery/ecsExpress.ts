@@ -23,6 +23,31 @@ export const expressServiceName = (name: string) =>
 		.replace(/^-+/, '')
 		.slice(0, 255) || 'mf-app'
 
+/**
+ * The per-customer fence value stamped as `Customer=<slug>` on the Express service and everything
+ * delivery provisions. @mf/org `deprovision` REQUIRES this tag: a real (dryRun:false)
+ * suspend/teardown is scoped to BOTH `Service=mf-delivery` AND `Customer=<slug>`, so a destructive
+ * sweep can never span customers or the whole platform (@mf/org constants CUSTOMER_TAG_KEY).
+ *
+ * The value is derived from the job-unique service name `mf-<job8>-<slug>` by stripping the
+ * `mf-<job8>-` prefix and normalising the remainder to a valid @mf/org slug (lowercase, hyphen
+ * separated, 2–40 chars — @mf/org `SlugSchema`, which `deprovision` parses the tag back through).
+ * Deriving it here — rather than threading a new field through the delivery orchestrator — keeps
+ * the tag a self-contained property of the service the client creates.
+ */
+export const customerTagValue = (serviceName: string): string => {
+	const withoutPrefix = expressServiceName(serviceName).replace(/^mf-[0-9a-f]{1,8}-/i, '')
+	const slug = (withoutPrefix || serviceName)
+		.toLowerCase()
+		.replace(/[^a-z0-9-]+/g, '-')
+		.replace(/-+/g, '-')
+		.replace(/^-+|-+$/g, '')
+		.slice(0, 40)
+		.replace(/-+$/g, '')
+	// @mf/org SlugSchema requires ≥2 chars; pad a degenerate slug so the fence stays parseable.
+	return slug.length >= 2 ? slug : `mf-${slug}`.slice(0, 40)
+}
+
 /** The api's auth env (the same `previewAuth` the App Runner client wrote into `apprunner.yaml`) */
 import { appSecretsEnv } from './appSecrets.ts'
 
@@ -207,7 +232,12 @@ export const createEcsExpressDeployClient = ({
 				cpu: '256',
 				memory: '512',
 				clientToken: createIdempotencyToken(name),
-				tags: [{ key: 'Service', value: 'mf-delivery' }],
+				// `Service=mf-delivery` is the discovery fence; `Customer=<slug>` is the per-customer
+				// fence @mf/org deprovision REQUIRES to scope a real suspend/teardown to one customer.
+				tags: [
+					{ key: 'Service', value: 'mf-delivery' },
+					{ key: 'Customer', value: customerTagValue(name) },
+				],
 				primaryContainer: {
 					image: imageUri,
 					containerPort,

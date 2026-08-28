@@ -10,6 +10,7 @@ const defaultOrder: Order = {
 	orgId: 'org-1',
 	name: 'Gym booking',
 	status: 'drafting',
+	lifecycle: 'active',
 	createdAt: '2026-08-26T10:00:00.000Z',
 	updatedAt: '2026-08-26T10:00:00.000Z',
 }

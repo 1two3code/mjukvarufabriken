@@ -520,4 +520,62 @@ describe('memory repositories', () => {
 			}
 		})
 	})
+
+	describe('lifecycle & account (wave 9)', () => {
+		it('Records the vended AWS account on the org', async () => {
+			const org = await repos.users.insertOrg({ name: 'Acme' })
+			expect(org.awsAccountId).toBeUndefined()
+
+			const linked = await repos.users.linkAwsAccount(org.id, {
+				accountId: '123456789012',
+				slug: 'acme',
+			})
+			expect(linked).toMatchObject({ awsAccountId: '123456789012', awsAccountSlug: 'acme' })
+			expect((await repos.users.getOrg(org.id))?.awsAccountId).toBe('123456789012')
+			expect(await repos.users.linkAwsAccount('missing', { accountId: '1', slug: 's' })).toBeUndefined()
+		})
+
+		it('Compare-and-sets the order lifecycle, guarding the from-state', async () => {
+			const order = await repos.orders.insert({ id: 'o1', orgId: 'org', name: 'App' })
+			expect(order.lifecycle).toBe('active')
+
+			// A wrong from-state is refused
+			expect(await repos.orders.setLifecycle('o1', ['suspended'], 'torn_down')).toBeUndefined()
+
+			const suspended = await repos.orders.setLifecycle('o1', ['active'], 'suspended')
+			expect(suspended?.lifecycle).toBe('suspended')
+			expect(suspended?.lifecycleChangedAt).toBeDefined()
+
+			const resumed = await repos.orders.setLifecycle('o1', ['suspended'], 'active')
+			expect(resumed?.lifecycle).toBe('active')
+		})
+
+		it('Stores the customer fence slug on the order', async () => {
+			await repos.orders.insert({ id: 'o1', orgId: 'org', name: 'App' })
+			const updated = await repos.orders.setCustomerSlug('o1', 'app-11111111')
+			expect(updated?.customerSlug).toBe('app-11111111')
+			expect(await repos.orders.setCustomerSlug('missing', 'x')).toBeUndefined()
+		})
+
+		it('Lists suspended orders whose change is older than the cutoff, oldest first', async () => {
+			vi.useFakeTimers({ toFake: ['Date'] })
+			try {
+				vi.setSystemTime(new Date('2026-08-01T00:00:00.000Z'))
+				await repos.orders.insert({ id: 'old', orgId: 'org', name: 'Old' })
+				await repos.orders.setLifecycle('old', ['active'], 'suspended')
+
+				vi.setSystemTime(new Date('2026-08-20T00:00:00.000Z'))
+				await repos.orders.insert({ id: 'fresh', orgId: 'org', name: 'Fresh' })
+				await repos.orders.setLifecycle('fresh', ['active'], 'suspended')
+
+				// An active order is never a candidate
+				await repos.orders.insert({ id: 'active', orgId: 'org', name: 'Active' })
+
+				const due = await repos.orders.listSuspendedBefore(new Date('2026-08-10T00:00:00.000Z'))
+				expect(due.map(order => order.id)).toEqual(['old'])
+			} finally {
+				vi.useRealTimers()
+			}
+		})
+	})
 })

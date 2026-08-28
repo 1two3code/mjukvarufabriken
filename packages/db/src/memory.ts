@@ -111,6 +111,7 @@ export const createMemoryRepositories = (): MemoryRepositories => {
 		name: order.name,
 		status,
 		approveBeforeDeliver: false,
+		lifecycle: 'active',
 		createdBy: order.createdBy,
 		createdAt: now(),
 		updatedAt: now(),
@@ -425,6 +426,35 @@ export const createMemoryRepositories = (): MemoryRepositories => {
 				entry.order = { ...entry.order, approveBeforeDeliver: enabled, updatedAt: now() }
 				return clone(entry.order)
 			},
+			setLifecycle: async (orderId, from, to) => {
+				const entry = orders.get(orderId)
+				if (!entry || !from.includes(entry.order.lifecycle)) return undefined
+				entry.order = {
+					...entry.order,
+					lifecycle: to,
+					lifecycleChangedAt: now(),
+					updatedAt: now(),
+				}
+				return clone(entry.order)
+			},
+			setCustomerSlug: async (orderId, customerSlug) => {
+				const entry = orders.get(orderId)
+				if (!entry) return undefined
+				entry.order = { ...entry.order, customerSlug, updatedAt: now() }
+				return clone(entry.order)
+			},
+			listSuspendedBefore: async changedBefore =>
+				[...orders.values()]
+					.map(entry => entry.order)
+					.filter(
+						order =>
+							order.lifecycle === 'suspended' &&
+							order.lifecycleChangedAt !== undefined &&
+							new Date(order.lifecycleChangedAt) < changedBefore
+					)
+					.sort((a, b) => (a.lifecycleChangedAt ?? '').localeCompare(b.lifecycleChangedAt ?? ''))
+					.slice(0, 200)
+					.map(clone),
 
 			insertPayment: async payment => {
 				if ([...payments.values()].some(p => p.sessionId === payment.sessionId)) {
@@ -493,6 +523,13 @@ export const createMemoryRepositories = (): MemoryRepositories => {
 			getOrg: async id => clone(orgs.get(id)),
 			insertOrg: async org => createOrg(org),
 			listOrgs: async () => byCreatedDesc([...orgs.values()].map(clone)),
+			linkAwsAccount: async (orgId, account) => {
+				const org = orgs.get(orgId)
+				if (!org) return undefined
+				org.awsAccountId = account.accountId
+				org.awsAccountSlug = account.slug
+				return clone(org)
+			},
 		},
 
 		auth: {

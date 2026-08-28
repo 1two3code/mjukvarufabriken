@@ -2,7 +2,15 @@ import { toSpecStatus } from '@mf/models'
 
 import { isUuid } from './jobs.ts'
 
-import type { ChatMessage, Order, OrderStatus, PartialSpec, Payment, SpecDraft } from '@mf/models'
+import type {
+	ChatMessage,
+	LifecycleState,
+	Order,
+	OrderStatus,
+	PartialSpec,
+	Payment,
+	SpecDraft,
+} from '@mf/models'
 import type { Db } from './index.ts'
 import type { NewOrder, NewPayment, OrdersRepository, PaymentPaid } from './repositories.ts'
 
@@ -21,6 +29,9 @@ type OrderRow = {
 	price_sek: number | null
 	frozen_at: Date | null
 	approve_before_deliver: boolean
+	lifecycle: LifecycleState
+	lifecycle_changed_at: Date | null
+	customer_slug: string | null
 	created_at: Date
 	updated_at: Date
 }
@@ -63,6 +74,9 @@ export const toOrder = (row: OrderRow): Order => ({
 	frozenAt: row.frozen_at?.toISOString(),
 	approveBeforeDeliver: row.approve_before_deliver,
 	createdBy: row.created_by ?? undefined,
+	lifecycle: row.lifecycle,
+	lifecycleChangedAt: row.lifecycle_changed_at?.toISOString(),
+	customerSlug: row.customer_slug ?? undefined,
 	createdAt: row.created_at.toISOString(),
 	updatedAt: row.updated_at.toISOString(),
 })
@@ -216,6 +230,56 @@ export const setApproveBeforeDeliver = async (
 	return row && toOrder(row)
 }
 
+// MARK: Lifecycle (wave 9, deprovisioning)
+
+/**
+ * Compare-and-set on the deprovisioning lifecycle, stamping `lifecycle_changed_at`. `from` guards
+ * the transition (the grace-period sweep and the admin action both read-then-write): `undefined`
+ * when the row is missing or its lifecycle is not in `from`. Writing the same state it already
+ * holds is a no-op that still returns the row (idempotent), because the current state is in `from`.
+ */
+export const setLifecycle = async (
+	db: Db,
+	orderId: string,
+	from: readonly LifecycleState[],
+	to: LifecycleState
+): Promise<Order | undefined> => {
+	const { sql } = db
+	const [row] = await sql<OrderRow[]>`
+		update orders
+			set lifecycle = ${to}, lifecycle_changed_at = now(), updated_at = now()
+		where id = ${orderId} and lifecycle in ${sql([...from])}
+		returning *`
+	return row && toOrder(row)
+}
+
+/** Stores the per-customer fence slug on the order (set when the build starts); `undefined` when missing. */
+export const setCustomerSlug = async (
+	db: Db,
+	orderId: string,
+	customerSlug: string
+): Promise<Order | undefined> => {
+	const [row] = await db.sql<OrderRow[]>`
+		update orders set customer_slug = ${customerSlug}, updated_at = now()
+		where id = ${orderId}
+		returning *`
+	return row && toOrder(row)
+}
+
+/**
+ * Suspended orders whose lifecycle last changed before `changedBefore` — the grace-period sweep's
+ * candidates for promotion to `torn_down`. Oldest change first, capped like the other list reads.
+ */
+export const listSuspendedBefore = async (db: Db, changedBefore: Date): Promise<Order[]> => {
+	const rows = await db.sql<OrderRow[]>`
+		select * from orders
+		where lifecycle = 'suspended' and lifecycle_changed_at is not null
+			and lifecycle_changed_at < ${changedBefore}
+		order by lifecycle_changed_at asc
+		limit 200`
+	return rows.map(toOrder)
+}
+
 // MARK: Payments (M6)
 
 export const insertPayment = async (db: Db, payment: NewPayment): Promise<Payment> => {
@@ -292,6 +356,9 @@ export const createOrdersRepository = (db: Db): OrdersRepository => ({
 	transition: (orderId, from, to) => transitionOrder(db, orderId, from, to),
 	setApproveBeforeDeliver: (orderId, enabled) =>
 		setApproveBeforeDeliver(db, orderId, enabled),
+	setLifecycle: (orderId, from, to) => setLifecycle(db, orderId, from, to),
+	setCustomerSlug: (orderId, customerSlug) => setCustomerSlug(db, orderId, customerSlug),
+	listSuspendedBefore: changedBefore => listSuspendedBefore(db, changedBefore),
 	insertPayment: payment => insertPayment(db, payment),
 	getPayment: id => getPayment(db, id),
 	findPaymentBySession: sessionId => findPaymentBySession(db, sessionId),

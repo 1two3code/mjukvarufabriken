@@ -61,6 +61,27 @@ declare module 'fastify' {
 				meterEvent: string
 				priceId?: string
 			}
+			/**
+			 * Per-customer AWS account onboarding (org-accounts.md #4). When false (default) the
+			 * `provisionCustomerAccount` onboarding step is a no-op — the account-vending path stays
+			 * dark until an operator enables it (`PROVISION_CUSTOMER_ACCOUNTS=true`) and the real vend
+			 * has been rehearsed once with Hasse (CreateAccount makes a real, slow, 90-day account).
+			 */
+			provisionAccounts: boolean
+			/**
+			 * Deprovisioning / account-lifecycle wiring (teardown-deprovisioning.md, org-accounts.md).
+			 * `enabled` (`ORG_LIFECYCLE_ENABLED=true`) turns on the real AWS clients behind the admin
+			 * lifecycle action and the onboarding vend; while off, the admin action still transitions
+			 * the DB lifecycle and its deprovision runs against an empty world (dry-run everywhere).
+			 * `graceDays` is how long a `suspended` order waits before the sweep promotes it to
+			 * `torn_down`. `region` / `customersOuId` target the org's AWS.
+			 */
+			orgLifecycle: {
+				enabled: boolean
+				region: string
+				customersOuId?: string
+				graceDays: number
+			}
 			/** Infra handles (set by the CDK web stack) */
 			infra: {
 				databaseSecretArn?: string
@@ -90,6 +111,15 @@ const required = ['AUTH_AUDIENCE'] as const
 
 /** Meter event name unless configured: value = billable US cents */
 export const defaultResidentMeterEvent = 'resident_usage_usd_cents'
+
+/** Grace window (days) a suspended order waits before the sweep tears it down; default 30. */
+export const defaultLifecycleGraceDays = 30
+
+/** Parses `LIFECYCLE_GRACE_DAYS`; a missing / non-positive / non-numeric value falls back to the default. */
+export const parseGraceDays = (value: string | undefined): number => {
+	const parsed = Number(value)
+	return Number.isFinite(parsed) && parsed > 0 ? Math.floor(parsed) : defaultLifecycleGraceDays
+}
 
 /**
  * Secrets Manager values are either the raw string or a JSON object with a single key
@@ -205,6 +235,13 @@ const plugin: FastifyPluginAsync = async app => {
 		residentBilling: {
 			meterEvent: process.env.RESIDENT_USAGE_METER_EVENT || defaultResidentMeterEvent,
 			priceId: process.env.RESIDENT_USAGE_PRICE_ID || undefined,
+		},
+		provisionAccounts: process.env.PROVISION_CUSTOMER_ACCOUNTS === 'true',
+		orgLifecycle: {
+			enabled: process.env.ORG_LIFECYCLE_ENABLED === 'true',
+			region: process.env.ORG_AWS_REGION || 'eu-north-1',
+			customersOuId: process.env.ORG_CUSTOMERS_OU_ID || undefined,
+			graceDays: parseGraceDays(process.env.LIFECYCLE_GRACE_DAYS),
 		},
 		infra: {
 			databaseSecretArn: process.env.DATABASE_SECRET_ARN,

@@ -3,7 +3,7 @@ import {
 	DescribeExpressGatewayServiceCommand,
 } from '@aws-sdk/client-ecs'
 
-import { createEcsExpressDeployClient } from '#job/delivery/ecsExpress.ts'
+import { createEcsExpressDeployClient, customerTagValue } from '#job/delivery/ecsExpress.ts'
 import { createFakeImageBuilder } from '#job/delivery/imageBuild.ts'
 import { previewServiceName } from '#job/delivery/deliver.ts'
 
@@ -96,7 +96,10 @@ describe('ECS Express deploy client', () => {
 		expect(names(sent)).toEqual(['CreateExpressGatewayServiceCommand'])
 		expect(sent[0]!.input).toMatchObject({
 			serviceName: 'mf-11111111-gym',
-			tags: [{ key: 'Service', value: 'mf-delivery' }],
+			tags: [
+				{ key: 'Service', value: 'mf-delivery' },
+				{ key: 'Customer', value: 'gym' },
+			],
 			primaryContainer: {
 				image: expect.stringContaining(':mf-11111111-gym'),
 				containerPort: 80,
@@ -359,6 +362,39 @@ describe('ECS Express deploy client', () => {
 			})
 		).rejects.toThrow('AccessDenied')
 		expect(names(sent)).toEqual(['CreateExpressGatewayServiceCommand'])
+	})
+
+	it('Stamps the per-customer Customer=<slug> fence tag @mf/org deprovision requires', async () => {
+		// Arrange
+		const { client, sent } = createStub({ createEndpoint: 'svc.eu-north-1.on.aws' })
+		const deploy = deployClient(client, { imageBuilder: createFakeImageBuilder() })
+
+		// Act — a long app slug (the real `mf-<job8>-<appslug>-<job8>` shape)
+		await deploy.deployFromRepo({
+			serviceName: 'mf-11111111-acme-gym-booking-11111111',
+			repositoryUrl: 'https://github.com/x/new',
+			branch: 'main',
+			source: { bucket: 'mf-artifacts-test', key: 'deliverables/11111111/source.zip' },
+		})
+
+		// Assert — Service fence + a Customer fence that is a valid @mf/org slug (≤40, lowercased)
+		const tags = sent[0]!.input.tags as { key: string; value: string }[]
+		const customer = tags.find(tag => tag.key === 'Customer')!
+		expect(tags).toContainEqual({ key: 'Service', value: 'mf-delivery' })
+		expect(customer.value).toBe('acme-gym-booking-11111111')
+		expect(customer.value.length).toBeLessThanOrEqual(40)
+		expect(customer.value).toMatch(/^[a-z0-9]([a-z0-9-]*[a-z0-9])?$/)
+	})
+
+	it('Derives a valid @mf/org slug from the service name (customerTagValue)', () => {
+		// Strips the `mf-<job8>-` prefix
+		expect(customerTagValue('mf-11111111-gym')).toBe('gym')
+		// Lower-cases, collapses illegal characters, trims hyphens
+		expect(customerTagValue('mf-abcdef12-My_App!!')).toBe('my-app')
+		// Caps to 40 chars with no trailing hyphen
+		const long = customerTagValue(`mf-11111111-${'a'.repeat(60)}`)
+		expect(long.length).toBe(40)
+		expect(long.endsWith('-')).toBe(false)
 	})
 
 	it('Keeps the job-unique part of the service name (no collision between jobs)', () => {

@@ -29,6 +29,9 @@ describe('row mapping', () => {
 				price_sek: null,
 				frozen_at: null,
 				approve_before_deliver: false,
+				lifecycle: 'active',
+				lifecycle_changed_at: null,
+				customer_slug: null,
 				created_at: at,
 				updated_at: at,
 			})
@@ -56,6 +59,9 @@ describe('row mapping', () => {
 				price_sek: 45_000,
 				frozen_at: at,
 				approve_before_deliver: true,
+				lifecycle: 'suspended',
+				lifecycle_changed_at: at,
+				customer_slug: 'gym-booking-11111111',
 				created_at: at,
 				updated_at: at,
 			})
@@ -96,9 +102,20 @@ describe('row mapping', () => {
 				created_at: at,
 			})
 		).toMatchObject({ githubId: '42', githubLogin: 'anna' })
-		expect(toOrg({ id: 'o', name: 'x.se', org_number: null, created_at: at })).toEqual({
+		expect(
+			toOrg({
+				id: 'o',
+				name: 'x.se',
+				org_number: null,
+				aws_account_id: null,
+				aws_account_slug: null,
+				created_at: at,
+			})
+		).toEqual({
 			id: 'o',
 			name: 'x.se',
+			awsAccountId: undefined,
+			awsAccountSlug: undefined,
 			createdAt: at.toISOString(),
 		})
 		expect(
