@@ -1,27 +1,21 @@
+import { cost, fallbackModelPrice, modelPrices, priceForModel } from '@mf/harness'
+
+import type { ModelPrice } from '@mf/harness'
 import type { ResidentModelUsage } from '@mf/models'
 
-/** USD per million tokens, per bucket */
-export type ModelPrice = {
-	input: number
-	output: number
-	cacheRead: number
-	cacheWrite: number
-}
+/** USD per million tokens, per bucket — the harness billing primitive, re-exported for the resident */
+export type { ModelPrice }
 
 /**
- * Anthropic list prices (USD / MTok) by model-id prefix, longest prefix wins. Cache reads are
- * 10 % of input and 5-minute cache writes 125 % — the same ratios for every model. Unknown ids
- * fall back to the Sonnet tier so a new model name never bills at zero. Override with
- * `RESIDENT_PRICES_JSON` (`{"<prefix>": {"input": 3, "output": 15}}`) without a redeploy.
+ * Anthropic list prices (USD / MTok) live in `@mf/harness` (`modelPrices`) so the factory and the
+ * resident bill off one table. Longest-matching model-id prefix wins; unknown ids fall back to the
+ * Sonnet tier. Override a prefix at runtime with `RESIDENT_PRICES_JSON`
+ * (`{"<prefix>": {"input": 3, "output": 15}}`) — an override is merged over these defaults, so a
+ * partial or empty map still prices every other model at its list rate.
  */
-export const defaultPrices: Record<string, ModelPrice> = {
-	'claude-opus': { input: 15, output: 75, cacheRead: 1.5, cacheWrite: 18.75 },
-	'claude-sonnet': { input: 3, output: 15, cacheRead: 0.3, cacheWrite: 3.75 },
-	'claude-haiku': { input: 1, output: 5, cacheRead: 0.1, cacheWrite: 1.25 },
-	'claude-3-5-haiku': { input: 0.8, output: 4, cacheRead: 0.08, cacheWrite: 1 },
-}
+export const defaultPrices: Record<string, ModelPrice> = modelPrices
 
-export const fallbackPrice: ModelPrice = defaultPrices['claude-sonnet']!
+export const fallbackPrice: ModelPrice = fallbackModelPrice
 
 /** `{"prefix": {input, output[, cacheRead, cacheWrite]}}`; missing cache prices derive from input */
 export const parsePriceOverrides = (json: string | undefined): Record<string, ModelPrice> => {
@@ -43,33 +37,21 @@ export const parsePriceOverrides = (json: string | undefined): Record<string, Mo
 	)
 }
 
+/** Overrides are merged over the harness defaults so a partial/empty map never zeroes a model out */
+const withDefaults = (prices?: Record<string, ModelPrice>): Record<string, ModelPrice> =>
+	prices ? { ...defaultPrices, ...prices } : defaultPrices
+
 export const priceOf = (
 	model: string,
-	prices: Record<string, ModelPrice> = defaultPrices
-): ModelPrice => {
-	const match = Object.keys(prices)
-		.filter(prefix => model.startsWith(prefix))
-		.sort((a, b) => b.length - a.length)[0]
-	return match ? prices[match]! : fallbackPrice
-}
-
-const perMillion = 1_000_000
+	prices?: Record<string, ModelPrice>
+): ModelPrice => priceForModel(model, withDefaults(prices))
 
 /** List price in USD of one model's raw token buckets (not the budget-weighted total) */
 export const listPriceUsd = (
 	model: string,
 	usage: Omit<ResidentModelUsage, 'budgetTokens'>,
 	prices?: Record<string, ModelPrice>
-) => {
-	const price = priceOf(model, prices)
-	return (
-		(usage.inputTokens * price.input +
-			usage.outputTokens * price.output +
-			usage.cacheReadInputTokens * price.cacheRead +
-			usage.cacheCreationInputTokens * price.cacheWrite) /
-		perMillion
-	)
-}
+) => cost(usage, model, withDefaults(prices))
 
 /** Money is kept to 6 decimals in the records (sub-cent precision, no float noise) */
 export const roundUsd = (usd: number) => Math.round(usd * 1_000_000) / 1_000_000
