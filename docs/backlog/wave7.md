@@ -106,6 +106,7 @@ manifest), acceptance gate (boot the container).
    **The overarching lesson from this whole salvage: in-process green ≠ the artifact boots.**
 
 ## Not in this wave (bigger, separate)
+- **Teardown & deprovisioning policy** ([teardown-deprovisioning.md](teardown-deprovisioning.md)) — the inverse of provisioning: suspend/resume/teardown for broken contracts, non-payment, failed ventures, churn. The ad-hoc teardowns this session hit real reliability bugs (CLI-too-old, non-idempotent Express delete). Its own focused build, paired with org vending.
 - **Org account vending** ([org-accounts.md](org-accounts.md)) — its own focused build.
 - **M11 customer dev/qa/live + resident LLM** ([environments.md](environments.md)) — needs the org
   foundation first + the design decisions locked.

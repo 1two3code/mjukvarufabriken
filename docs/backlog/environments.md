@@ -25,6 +25,13 @@ Phased: first **qa + live**, then full **dev / qa / live**.
 So the product loop becomes: **build once (factory) → iterate forever in dev with the resident LLM
 → promote qa → promote live.** The recurring-revenue engine, not the one-shot build.
 
+**Evidence (2026-08-28):** the first real delivery — family-hub #2 (`mjukvaruhuset/family-hub`,
+live at the dev Express URL) — is a working **v0.1, not a finished product**: it needs many more
+iterations before it's anywhere close to done (Hasse's words). That is exactly the case for this
+milestone: the one-shot factory produces a correct *starting point*; the value — and the recurring
+revenue — is the **iterate-forever loop** (hosted dev + resident LLM) that takes v0.1 → shippable.
+The one-shot build is the on-ramp, not the destination.
+
 ## How it builds on what exists
 - The **ECS Express service** the delivery now creates is the first environment (the customer's
   live/qa). Standing up three is "the same, three times, with promotion between them."
