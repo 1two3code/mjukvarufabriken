@@ -13,6 +13,7 @@ export default defineConfig({
 				'packages/db/src/**/*.ts',
 				'apps/job/src/**/*.ts',
 				'packages/resident/src/**/*.ts',
+				'packages/org/src/**/*.ts',
 			],
 			exclude: ['**/*index.ts', '**/*server.ts', '**/*types.ts', '**/__mocks__/*'],
 			// Enforced by `npm run coverage` (CI). Measured 2026-08-27: lines 88 % / functions 81 % /
@@ -28,6 +29,7 @@ export default defineConfig({
 			'packages/harness',
 			'packages/db',
 			'packages/resident',
+			'packages/org',
 		],
 	},
 })
