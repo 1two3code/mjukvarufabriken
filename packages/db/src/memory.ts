@@ -10,6 +10,8 @@ import { isActiveJobStatus, isOrderSpecFrozen, toSpecStatus } from '@mf/models'
 import { rateLimitRetentionMs } from './rateLimits.ts'
 
 import type {
+	IterationBrief,
+	IterationBriefEntry,
 	Job,
 	JobEvent,
 	Order,
@@ -89,6 +91,8 @@ export const createMemoryRepositories = (): MemoryRepositories => {
 	const usage = new Map<string, ResidentUsageRecord>()
 	/** `installationId/month` → report */
 	const usageReports = new Map<string, ResidentUsageReport>()
+	/** `orgId/projectId` → iteration brief */
+	const iterationBriefs = new Map<string, IterationBrief>()
 	/** scope → key → hit times (ms); keys are kept in insertion order for eviction */
 	const rateLimits = new Map<string, Map<string, number[]>>()
 	/** scope → when the retention sweep last ran (ms), so it runs at most once a minute */
@@ -736,6 +740,37 @@ export const createMemoryRepositories = (): MemoryRepositories => {
 			releaseUsageReport: async (installationId, month, identifier) => {
 				const existing = usageReports.get(`${installationId}/${month}`)
 				if (existing?.pendingIdentifier === identifier) delete existing.pendingAt
+			},
+		},
+
+		iterationBrief: {
+			get: async (orgId, projectId) => clone(iterationBriefs.get(`${orgId}/${projectId}`)),
+			list: async orgId =>
+				[...iterationBriefs.values()]
+					.filter(brief => orgId === undefined || brief.orgId === orgId)
+					.sort((a, b) => b.updatedAt.localeCompare(a.updatedAt))
+					.slice(0, 500)
+					.map(clone),
+			appendEntry: async (
+				orgId: string,
+				projectId: string,
+				entry: IterationBriefEntry,
+				title?: string
+			) => {
+				const key = `${orgId}/${projectId}`
+				const existing = iterationBriefs.get(key)
+				const next: IterationBrief = existing
+					? { ...existing, entries: [...existing.entries, clone(entry)], updatedAt: now() }
+					: {
+							orgId,
+							projectId,
+							title,
+							entries: [clone(entry)],
+							createdAt: now(),
+							updatedAt: now(),
+						}
+				iterationBriefs.set(key, next)
+				return clone(next)
 			},
 		},
 	}

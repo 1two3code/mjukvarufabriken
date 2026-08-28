@@ -4,6 +4,8 @@
  * by its tests). Services depend on these types only.
  */
 import type {
+	IterationBrief,
+	IterationBriefEntry,
 	Job,
 	JobEvent,
 	LifecycleState,
@@ -310,6 +312,26 @@ export type RateLimitsRepository = {
 	pruneExpired: () => Promise<number>
 }
 
+// MARK: Iteration brief (wave 10)
+
+/** The api mints the entry `id` + `createdAt`; the repository stores the full entry */
+export type IterationBriefRepository = {
+	/** The brief for one org and project; `undefined` when the project has none yet */
+	get: (orgId: string, projectId: string) => Promise<IterationBrief | undefined>
+	/** The org's briefs (or every org's when omitted), most recently updated first */
+	list: (orgId?: string) => Promise<IterationBrief[]>
+	/**
+	 * Appends the entry to the (org, project) brief, creating it on first contact. `title` is
+	 * written only when the brief is created.
+	 */
+	appendEntry: (
+		orgId: string,
+		projectId: string,
+		entry: IterationBriefEntry,
+		title?: string
+	) => Promise<IterationBrief>
+}
+
 export type Repositories = {
 	jobs: JobsRepository
 	orders: OrdersRepository
@@ -317,4 +339,5 @@ export type Repositories = {
 	auth: AuthRepository
 	resident: ResidentRepository
 	rateLimits: RateLimitsRepository
+	iterationBrief: IterationBriefRepository
 }
