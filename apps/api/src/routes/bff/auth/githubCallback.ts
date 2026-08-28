@@ -49,7 +49,14 @@ const route: FastifyPluginAsyncZod = async function (app) {
 			request.log.info({ error: query.error }, 'GitHub sign-in rejected')
 			return fail(query.error === 'access_denied' ? 'denied' : 'failed')
 		}
-		if (!isSameState(readStateCookie(request.headers.cookie), query.state)) {
+		// The state cookie is single-use (cleared above), so a refreshed or already-used callback
+		// arrives with no cookie — a benign "link expired" rather than a real mismatch (tampering).
+		const cookieState = readStateCookie(request.headers.cookie)
+		if (!cookieState) {
+			request.log.info('GitHub sign-in state cookie missing (callback reused or expired)')
+			return fail('expired')
+		}
+		if (!isSameState(cookieState, query.state)) {
 			request.log.warn('GitHub sign-in state mismatch')
 			return fail('state')
 		}

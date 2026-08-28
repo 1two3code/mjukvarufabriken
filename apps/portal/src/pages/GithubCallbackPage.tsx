@@ -6,7 +6,7 @@ import { useEffectOnce } from '#/hooks/useEffectOnce.ts'
 import { Spinner } from '#/components/Spinner.tsx'
 
 /** Error codes the api's `/bff/auth/github/callback` redirects back with */
-const knownErrors = ['state', 'denied', 'email', 'failed'] as const
+const knownErrors = ['state', 'expired', 'denied', 'email', 'failed'] as const
 type KnownError = (typeof knownErrors)[number]
 
 const toKnownError = (value: string | null): KnownError =>

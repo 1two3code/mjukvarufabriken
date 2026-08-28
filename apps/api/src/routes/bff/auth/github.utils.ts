@@ -9,7 +9,7 @@ export const githubRedirectUri = (portalUrl: string) =>
 	new URL('/auth/github/callback', portalUrl).toString()
 
 /** Error codes the portal's `/auth/github/callback` page knows how to explain */
-export const githubSignInErrors = ['state', 'denied', 'email', 'failed'] as const
+export const githubSignInErrors = ['state', 'expired', 'denied', 'email', 'failed'] as const
 export type GithubSignInError = (typeof githubSignInErrors)[number]
 
 export const githubErrorRedirect = (portalUrl: string, error: GithubSignInError) => {

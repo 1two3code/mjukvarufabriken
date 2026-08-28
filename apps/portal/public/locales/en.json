@@ -183,6 +183,7 @@
   "page.authCallback.title": "Signing you in…",
   "page.githubCallback.action.backToLogin": "Back to sign in",
   "page.githubCallback.error.denied": "You cancelled the GitHub sign-in.",
+  "page.githubCallback.error.expired": "Your GitHub sign-in link expired or was already used. Please sign in again.",
   "page.githubCallback.error.email": "Your GitHub account has no verified email address. Verify one on GitHub, or sign in with an email link instead.",
   "page.githubCallback.error.failed": "GitHub sign-in failed. Please try again.",
   "page.githubCallback.error.state": "The GitHub sign-in could not be verified (the browser session changed). Please try again.",

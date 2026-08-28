@@ -183,6 +183,7 @@
   "page.authCallback.title": "Loggar in…",
   "page.githubCallback.action.backToLogin": "Tillbaka till inloggningen",
   "page.githubCallback.error.denied": "Du avbröt inloggningen med GitHub.",
+  "page.githubCallback.error.expired": "Din GitHub-inloggningslänk har gått ut eller har redan använts. Logga in igen.",
   "page.githubCallback.error.email": "Ditt GitHub-konto har ingen verifierad e-postadress. Verifiera en på GitHub eller logga in med e-postlänk i stället.",
   "page.githubCallback.error.failed": "Inloggningen med GitHub misslyckades. Försök igen.",
   "page.githubCallback.error.state": "Inloggningen med GitHub kunde inte verifieras (webbläsarsessionen ändrades). Försök igen.",

@@ -47,20 +47,28 @@ describe('GET /bff/auth/github/callback route', () => {
 	it('Rejects a state that does not match the cookie without touching GitHub', async () => {
 		// Act
 		const mismatch = await app.inject({ url, headers: { cookie: `${stateCookieName}=other` } })
-		const missing = await app.inject({ url })
 		// Same character count as the cookie but more bytes: must be a redirect, never a 500
 		const multibyte = await app.inject({
 			url: `/bff/auth/github/callback?code=abc&state=${encodeURIComponent('state-12é')}`,
 			headers: { cookie },
 		})
 
-		// Assert
-		for (const response of [mismatch, missing, multibyte]) {
+		// Assert: a present-but-different cookie is a real mismatch
+		for (const response of [mismatch, multibyte]) {
 			expect(response.statusCode).toBe(302)
 			expect(response.headers.location).toBe(`${portalCallback}?error=state`)
 		}
 		expect(app.githubOauth.fetchProfile).not.toHaveBeenCalled()
 		expect(app.authService.signInWithGithub).not.toHaveBeenCalled()
+	})
+
+	it('Treats a missing state cookie as an expired link (a reused or refreshed callback)', async () => {
+		// The cookie is single-use, so a refreshed callback arrives with none — benign, not a mismatch
+		const missing = await app.inject({ url })
+
+		expect(missing.statusCode).toBe(302)
+		expect(missing.headers.location).toBe(`${portalCallback}?error=expired`)
+		expect(app.githubOauth.fetchProfile).not.toHaveBeenCalled()
 	})
 
 	it('Reports a denied authorization and a missing code back to the portal', async () => {
