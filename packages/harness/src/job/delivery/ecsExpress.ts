@@ -1,3 +1,5 @@
+import { createHash } from 'node:crypto'
+
 import {
 	CreateExpressGatewayServiceCommand,
 	DescribeExpressGatewayServiceCommand,
@@ -39,6 +41,28 @@ const publicEndpointOf = (service?: ECSExpressGatewayService) =>
 	service?.activeConfigurations
 		?.flatMap(configuration => configuration.ingressPaths ?? [])
 		.find(path => path.accessType === 'PUBLIC')?.endpoint
+
+/** Default CloudWatch log group for delivered Express containers (per env), so boot crashes are visible */
+export const defaultExpressLogGroup = (env = process.env.ENV || 'local') => `/mf/${env}/express`
+
+/**
+ * A deterministic idempotency token for the create call, derived from the service name: an SDK
+ * retry after a successful `CreateExpressGatewayService` re-sends the same token, so ECS returns
+ * the original service instead of throwing "Creation of service was not idempotent" (which used
+ * to make delivery report `deploy: failed` for a service that was actually live). Length-capped
+ * to 64 ASCII chars — a service name can be up to 255, so a hash, not the name itself.
+ */
+export const createIdempotencyToken = (serviceName: string) =>
+	`mf-${createHash('sha256').update(serviceName).digest('hex').slice(0, 60)}`
+
+/**
+ * The create call is a no-op when the service already exists (a prior create, or an SDK retry
+ * the deterministic clientToken did not dedupe): ECS answers with a "not idempotent" / "already
+ * exists" / "not found" error. That is not a delivery failure — the service is live — so describe
+ * it and hand out its URL instead of throwing.
+ */
+const isAlreadyCreated = (error: unknown) =>
+	/not idempotent|already exists|already created|not found/i.test((error as Error).message ?? '')
 
 // MARK: Live client (ECS Express Mode)
 
@@ -92,7 +116,7 @@ export const createEcsExpressDeployClient = ({
 	cluster = 'default',
 	previewAuth,
 	containerPort = 80,
-	logGroup,
+	logGroup = defaultExpressLogGroup(),
 	timeoutMs = 15 * 60_000,
 	pollIntervalMs = 10_000,
 	now = Date.now,
@@ -100,8 +124,11 @@ export const createEcsExpressDeployClient = ({
 	region,
 	client = new ECSClient({ region }),
 }: EcsExpressOptions): DeployClient => {
-	const describe = async (serviceArn: string) =>
-		(await client.send(new DescribeExpressGatewayServiceCommand({ serviceArn }))).service
+	// `serviceIdentifier` is the ARN when we have it (after Create) and the deterministic name
+	// otherwise (the idempotency fallback, where Create threw before handing back an ARN)
+	const describe = async (serviceIdentifier: string) =>
+		(await client.send(new DescribeExpressGatewayServiceCommand({ serviceArn: serviceIdentifier })))
+			.service
 
 	const waitForEndpoint = async (service: ECSExpressGatewayService, signal?: AbortSignal) => {
 		const ready = publicEndpointOf(service)
@@ -124,31 +151,53 @@ export const createEcsExpressDeployClient = ({
 		}
 	}
 
+	/**
+	 * Creates the service, or — when ECS reports it already exists (an SDK retry the clientToken
+	 * did not dedupe, a redelivery) — describes it and returns the live one instead of failing the
+	 * whole deploy. Describing by the deterministic service name; the endpoint poll follows either way.
+	 */
+	const createOrDescribe = async (
+		createInput: ConstructorParameters<typeof CreateExpressGatewayServiceCommand>[0] & {
+			clientToken?: string
+		},
+		name: string
+	) => {
+		try {
+			return (await client.send(new CreateExpressGatewayServiceCommand(createInput))).service
+		} catch (error) {
+			if (!isAlreadyCreated(error)) throw error
+			const existing = await describe(name).catch(() => undefined)
+			if (existing?.serviceArn) return existing
+			throw error
+		}
+	}
+
 	return {
 		deployFromRepo: async ({ serviceName, source, signal }) => {
 			const name = expressServiceName(serviceName)
 			const { imageUri } = await imageBuilder.build({ imageTag: name, source, signal })
 			if (signal?.aborted) throw abortError()
-			const { service } = await client.send(
-				new CreateExpressGatewayServiceCommand({
-					serviceName: name,
-					cluster,
-					infrastructureRoleArn,
-					executionRoleArn,
-					healthCheckPath: '/health',
-					cpu: '256',
-					memory: '512',
-					tags: [{ key: 'Service', value: 'mf-delivery' }],
-					primaryContainer: {
-						image: imageUri,
-						containerPort,
-						environment: previewAuthEnv(previewAuth),
-						...(logGroup
-							? { awsLogsConfiguration: { logGroup, logStreamPrefix: name } }
-							: {}),
-					},
-				})
-			)
+			// `clientToken` is not yet in the installed SDK's request type (post-cutoff API), but the
+			// deterministic token is what makes the create idempotent — so it is passed regardless.
+			const createInput = {
+				serviceName: name,
+				cluster,
+				infrastructureRoleArn,
+				executionRoleArn,
+				healthCheckPath: '/health',
+				cpu: '256',
+				memory: '512',
+				clientToken: createIdempotencyToken(name),
+				tags: [{ key: 'Service', value: 'mf-delivery' }],
+				primaryContainer: {
+					image: imageUri,
+					containerPort,
+					environment: previewAuthEnv(previewAuth),
+					// Always wire the log group so a boot crash lands in CloudWatch, not just an exit code
+					awsLogsConfiguration: { logGroup, logStreamPrefix: name },
+				},
+			}
+			const service = await createOrDescribe(createInput, name)
 			if (!service?.serviceArn) {
 				throw new Error('ECS CreateExpressGatewayService returned no service')
 			}

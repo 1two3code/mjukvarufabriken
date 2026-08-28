@@ -4,9 +4,15 @@ import {
 	createS3ArtifactStore,
 } from './artifacts.ts'
 import {
+	createDryRunBootCheck,
+	createFakeBootCheck,
+	createNodeBootCheck,
+} from './bootArtifact.ts'
+import {
 	createDryRunDeployClient,
 	createEcsExpressDeployClient,
 	createFakeDeployClient,
+	defaultExpressLogGroup,
 } from './ecsExpress.ts'
 import {
 	createDryRunGitHubClient,
@@ -21,6 +27,7 @@ import type { GitHubAppAuth } from './github.ts'
 import type { DeliveryClients, PreviewAuth } from './types.ts'
 
 export * from './artifacts.ts'
+export * from './bootArtifact.ts'
 export * from './bundle.ts'
 export * from './deliver.ts'
 export * from './docs.ts'
@@ -144,6 +151,7 @@ export const createLiveDeliveryClients = ({
 			prose: process.env.ANTHROPIC_API_KEY
 				? createLiveProseWriter({ model: workerModel })
 				: undefined,
+			boot: createDryRunBootCheck(log),
 			githubOrg,
 			previewAuth,
 			dryRun: true,
@@ -178,7 +186,7 @@ export const createLiveDeliveryClients = ({
 						cluster,
 						previewAuth,
 						region,
-						logGroup: `/mf/${process.env.ENV || 'local'}/express`,
+						logGroup: defaultExpressLogGroup(),
 					})
 		})(),
 		artifacts: artifactsBucket
@@ -190,6 +198,7 @@ export const createLiveDeliveryClients = ({
 					putObject: notConfigured('ARTIFACTS_BUCKET'),
 				},
 		prose: createLiveProseWriter({ model: workerModel }),
+		boot: createNodeBootCheck(),
 		githubOrg,
 		previewAuth,
 	}
@@ -201,4 +210,5 @@ export const createFakeDeliveryClients = (): DeliveryClients => ({
 	deploy: createFakeDeployClient(),
 	artifacts: createFakeArtifactStore(),
 	prose: createFakeProseWriter(),
+	boot: createFakeBootCheck(),
 })

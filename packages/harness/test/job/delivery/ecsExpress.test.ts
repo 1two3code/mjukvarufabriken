@@ -205,6 +205,110 @@ describe('ECS Express deploy client', () => {
 		expect(names(sent).filter(name => name === 'DescribeExpressGatewayServiceCommand')).toHaveLength(1)
 	})
 
+	it('Passes a deterministic idempotency clientToken and always wires the container log group', async () => {
+		// Arrange
+		const { client, sent } = createStub({ createEndpoint: 'svc.eu-north-1.on.aws' })
+		const deploy = deployClient(client, { imageBuilder: createFakeImageBuilder() })
+		const input = {
+			serviceName: 'mf-11111111-gym',
+			repositoryUrl: 'https://github.com/x/new',
+			branch: 'main',
+			source: { bucket: 'mf-artifacts-test', key: 'deliverables/11111111/source.zip' },
+		}
+
+		// Act — deploy twice; the token is derived from the (identical) service name
+		await deploy.deployFromRepo(input)
+		await deploy.deployFromRepo(input)
+
+		// Assert — a non-empty clientToken, identical across the two calls, and the log group wired
+		const create = sent.filter(entry => entry.name === 'CreateExpressGatewayServiceCommand')
+		const token = create[0]!.input.clientToken as string
+		expect(token).toMatch(/^mf-[0-9a-f]{60}$/)
+		expect(create[1]!.input.clientToken).toBe(token)
+		expect(create[0]!.input.primaryContainer).toMatchObject({
+			awsLogsConfiguration: { logGroup: '/mf/dev/express', logStreamPrefix: 'mf-11111111-gym' },
+		})
+	})
+
+	it('Wires a default log group when the caller passes none', async () => {
+		// Arrange — no `logGroup` option at all
+		const { client, sent } = createStub({ createEndpoint: 'svc.eu-north-1.on.aws' })
+		const deploy = createEcsExpressDeployClient({
+			imageBuilder: createFakeImageBuilder(),
+			executionRoleArn: 'arn:exec',
+			infrastructureRoleArn: 'arn:infra',
+			client,
+		})
+
+		// Act
+		await deploy.deployFromRepo({
+			serviceName: 'mf-11111111-gym',
+			repositoryUrl: 'https://github.com/x/new',
+			branch: 'main',
+			source: { bucket: 'mf-artifacts-test', key: 'deliverables/11111111/source.zip' },
+		})
+
+		// Assert — awsLogsConfiguration is present regardless (boot crashes must be visible)
+		const container = sent[0]!.input.primaryContainer as { awsLogsConfiguration?: { logGroup: string } }
+		expect(container.awsLogsConfiguration?.logGroup).toBe('/mf/local/express')
+	})
+
+	it('Returns the already-live service on a non-idempotent create error (describe fallback)', async () => {
+		// Arrange — Create throws the SDK-retry idempotency error; Describe finds the live service
+		const sent: Sent[] = []
+		const send = async (command: { constructor: unknown; input: Record<string, unknown> }) => {
+			sent.push({ name: (command.constructor as { name: string }).name, input: command.input })
+			if (command instanceof CreateExpressGatewayServiceCommand) {
+				throw new Error('Creation of service was not idempotent')
+			}
+			if (command instanceof DescribeExpressGatewayServiceCommand) {
+				return { service: service('svc.eu-north-1.on.aws') }
+			}
+			throw new Error('unexpected command')
+		}
+		const deploy = deployClient({ send } as unknown as EcsClientLike)
+
+		// Act — must not throw: the service is live, delivery just has to hand out its URL
+		const { url } = await deploy.deployFromRepo({
+			serviceName: 'mf-11111111-gym',
+			repositoryUrl: 'https://github.com/x/new',
+			branch: 'main',
+			source: { bucket: 'mf-artifacts-test', key: 'deliverables/11111111/source.zip' },
+		})
+
+		// Assert — Create failed, Describe (by name) recovered the URL
+		expect(url).toBe('https://svc.eu-north-1.on.aws')
+		expect(names(sent)).toEqual([
+			'CreateExpressGatewayServiceCommand',
+			'DescribeExpressGatewayServiceCommand',
+		])
+		expect(sent[1]!.input).toMatchObject({ serviceArn: 'mf-11111111-gym' })
+	})
+
+	it('Rethrows a create error that is not an already-exists / idempotency error', async () => {
+		// Arrange
+		const sent: Sent[] = []
+		const send = async (command: { constructor: unknown; input: Record<string, unknown> }) => {
+			sent.push({ name: (command.constructor as { name: string }).name, input: command.input })
+			if (command instanceof CreateExpressGatewayServiceCommand) {
+				throw new Error('AccessDenied: not authorized to create')
+			}
+			throw new Error('unexpected command')
+		}
+		const deploy = deployClient({ send } as unknown as EcsClientLike)
+
+		// Act + Assert — a real error is not swallowed, and no Describe fallback is attempted
+		await expect(
+			deploy.deployFromRepo({
+				serviceName: 'mf-11111111-gym',
+				repositoryUrl: 'https://github.com/x/new',
+				branch: 'main',
+				source: { bucket: 'mf-artifacts-test', key: 'deliverables/11111111/source.zip' },
+			})
+		).rejects.toThrow('AccessDenied')
+		expect(names(sent)).toEqual(['CreateExpressGatewayServiceCommand'])
+	})
+
 	it('Keeps the job-unique part of the service name (no collision between jobs)', () => {
 		// Arrange
 		const slug = 'a-very-long-application-name-from-the-spec-goal-11111111'
