@@ -119,6 +119,7 @@ const unavailableRepositories = (error: () => Error): Repositories => {
 			'upsertUsageReport',
 		]),
 		rateLimits: repository(['count', 'record', 'pruneExpired']),
+		iterationBrief: repository(['get', 'list', 'appendEntry']),
 	}
 }
 
