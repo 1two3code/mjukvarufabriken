@@ -109,7 +109,7 @@ export const config: Config = {
 			githubOAuth: { clientId: 'Iv23liGn1P0xZHYqiBYa' },
 			// GitHub App install for delivery (id 157166357, 2026-08-28). `appId` pending — set it
 			// (the App's numeric App ID, not the client id) to enable the live repo push.
-			githubDelivery: { appId: '4746145', installationId: 157166357 },
+			githubDelivery: { appId: '4746145', installationId: 157185356 },
 			// `log` until SES production access is granted (TODO-EXTERNAL): copy the link from the api log
 			email: { transport: 'log', from: emailFrom },
 			domain: {
@@ -130,7 +130,7 @@ export const config: Config = {
 				allocatedStorageGb: 20,
 				backupRetentionDays: 7,
 			},
-			jobs: { cpu: 2048, memoryMiB: 4096, deliveryDryRun: true },
+			jobs: { cpu: 2048, memoryMiB: 4096 }, // deliveryDryRun off 2026-08-28 — dev delivers for real now
 			alerts: {
 				jobTokensThreshold: 20_000_000,
 				monthlyBudgetUsd: 150,
