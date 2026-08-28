@@ -41,6 +41,37 @@ A human-in-the-loop gate: green gates → the portal shows the diff + gate repor
 customer/admin **approves** before the repo transfers / goes live. Big trust win for real customers.
 Areas: `apps/api` (an `awaiting_approval` job/order state + approve route), `apps/portal`.
 
+## Stream 6 — billing cost accuracy (HIGH — real revenue bug, evidenced 2026-08-28)
+`totalTokens()` (`packages/harness/src/job/types.ts`) weights cache-reads at **0.1×** (their price)
+but counts **output at 1×** (Anthropic bills output ~5× input) and **cache-writes at 1×** (billed
+1.25×). It's a fine **budget** metric (stops cache-reads blowing the 15M cap), but it is being used
+as the **billing** basis (`tokens × 1.5`), which **under-bills output-heavy work**. It also doesn't
+reconcile with Anthropic's console: with prompt caching, cache-reads are ~90% of raw tokens, so the
+console shows ~8× our number (observed 2026-08-28: console ~250M vs our metering ~30M over two days —
+`250/30 ≈ 8`, exactly the cache-read discount; **not a leak, a weighting**).
+- Add a `cost(usage, model)` that computes **actual $** from per-model prices (input / output /
+  cache-read / cache-write); keep `totalTokens()` for the budget cap **only**.
+- Persist the **raw four-bucket usage** (input, output, cache_read, cache_creation) per job/session
+  so cost can be recomputed if prices change (today only the weighted scalar is kept).
+- Wire `cost()` into resident metering (`residentUsageRecord` → bill `cost × 1.5`, not weighted
+  tokens). Reconcile the monthly total against the Anthropic console.
+- Areas: `packages/harness` (types.ts `cost()`, usage capture), `packages/models` (usage-record
+  shape), `apps/api` (`residentService`/metering).
+
+## Stream 7 — review-gate accuracy (HIGH — failed a good 12M build, evidenced 2026-08-28)
+The review gate **false-positived a good build** (`0b5efa32`, family-hub #2, 12.4M weighted tokens)
+and failed it closed on three findings that **do not exist in the code**: two claimed users must type
+a raw UUID (the app uses `<FamilyMemberSelect>` name pickers backed by `GET /bff/family-members`),
+one claimed a reminder never fires at offset 0 (the code uses an **inclusive** bound and comments the
+0 case). A gate that hallucinates and burns 12M-token builds is the **most expensive bug we have**.
+- The review gate must **verify each finding against the actual code before failing closed** — read
+  the cited file/lines and confirm the claim (it is supposed to; here it did not).
+- Add an **adversarial refute pass** (like `/code-review`'s verify): each finding gets N skeptics that
+  try to disprove it; drop findings that can't be substantiated. Track a false-positive rate.
+- The transcript capture shipped this session (debug bundle `transcripts/`) is the raw material for
+  auditing what the review session actually did. Areas: `packages/harness/src/job/gates/review*`,
+  `gateSessions.ts`.
+
 ## Not in this wave (bigger, separate)
 - **Org account vending** ([org-accounts.md](org-accounts.md)) — its own focused build.
 - **M11 customer dev/qa/live + resident LLM** ([environments.md](environments.md)) — needs the org
