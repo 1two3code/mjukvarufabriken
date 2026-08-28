@@ -189,7 +189,9 @@ describe('security baseline', () => {
 				)
 				assert.ok(
 					JSON.stringify(infraRole.Properties.ManagedPolicyArns).includes(
-						'AmazonECSInfrastructureRoleforExpressGatewayServices'
+						// service-role/, capital "For" — the ECS docs' lowercase "for" 404s in IAM
+						// (resources-stack.ts, fixed in 18fd39b); the assertion must track the real ARN.
+						'AmazonECSInfrastructureRoleForExpressGatewayServices'
 					)
 				)
 			})
