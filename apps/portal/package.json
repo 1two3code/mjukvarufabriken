@@ -5,7 +5,7 @@
   "type": "module",
   "scripts": {
     "start:dev": "vite --mode dev",
-    "build": "vite build --mode dev --outDir 'dist/dev' && vite build --mode live --outDir 'dist/live'",
+    "build": "vite build --mode dev --outDir 'dist/dev' && vite build --mode qa --outDir 'dist/qa' && vite build --mode live --outDir 'dist/live'",
     "preview": "vite preview",
     "lint": "eslint ./src ./test; stylelint \"./src/**/*.css\"; tsgo --noemit",
     "test": "vitest run",
