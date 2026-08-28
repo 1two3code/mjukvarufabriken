@@ -45,6 +45,13 @@ declare module 'fastify' {
 			listEvents: (jobId: string, after: number, session: BackendSession) => Promise<JobEvent[]>
 			/** Admin kill switch: marks the row killed, revokes the report token, stops the task */
 			kill: (jobId: string) => Promise<Job>
+			/**
+			 * Approve-before-deliver hold (W9): a customer or admin of the job's org releases a job
+			 * parked at `awaiting_approval`, flipping `approved`. The paused build container polls its
+			 * report view, sees `approved`, and resumes into delivery. Throws `JobNotAwaitingApproval`
+			 * when the job is not currently holding for approval.
+			 */
+			approve: (jobId: string, session: BackendSession) => Promise<Job>
 			listAll: () => Promise<Job[]>
 			/**
 			 * The delivered bundle with presigned download links (org-scoped). `EntityNotFound`
@@ -114,6 +121,13 @@ export class SpecNotFrozen extends EntityInvalid {
 export class JobAlreadyActive extends EntityInvalid {
 	constructor(orderId: string) {
 		super('job', orderId)
+	}
+}
+
+/** Approve was called on a job that is not parked at the approve-before-deliver hold (W9) */
+export class JobNotAwaitingApproval extends EntityInvalid {
+	constructor(jobId: string) {
+		super('job', jobId)
 	}
 }
 
@@ -224,6 +238,10 @@ const plugin: FastifyPluginAsync = async app => {
 		const user = order?.createdBy ? await db.users.get(order.createdBy) : undefined
 		return user?.githubLogin
 	}
+
+	/** The approve-before-deliver flag lives on the order (W9); the job reads it via its report view */
+	const approveBeforeDeliverOf = async (job: Job) =>
+		(await db.orders.getOrder(job.orderId))?.approveBeforeDeliver ?? false
 
 	const scoped = (job: Job | undefined, session: BackendSession, id: string) => {
 		if (!job || (!isAdmin(session) && job.orgId !== session.orgId)) {
@@ -366,6 +384,17 @@ const plugin: FastifyPluginAsync = async app => {
 			}
 			return killed
 		},
+		approve: async (jobId, session) => {
+			const job = scoped(await db.jobs.get(jobId), session, jobId)
+			// The hold is real only while the container is parked there: an active job that reported
+			// `awaiting_approval` and has not been approved yet. Anything else (already delivering,
+			// already approved, finished, or never gated) is a no-op the caller should see as 409.
+			if (!job.awaitingApproval || job.approved || !isActiveJobStatus(job.status)) {
+				throw new JobNotAwaitingApproval(jobId)
+			}
+			const approved = (await db.jobs.update(jobId, { approved: true })) ?? job
+			return isAdmin(session) ? approved : redactJobForCustomer(approved)
+		},
 		listAll: () => db.jobs.list(),
 		getDeliverables: async (jobId, session) => {
 			await get(jobId, session)
@@ -402,6 +431,8 @@ const plugin: FastifyPluginAsync = async app => {
 			gateWaivers: job.gateWaivers,
 			killed: job.status === 'killed',
 			customerGithubLogin: await customerGithubLoginOf(job),
+			approveBeforeDeliver: await approveBeforeDeliverOf(job),
+			approved: job.approved ?? false,
 		}),
 		reportEvents: async (job, events) => {
 			const gateReports = parseGateReports(job, events)

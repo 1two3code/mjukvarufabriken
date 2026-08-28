@@ -32,6 +32,8 @@ type JobRow = {
 	task_arn: string | null
 	repository_url: string | null
 	report_token_hash: string | null
+	awaiting_approval: boolean
+	approved: boolean
 	started_at: Date | null
 	finished_at: Date | null
 	created_at: Date
@@ -65,6 +67,8 @@ export const toJob = (row: JobRow): Job => ({
 	gateWaivers: row.gate_waivers?.length ? row.gate_waivers : undefined,
 	taskArn: row.task_arn ?? undefined,
 	repositoryUrl: row.repository_url ?? undefined,
+	awaitingApproval: row.awaiting_approval || undefined,
+	approved: row.approved || undefined,
 	startedAt: iso(row.started_at),
 	finishedAt: iso(row.finished_at),
 	createdAt: row.created_at.toISOString(),
@@ -103,6 +107,10 @@ export type JobUpdate = Partial<{
 	gateWaivers: string[]
 	taskArn: string
 	repositoryUrl: string
+	/** Set true when the job reaches the approve-before-deliver hold (W9) */
+	awaitingApproval: boolean
+	/** The resume signal for a held job: flipped by the approve action */
+	approved: boolean
 	startedAt: Date
 	finishedAt: Date
 	/** Rotated on the job's first report (one-shot bootstrap token); `null` revokes it */
@@ -191,6 +199,8 @@ export const updateJob = async (
 			update.gateWaivers === undefined ? undefined : sql.json(update.gateWaivers as never),
 		task_arn: update.taskArn,
 		repository_url: update.repositoryUrl,
+		awaiting_approval: update.awaitingApproval,
+		approved: update.approved,
 		started_at: update.startedAt,
 		finished_at: update.finishedAt,
 		report_token_hash: update.reportTokenHash,

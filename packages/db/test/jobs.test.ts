@@ -54,6 +54,8 @@ describe('jobs repository', () => {
 			task_arn: null,
 			repository_url: null,
 			report_token_hash: null,
+			awaiting_approval: false,
+			approved: false,
 			started_at: null,
 			finished_at: null,
 			created_at: new Date(0),

@@ -186,6 +186,13 @@ export const JobSchema = z.object({
 	gates: z.array(GateReportSchema).optional(),
 	/** Review finding ids (`<file>:<line>`) and licence waivers (`licence:<pkg>@<version>`) an admin has waived for this job */
 	gateWaivers: z.array(z.string()).optional(),
+	/**
+	 * Approve-before-deliver hold (W9): once the M4 gates pass green a job whose order has the
+	 * `approveBeforeDeliver` flag pauses here instead of delivering. `awaitingApproval` is set while
+	 * it waits; `approved` flips when a human accepts and the paused job resumes into delivery.
+	 */
+	awaitingApproval: z.boolean().optional(),
+	approved: z.boolean().optional(),
 	/** ECS task ARN once the job runs on Fargate */
 	taskArn: z.string().optional(),
 	repositoryUrl: z.string().optional(),

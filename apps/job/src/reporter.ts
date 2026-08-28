@@ -4,7 +4,7 @@
  * database credential (docs/M3-REVIEW.md #18). `db` writes to Postgres directly and is kept
  * for `npm run job:dev` against the local docker compose database.
  */
-import { appendEvent, createDb, getJob, migrate, updateJob } from '@mf/db'
+import { appendEvent, createDb, getJob, getOrderRecord, migrate, updateJob } from '@mf/db'
 import { jobReasonMaxLength } from '@mf/models'
 
 import type {
@@ -30,6 +30,8 @@ export type JobReporter = {
 	update: (update: JobReportUpdate) => Promise<JobReportUpdateResponse>
 	/** Kill-switch poll */
 	isKilled: () => Promise<boolean>
+	/** Approve-before-deliver poll (W9): true once a human released the pre-delivery hold */
+	isApproved: () => Promise<boolean>
 	close: () => Promise<void>
 }
 
@@ -173,6 +175,16 @@ export const createApiReporter = ({
 					throw error
 				}
 			),
+		// The pre-delivery hold's resume signal (W9). A 401 means the api ended the job; the poll
+		// treats that as "not approved" and lets `isKilled` abort the run on its own next round.
+		isApproved: async () =>
+			request<JobReport>('', 'GET').then(
+				report => report?.approved ?? false,
+				error => {
+					if (error instanceof ApiReportError && error.status === 401) return false
+					throw error
+				}
+			),
 		close: async () => {
 			await queue
 		},
@@ -192,16 +204,18 @@ export const createDbReporter = async (
 	return {
 		load: async () => {
 			const job = await getJob(db, jobId)
-			return (
-				job && {
-					id: job.id,
-					status: job.status,
-					spec: job.spec,
-					budget: job.budget,
-					gateWaivers: job.gateWaivers,
-					killed: job.status === 'killed',
-				}
-			)
+			if (!job) return undefined
+			const order = await getOrderRecord(db, job.orderId)
+			return {
+				id: job.id,
+				status: job.status,
+				spec: job.spec,
+				budget: job.budget,
+				gateWaivers: job.gateWaivers,
+				killed: job.status === 'killed',
+				approveBeforeDeliver: order?.approveBeforeDeliver ?? false,
+				approved: job.approved ?? false,
+			}
 		},
 		emit: async event => {
 			await appendEvent(db, jobId, event)
@@ -222,6 +236,7 @@ export const createDbReporter = async (
 			return { status: 'killed', killed: true }
 		},
 		isKilled: async () => (await getJob(db, jobId))?.status === 'killed',
+		isApproved: async () => (await getJob(db, jobId))?.approved ?? false,
 		close: () => db.close(),
 	}
 }

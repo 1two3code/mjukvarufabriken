@@ -29,6 +29,13 @@ export const JobReportSchema = z.object({
 	 * M5 delivery adds as admin on the repo. Absent until the customer has signed in with GitHub
 	 */
 	customerGithubLogin: z.string().optional(),
+	/**
+	 * Approve-before-deliver gate (W9), resolved from the order: when true the job holds after the
+	 * green gates instead of delivering. `approved` is the resume signal the paused job polls for —
+	 * a human flips it once they accept, and delivery proceeds. Both default false (auto-deliver).
+	 */
+	approveBeforeDeliver: z.boolean(),
+	approved: z.boolean(),
 })
 export type JobReport = z.infer<typeof JobReportSchema>
 
@@ -83,6 +90,8 @@ export const JobReportUpdateSchema = z
 		plan: PlanSchema.optional(),
 		reason: z.string().max(jobReasonMaxLength).optional(),
 		gates: z.array(GateReportSchema).optional(),
+		/** Set true when the job reaches the approve-before-deliver hold (W9); the api exposes it */
+		awaitingApproval: z.boolean().optional(),
 		repositoryUrl: z.string().max(2000).optional(),
 		startedAt: z.iso.datetime().optional(),
 		finishedAt: z.iso.datetime().optional(),

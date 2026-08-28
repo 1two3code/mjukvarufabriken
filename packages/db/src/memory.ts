@@ -316,6 +316,9 @@ export const createMemoryRepositories = (): MemoryRepositories => {
 					gateWaivers: update.gateWaivers ?? job.gateWaivers,
 					taskArn: update.taskArn ?? job.taskArn,
 					repositoryUrl: update.repositoryUrl ?? job.repositoryUrl,
+					awaitingApproval:
+						update.awaitingApproval !== undefined ? update.awaitingApproval : job.awaitingApproval,
+					approved: update.approved !== undefined ? update.approved : job.approved,
 					startedAt: update.startedAt?.toISOString() ?? job.startedAt,
 					finishedAt: update.finishedAt?.toISOString() ?? job.finishedAt,
 				}
