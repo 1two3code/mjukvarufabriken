@@ -48,6 +48,8 @@ describe('exec', () => {
 			APPRUNNER_CONNECTION_ARN: 'arn:apprunner:connection',
 			APPRUNNER_INSTANCE_ROLE_ARN: 'arn:iam:role',
 			GITHUB_TOKEN: 'ghp_x',
+			GITHUB_APP_PRIVATE_KEY: '-----BEGIN RSA PRIVATE KEY-----',
+			GITHUB_APP_ID: '12345',
 			JOB_TOKEN: 'job-report-token',
 			JOB_ID: 'job-1',
 			GITHUB_ORG: 'mjukvaruhuset',

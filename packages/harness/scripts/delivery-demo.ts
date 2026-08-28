@@ -65,7 +65,14 @@ const target = {
 
 const clients = createLiveDeliveryClients({
 	dryRun: values['dry-run'],
-	githubToken: process.env.GITHUB_TOKEN,
+	githubApp:
+		process.env.GITHUB_APP_ID && process.env.GITHUB_APP_PRIVATE_KEY && process.env.GITHUB_APP_INSTALLATION_ID
+			? {
+					appId: process.env.GITHUB_APP_ID,
+					privateKey: process.env.GITHUB_APP_PRIVATE_KEY,
+					installationId: Number(process.env.GITHUB_APP_INSTALLATION_ID),
+				}
+			: undefined,
 	appRunnerConnectionArn: process.env.APPRUNNER_CONNECTION_ARN,
 	appRunnerInstanceRoleArn: process.env.APPRUNNER_INSTANCE_ROLE_ARN,
 	artifactsBucket: process.env.ARTIFACTS_BUCKET,

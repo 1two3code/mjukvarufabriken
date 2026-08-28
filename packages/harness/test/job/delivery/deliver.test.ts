@@ -509,6 +509,6 @@ describe('deliver', () => {
 
 		// Assert
 		expect(outcome.ok).toBe(false)
-		expect(outcome.reason).toBe('github: GITHUB_TOKEN is not configured (TODO-EXTERNAL)')
+		expect(outcome.reason).toBe('github: GITHUB_APP (id/key/installation) is not configured (TODO-EXTERNAL)')
 	})
 })

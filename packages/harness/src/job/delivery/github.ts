@@ -1,3 +1,4 @@
+import { createAppAuth } from '@octokit/auth-app'
 import { Octokit } from '@octokit/rest'
 
 import { exec, redactUrlCredentials, tail } from '#job/exec.ts'
@@ -38,9 +39,18 @@ export const pushBranch = async (
 	}
 }
 
-/** Octokit against api.github.com with `GITHUB_TOKEN` (repo + admin:org scope on the org) */
-export const createOctokitGitHubClient = (token: string): GitHubClient => {
-	const octokit = new Octokit({ auth: token, userAgent: 'mf-harness/0.1' })
+/** A GitHub App's identity: signs a JWT (`privateKey`) to mint short-lived installation tokens */
+export type GitHubAppAuth = { appId: string; privateKey: string; installationId: number }
+
+/**
+ * Octokit authenticated as a GitHub App installation. `@octokit/auth-app` mints (and refreshes)
+ * a 1-hour installation token for every REST call from the App's private key — no long-lived PAT.
+ * The git push runs an external process, so its token is minted explicitly per push.
+ */
+export const createOctokitGitHubClient = (auth: GitHubAppAuth): GitHubClient => {
+	const octokit = new Octokit({ authStrategy: createAppAuth, auth, userAgent: 'mf-harness/0.1' })
+	const installationToken = async () =>
+		((await octokit.auth({ type: 'installation' })) as { token: string }).token
 	return {
 		createRepo: async ({ org, name, description }) => {
 			const { data } = await octokit.rest.repos.createInOrg({
@@ -54,7 +64,8 @@ export const createOctokitGitHubClient = (token: string): GitHubClient => {
 			})
 			return { url: data.html_url, cloneUrl: data.clone_url }
 		},
-		push: ({ repoDir, cloneUrl, branch }) => pushBranch(repoDir, cloneUrl, branch, token),
+		push: async ({ repoDir, cloneUrl, branch }) =>
+			pushBranch(repoDir, cloneUrl, branch, await installationToken()),
 		addCollaborator: async ({ org, name, login, permission }) => {
 			await octokit.rest.repos.addCollaborator({
 				owner: org,

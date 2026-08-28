@@ -240,7 +240,7 @@ export class WebStack extends Stack {
 		//   ecs:RunTask (job family, jobs cluster only)         — start a build job
 		//   ecs:DescribeTasks/StopTask/ListTasks (jobs cluster) — job status + admin kill switch
 		//   iam:PassRole on the job task + execution roles      — required by RunTask
-		// Not granted: github-token (M5 mints per-job tokens), logs:* (execution role), any
+		// Not granted: github-app-key raw (only via the delivery secret grant), logs:* (execution role), any
 		// wildcard on secrets or buckets.
 		const taskRole = api.taskDefinition.taskRole
 		resources.databaseSecret.grantRead(taskRole)

@@ -16,6 +16,7 @@ import {
 } from './github.ts'
 import { createFakeProseWriter, createLiveProseWriter } from './prose.ts'
 
+import type { GitHubAppAuth } from './github.ts'
 import type { DeliveryClients, PreviewAuth } from './types.ts'
 
 export * from './appRunner.ts'
@@ -52,8 +53,8 @@ export const appNameOf = (goal: string, fallback = 'Your application') => {
 // MARK: Live clients
 
 export type LiveDeliveryOptions = {
-	/** `GITHUB_TOKEN` (resolved from `GITHUB_TOKEN_SECRET_ARN` by apps/job) */
-	githubToken?: string
+	/** GitHub App installation (app id + private key + installation id), resolved by apps/job */
+	githubApp?: GitHubAppAuth
 	githubOrg?: string
 	/** `APPRUNNER_CONNECTION_ARN` — without it the deploy step reports a reason and `deployUrl` null */
 	appRunnerConnectionArn?: string
@@ -82,7 +83,7 @@ const notConfigured = (what: string) => async () => {
  * job without a GitHub token still runs its build and gates and fails closed at delivery.
  */
 export const createLiveDeliveryClients = ({
-	githubToken,
+	githubApp,
 	githubOrg = process.env.GITHUB_ORG || defaultGitHubOrg,
 	appRunnerConnectionArn,
 	appRunnerInstanceRoleArn,
@@ -113,12 +114,12 @@ export const createLiveDeliveryClients = ({
 		}
 	}
 	return {
-		github: githubToken
-			? createOctokitGitHubClient(githubToken)
+		github: githubApp
+			? createOctokitGitHubClient(githubApp)
 			: {
-					createRepo: notConfigured('GITHUB_TOKEN'),
-					push: notConfigured('GITHUB_TOKEN'),
-					addCollaborator: notConfigured('GITHUB_TOKEN'),
+					createRepo: notConfigured('GITHUB_APP (id/key/installation)'),
+					push: notConfigured('GITHUB_APP (id/key/installation)'),
+					addCollaborator: notConfigured('GITHUB_APP (id/key/installation)'),
 				},
 		deploy: !appRunnerConnectionArn
 			? { deployFromRepo: notConfigured('APPRUNNER_CONNECTION_ARN') }

@@ -38,7 +38,7 @@ export interface ResourcesStackProps extends StackProps {
 export type ExternalSecretName =
 	| 'anthropic-api-key'
 	| 'auth-jwt-private-key'
-	| 'github-token'
+	| 'github-app-key'
 	| 'github-oauth-client-secret'
 	| 'stripe-secret-key'
 	| 'stripe-webhook-secret'
@@ -154,7 +154,7 @@ export class ResourcesStack extends Stack {
 			'anthropic-api-key': createSecret('anthropic-api-key'),
 			// Ed25519 private JWK the api signs tokens with: `node scripts/gen-auth-key.mjs`
 			'auth-jwt-private-key': createSecret('auth-jwt-private-key'),
-			'github-token': createSecret('github-token'),
+			'github-app-key': createSecret('github-app-key'),
 			// Client secret of the "Sign in with GitHub" OAuth App (M6; TODO-EXTERNAL)
 			'github-oauth-client-secret': createSecret('github-oauth-client-secret'),
 			'stripe-secret-key': createSecret('stripe-secret-key'),
@@ -267,8 +267,14 @@ export class ResourcesStack extends Stack {
 				ENV: environment.name,
 				ARTIFACTS_BUCKET: this.artifactsBucket.bucketName,
 				ANTHROPIC_API_KEY_SECRET_ARN: this.secrets['anthropic-api-key'].secretArn,
-				// M5 delivery: GitHub push + App Runner preview + bundle upload
-				GITHUB_TOKEN_SECRET_ARN: this.secrets['github-token'].secretArn,
+				// M5 delivery: GitHub App installation tokens (repo push) + App Runner preview + bundle
+				GITHUB_APP_PRIVATE_KEY_SECRET_ARN: this.secrets['github-app-key'].secretArn,
+				...(environment.githubDelivery
+					? { GITHUB_APP_INSTALLATION_ID: String(environment.githubDelivery.installationId) }
+					: {}),
+				...(environment.githubDelivery?.appId
+					? { GITHUB_APP_ID: environment.githubDelivery.appId }
+					: {}),
 				...(environment.jobs.deliveryDryRun ? { DELIVERY_DRY_RUN: '1' } : {}),
 				APPRUNNER_INSTANCE_ROLE_ARN: this.appRunnerInstanceRole.roleArn,
 				...(environment.appRunner
@@ -291,7 +297,7 @@ export class ResourcesStack extends Stack {
 		// MARK: Job task role — reviewed M9, narrowed by M3 hardening, extended M5. The container
 		// runs customer-driven code, so it gets exactly what apps/job needs today:
 		//   secretsmanager:GetSecretValue on anthropic-api-key — the build itself (Agent SDK workers)
-		//   secretsmanager:GetSecretValue on github-token      — M5: create + push the customer repo.
+		//   secretsmanager:GetSecretValue on github-app-key    — M5: mint installation tokens to push the customer repo.
 		//     The M9 review removed this grant expecting a short-lived per-job token; that needs a
 		//     GitHub App (TODO-EXTERNAL), so the org token is BACK for v1. apps/job reads it once at
 		//     start-up and strips it from the environment the sandbox (workers, npm scripts) sees;
@@ -312,7 +318,7 @@ export class ResourcesStack extends Stack {
 		// (not read) another job's deliverable — versioning keeps the previous copy. Goes away
 		// when uploads move behind the same per-job endpoint (M5 delivery).
 		this.secrets['anthropic-api-key'].grantRead(this.jobTaskDefinition.taskRole)
-		this.secrets['github-token'].grantRead(this.jobTaskDefinition.taskRole)
+		this.secrets['github-app-key'].grantRead(this.jobTaskDefinition.taskRole)
 		this.artifactsBucket.grantPut(this.jobTaskDefinition.taskRole)
 		// App Runner has no grant* helpers. ListServices is account-level; the rest is fenced by the
 		// `Service=mf-delivery` tag the job sets on every service it creates.

@@ -27,8 +27,8 @@ export type JobConfig = {
 	cassetteDir?: string
 	/** M5 delivery (all optional: a missing value fails the delivery step, never the build) */
 	delivery: {
-		/** `GITHUB_TOKEN` or resolved from `GITHUB_TOKEN_SECRET_ARN`; undefined for an empty placeholder */
-		githubToken?: string
+		/** GitHub App installation (app id + private key + installation id); undefined until all three resolve */
+		githubApp?: { appId: string; privateKey: string; installationId: number }
 		githubOrg?: string
 		/** `APPRUNNER_CONNECTION_ARN` — the App Runner GitHub connection (TODO-EXTERNAL) */
 		appRunnerConnectionArn?: string
@@ -94,6 +94,24 @@ const previewAuthFromEnv = () => {
 	}
 }
 
+/**
+ * GitHub App credentials for delivery (repo create/push/transfer): app id + installation id from
+ * env, private key from `GITHUB_APP_PRIVATE_KEY` or `GITHUB_APP_PRIVATE_KEY_SECRET_ARN`. Undefined
+ * unless all three resolve — then the delivery `repo` step fails closed with a clear reason.
+ */
+const resolveGithubApp = async () => {
+	const appId = process.env.GITHUB_APP_ID?.trim()
+	const installationId = Number(process.env.GITHUB_APP_INSTALLATION_ID?.trim())
+	const privateKey = await resolveOptionalSecret(
+		'GITHUB_APP_PRIVATE_KEY',
+		'GITHUB_APP_PRIVATE_KEY_SECRET_ARN'
+	)
+	if (!appId || !privateKey || !Number.isInteger(installationId) || installationId <= 0) {
+		return undefined
+	}
+	return { appId, privateKey, installationId }
+}
+
 /** Optional secret: env value, else Secrets Manager via the ARN, else undefined (empty placeholder too) */
 const resolveOptionalSecret = async (envName: string, arnEnvName: string) => {
 	const fromEnv = process.env[envName]?.trim()
@@ -129,7 +147,7 @@ export const loadConfig = async (argv: string[]): Promise<JobConfig> => {
 		workerModel: process.env.WORKER_MODEL || undefined,
 		env: process.env.ENV || 'local',
 		delivery: {
-			githubToken: await resolveOptionalSecret('GITHUB_TOKEN', 'GITHUB_TOKEN_SECRET_ARN'),
+			githubApp: await resolveGithubApp(),
 			githubOrg: process.env.GITHUB_ORG || undefined,
 			appRunnerConnectionArn: process.env.APPRUNNER_CONNECTION_ARN || undefined,
 			appRunnerInstanceRoleArn: process.env.APPRUNNER_INSTANCE_ROLE_ARN || undefined,

@@ -40,6 +40,12 @@ export type EnvironmentConfig = {
 	 * button hidden (`VITE_GITHUB_SIGNIN`).
 	 */
 	githubOAuth?: { clientId: string }
+	/**
+	 * M5 delivery via the GitHub App's installation tokens (repo create/push/transfer). `appId`
+	 * and `installationId` are public-ish config; the App private key lives in the
+	 * `github-app-key` secret. `appId` unset → delivery's repo step fails closed until it is set.
+	 */
+	githubDelivery?: { appId?: string; installationId: number }
 	/** Outgoing email: `ses` sends through SES, `log` only logs the message (magic link in the api log) */
 	email: { transport: 'ses' | 'log'; from: string }
 	/**
@@ -107,6 +113,9 @@ export const config: Config = {
 			// (same web sign-in endpoints as an OAuth App; needs the "Email addresses: read" account
 			// permission for the `user:email` fetch).
 			githubOAuth: { clientId: 'Iv23liGn1P0xZHYqiBYa' },
+			// GitHub App install for delivery (id 157166357, 2026-08-28). `appId` pending — set it
+			// (the App's numeric App ID, not the client id) to enable the live repo push.
+			githubDelivery: { installationId: 157166357 },
 			// `log` until SES production access is granted (TODO-EXTERNAL): copy the link from the api log
 			email: { transport: 'log', from: emailFrom },
 			domain: {
