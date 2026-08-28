@@ -4,6 +4,12 @@ Where a build job's tokens go, and the levers in `packages/harness/src/job/worke
 (`workerLimits`). Written 2026-08-27 from the code and the recorded runs below; nothing here has
 been re-measured on a live job yet — every saving is an estimate until the next M10 dogfood run.
 
+> **2026-08-28 (wave 7, worker-efficiency stream).** Added a per-task efficiency log line and
+> tuned the foundation cap against the family-hub #2 evidence. The measurement lever the wave-3
+> analysis below called for is now built in — see [Per-task efficiency instrumentation](#per-task-efficiency-instrumentation-2026-08-28)
+> at the end. It does not change `cost()`/`totalTokens()` semantics or the delivery path (other
+> wave-7 streams own those).
+
 ## The numbers we have (S demo spec, claude-sonnet-5 workers)
 
 Budget-tokens = input + output + cache writes + 10 % of cache reads (`cacheReadWeight`).
@@ -88,3 +94,95 @@ above for the same S demo spec:
 
 Then flip one knob at a time (`workerLimits`, `WORKER_EFFORT`) and re-run; append the numbers to
 TOKENS.md and this file.
+
+---
+
+## Per-task efficiency instrumentation (2026-08-28)
+
+Wave 3 (above) shipped the *levers* — scoped gate, size caps, the trimmed worker prompt — but the
+"how to measure the next live job" section was a manual grep over scattered log lines
+(`session result`, `turn cap reached`, ad-hoc `cache_read` inspection). Wave 7 turns that into one
+structured line per task, and tightens the one cap the real runs proved wrong.
+
+### The `task efficiency` log line
+
+`runTask` now logs exactly one JSON line per task, whatever the outcome (green, capped, failed):
+
+```json
+{"message":"task efficiency","taskId":"family-hub-foundation","size":"L","model":"claude-sonnet-5",
+ "turns":146,"turnCap":160,"capHit":false,"gateRuns":2,"scopedGate":false,
+ "usage":{"inputTokens":…,"outputTokens":…,"cacheReadInputTokens":…,"cacheCreationInputTokens":…},
+ "budgetTokens":…,"costUsd":…}
+```
+
+- **`usage`** is the *raw* four-bucket total (`addUsage` folds every `onUsage` delta from both the
+  implementation and the repair session). It is the same shape wave-7 s6 persists per session, so
+  cost can be recomputed if prices move.
+- **`budgetTokens`** = `totalTokens(usage)` — the budget-cap metric (cache reads at 0.1×),
+  reported unchanged so it reconciles with the job's `tokens` total and the 15M cap.
+- **`costUsd`** = `cost(usage, model)` — the actual billed dollars at the worker model's list
+  prices (output ~5× input, cache-read 0.1×, cache-write 1.25×), rounded to the cent-thousandth.
+  This is the number to reconcile against the Anthropic console and to compare across tuning runs;
+  `budgetTokens` alone hides that output and cache-writes cost more per token than the cap weights
+  them. Reading `cost()` here changes none of its semantics — s6 owns that function.
+- **`turns`** sums the assistant turns of both sessions (`SessionOutcome.turns`, counted from the
+  stream by API message id). It is the single best proxy for waste: the wave-3 numbers show cost
+  grows roughly linearly with turns because every turn re-reads the whole cached context.
+- **`turnCap`** is the cap the implementation session ran under (the foundation floor for a
+  dependency-free task, otherwise the size cap); **`capHit`** is true when either session hit its
+  cap. A capped green task is a signal the cap is too low for real work of that size, not a failure.
+- **`gateRuns`** counts the harness gate executions (1, or 2 when a repair pass ran); **`scopedGate`**
+  is true when the final gate stayed inside the task's workspaces and false when it widened to the
+  full repo. Together they are how we **confirm the scoped-gate path is actually taken** on a live
+  run instead of assuming it from the code: grep the lines and read `scopedGate`/`gateRuns` per task.
+
+To audit a job: `grep '"message":"task efficiency"'` the job log, one row per task. Sum `costUsd`
+for the job's true model spend; `scopedGate:false` rows are the tasks that paid the full-repo gate
+(a schema in `packages/models`, a root-config edit — legitimate, but the tasks to look at first if
+gate wall-clock is the bottleneck); `capHit:true` rows are cap-tuning candidates.
+
+### Cap tuning against real data
+
+The wave-3 caps (S 80 / M 120 / L 160, foundation floored at **120**) were estimates from two S-demo
+runs. The 2026-08-28 family-hub #2 build (an M/L app) gave the first real evidence:
+
+- **The foundation task hit the 120 floor** and had to be finished by the 60-turn repair session
+  from the commit history alone — precisely the lossy hand-off the floor exists to avoid (the
+  repair session starts with a warm cache but *without* the first session's exploration in context,
+  so it re-derives what the foundation already knew).
+- Its L-class implementation tasks ran near the 160 cap without hitting it, so the **L size cap
+  holds**; S/M are unchanged (no S/M-class real run has re-measured them yet).
+
+**Change:** `workerLimits.foundationTurns` **120 → 160** (the L cap). A real foundation task — shared
+scaffolding + cleanup + i18n, size-independent — now completes in one session instead of spilling
+into the repair valve; the valve stays for genuine over-runs. The size caps (`maxTurnsBySize`) are
+untouched. This is still an estimate: the log line above is exactly what the next dogfood run reads
+to confirm 160 is enough and not wastefully generous (watch `turns` and `capHit` on the foundation
+task) — tighten toward the observed p90 once there are numbers.
+
+### Per-turn context / CLAUDE.md re-reads
+
+The wave-3 trim (the long template `CLAUDE.md` and `.claude/rules/*` demoted to a "read if needed"
+pointer, `taskConventions` instead of the full `repoConventions` in the worker system prompt) is
+confirmed still in place — the system prompt no longer tells the worker to read `CLAUDE.md` up
+front. Two small reinforcements in the "Working efficiently" block: spell out *why* not to read the
+rules up front (they are large and sit in context for the whole session), and an explicit "do not
+re-read a file already in your context" — the cheapest fix for the fix-loop tail, where a worker
+sometimes re-Reads a file it edited a few turns earlier, paying its full size again as fresh input.
+
+The instrumentation makes the CLAUDE.md question measurable rather than argued: a worker that
+re-reads a 4k-token file every few turns shows up as an `inputTokens` bucket that is large relative
+to `turns`, and as `cacheCreationInputTokens` growth late in a session. If the next dogfood run
+shows that pattern, the lever is to strip the worker's `Read` of `CLAUDE.md`/`*.instructions.md`
+outright (a tool-input guard), not another prompt sentence — deferred until the numbers justify it.
+
+### For Hasse to confirm (operator)
+
+- **`foundationTurns = 160`** is an estimate from a single build (family-hub #2). Re-measure the
+  foundation task's `turns`/`capHit` on the next live job before trusting it; drop it back toward
+  the observed cost if 160 proves generous.
+- The **S/M size caps have never been re-measured on a real S/M app** — only the S demo spec and
+  the family-hub L build. The `task efficiency` line per task is the data to tune them from.
+- `costUsd` uses the `modelPrices` table (s6), which still carries a `TODO-EXTERNAL` for Hasse to
+  confirm the exact per-model USD/MTok rates against the Anthropic console before it bills real
+  invoices. The efficiency log inherits that caveat.

@@ -4,9 +4,11 @@ import { join } from 'node:path'
 
 import { exec } from '#job/exec.ts'
 import {
+	addUsage,
 	cliJsonSchema,
 	createWorkerSpawner,
 	createWorktree,
+	emptyUsage,
 	ensureShared,
 	evaluateVitestReport,
 	fetchTaskBranch,
@@ -15,14 +17,15 @@ import {
 	gateScopeForChanges,
 	hasTestFiles,
 	maxTurnsForSpec,
-	renderCommand,
-	repoConventions,
 	protectGitDir,
 	removeWorktree,
+	renderCommand,
+	repoConventions,
 	resolveEffort,
 	sessionEnv,
 	shareWithWorker,
 	taskConventions,
+	taskEfficiency,
 	verifyRepo,
 	workerLimits,
 	workerSystemPrompt,
@@ -168,6 +171,91 @@ describe('maxTurnsForSpec', () => {
 	})
 })
 
+describe('addUsage', () => {
+	it('Sums buckets and treats a missing bucket as 0', () => {
+		expect(addUsage(emptyUsage(), { inputTokens: 10, outputTokens: 5 })).toEqual({
+			inputTokens: 10,
+			outputTokens: 5,
+			cacheReadInputTokens: 0,
+			cacheCreationInputTokens: 0,
+		})
+		expect(
+			addUsage(
+				{ inputTokens: 1, outputTokens: 2, cacheReadInputTokens: 3, cacheCreationInputTokens: 4 },
+				{
+					inputTokens: 10,
+					outputTokens: 20,
+					cacheReadInputTokens: 30,
+					cacheCreationInputTokens: 40,
+				}
+			)
+		).toEqual({
+			inputTokens: 11,
+			outputTokens: 22,
+			cacheReadInputTokens: 33,
+			cacheCreationInputTokens: 44,
+		})
+	})
+})
+
+describe('taskEfficiency', () => {
+	it('Reports the raw usage, the weighted budget total and the billed USD cost', () => {
+		const summary = taskEfficiency({
+			taskId: 'app-landing',
+			size: 'S',
+			model: 'claude-sonnet-5',
+			turns: 42,
+			turnCap: 80,
+			capHit: false,
+			gateRuns: 1,
+			scopedGate: true,
+			usage: {
+				inputTokens: 1000,
+				outputTokens: 500,
+				cacheReadInputTokens: 200_000,
+				cacheCreationInputTokens: 4000,
+			},
+		})
+		// budget-tokens: 1000 + 500 + 4000 + 0.1 × 200 000 = 25 500 (cache reads weighted at 0.1×)
+		expect(summary.budgetTokens).toBe(25_500)
+		// cost at sonnet prices: (1000×3 + 500×15 + 200 000×0.3 + 4000×3.75) / 1e6 = 0.0855 USD
+		expect(summary.costUsd).toBe(0.0855)
+		expect(summary).toMatchObject({
+			message: 'task efficiency',
+			taskId: 'app-landing',
+			size: 'S',
+			model: 'claude-sonnet-5',
+			turns: 42,
+			turnCap: 80,
+			capHit: false,
+			gateRuns: 1,
+			scopedGate: true,
+		})
+	})
+
+	it('Prices an unknown model at the Sonnet fallback, never at zero', () => {
+		const usage = {
+			inputTokens: 1_000_000,
+			outputTokens: 0,
+			cacheReadInputTokens: 0,
+			cacheCreationInputTokens: 0,
+		}
+		expect(
+			taskEfficiency({
+				taskId: 't',
+				size: 'M',
+				model: 'some-future-model',
+				turns: 1,
+				turnCap: 120,
+				capHit: false,
+				gateRuns: 1,
+				scopedGate: false,
+				usage,
+			}).costUsd
+		).toBe(3)
+	})
+})
+
 describe('workerSystemPrompt', () => {
 	it('Names the scoped gate commands and the at-most-twice rule', () => {
 		const prompt = workerSystemPrompt(spec, plan, task(['apps/app']))
@@ -219,7 +307,7 @@ describe('sessionEnv', () => {
 		expect(env.HOME).toBeUndefined()
 	})
 
-	it('Gives the session the worker uid\'s HOME and Claude config dir when one is configured', () => {
+	it("Gives the session the worker uid's HOME and Claude config dir when one is configured", () => {
 		const env = sessionEnv({ PATH: '/usr/bin', HOME: '/home/node', WORKER_UID: '1001' })
 		expect(env).toMatchObject({
 			PATH: '/usr/bin',
@@ -286,7 +374,7 @@ describe('shareWithWorker', () => {
 		}
 	})
 
-	it('Keeps the main repo\'s .git the job\'s own: readable, never group-writable', async () => {
+	it("Keeps the main repo's .git the job's own: readable, never group-writable", async () => {
 		if (!(await hasSetpriv())) return
 		const dir = await fakeTree()
 		await fakeGit(dir)
@@ -596,7 +684,12 @@ describe('hasTestFiles', () => {
 describe('cliJsonSchema', () => {
 	it('Drops the $schema/$id keywords Zod adds, keeps everything else', () => {
 		expect(
-			cliJsonSchema({ $schema: 'https://json-schema.org/draft/2020-12/schema', $id: 'x', type: 'object', properties: { a: { type: 'string' } } })
+			cliJsonSchema({
+				$schema: 'https://json-schema.org/draft/2020-12/schema',
+				$id: 'x',
+				type: 'object',
+				properties: { a: { type: 'string' } },
+			})
 		).toEqual({ type: 'object', properties: { a: { type: 'string' } } })
 	})
 })

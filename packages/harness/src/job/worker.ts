@@ -17,7 +17,7 @@ import {
 } from './exec.ts'
 import { renderSpecForPlanning } from './planner.ts'
 import { openTranscript, transcriptsDir } from './transcript.ts'
-import { totalTokens } from './types.ts'
+import { cost, totalTokens } from './types.ts'
 import { createUsageAccumulator } from './usage.ts'
 
 import { sizeClass } from '#spec/priceEstimator.ts'
@@ -76,15 +76,23 @@ export const workerLimits = {
 	scopedTaskGate: true,
 	/** Turn cap of the implementation session per spec size class */
 	// Measured 2026-08-26/27: a first "cleanup + i18n" task on the template takes 86–120 turns
-	// regardless of size class, so the caps leave room for it; the continuation session is the valve
+	// regardless of size class, so the caps leave room for it; the continuation session is the valve.
+	// 2026-08-28 (wave 7): family-hub #2 (an M/L build) hit the 160 foundation floor below AND its
+	// L implementation tasks ran near 160, so the L cap holds; S/M unchanged pending a re-measure.
 	maxTurnsBySize: { S: 80, M: 120, L: 160 } satisfies Record<SizeClass, number>,
 	/**
 	 * The foundation task (no dependencies — it owns the shared scaffolding, cleanup and i18n) costs
-	 * a size-independent 86–120 turns, so gating it on the S cap of 80 guarantees a cap on every
-	 * small build's first task. Give it this floor regardless of size class; the smaller size caps
-	 * still apply to the later, size-scaled tasks.
+	 * a size-independent 86–120 turns on the template, so gating it on the S cap of 80 guarantees a
+	 * cap on every small build's first task. Give it this floor regardless of size class; the
+	 * smaller size caps still apply to the later, size-scaled tasks.
+	 *
+	 * 2026-08-28 (wave 7): the family-hub #2 foundation hit the previous 120 floor and had to be
+	 * finished by the 60-turn repair session from commit history alone — the lossy path this floor
+	 * exists to avoid. Raised to 160 (the L cap) so a real foundation task completes in one session;
+	 * the repair valve stays for the genuine over-runs. Still an estimate: re-measure the foundation
+	 * turns on the next dogfood run and tighten if 160 proves generous (see docs/EFFICIENCY.md).
 	 */
-	foundationTurns: 120,
+	foundationTurns: 160,
 	/** Turn cap of the one repair session — the safety valve when the cap above cut the worker off */
 	repairTurns: 60,
 	/** `verifyRepo` shows the worker at most this many lines of a failing gate */
@@ -324,7 +332,9 @@ export const shareWithWorker = async (
 	// setgid on directories: everything either uid creates under a shared dir inherits the shared
 	// group and stays group-writable, so a worker can always create `.git/index.lock` (EACCES on
 	// it failed worker commits on Fargate run b6a5c09f, 2026-08-27)
-	await exec('find', [dir, ...prune, '-type', 'd', '-exec', 'chmod', 'g+s', '{}', '+'], { cwd: dir })
+	await exec('find', [dir, ...prune, '-type', 'd', '-exec', 'chmod', 'g+s', '{}', '+'], {
+		cwd: dir,
+	})
 	if (gitDir === 'private') await protectGitDir(dir)
 	shared.add(dir)
 }
@@ -599,6 +609,8 @@ export type SessionOutcome = {
 	maxTurnsReached?: boolean
 	/** The structured answer when `outputSchema` was given and the session produced one */
 	structuredOutput?: unknown
+	/** Assistant turns counted from the stream (one per API message id); for the efficiency log */
+	turns?: number
 }
 
 const effortLevels = ['low', 'medium', 'high', 'xhigh', 'max'] as const
@@ -822,6 +834,7 @@ export const runSession = async ({
 				result: withStderr(error.message),
 				maxTurnsReached: true,
 				structuredOutput,
+				turns,
 			}
 		}
 		if (error instanceof Error) error.message = withStderr(error.message)
@@ -831,8 +844,83 @@ export const runSession = async ({
 	}
 	// Top up with anything the per-message stream missed (subagents, compaction)
 	usage.reconcile(reported)
-	return { ok, tokens: usage.total, result, maxTurnsReached, structuredOutput }
+	return { ok, tokens: usage.total, result, maxTurnsReached, structuredOutput, turns }
 }
+
+// MARK: Per-task efficiency
+
+/** The four token buckets with none optional — the shape `cost()` bills and the log reports */
+export type UsageTotals = Required<TokenUsage>
+
+export const emptyUsage = (): UsageTotals => ({
+	inputTokens: 0,
+	outputTokens: 0,
+	cacheReadInputTokens: 0,
+	cacheCreationInputTokens: 0,
+})
+
+/** Sum two usage samples bucket by bucket; an absent bucket counts as 0 */
+export const addUsage = (a: TokenUsage, b: TokenUsage): UsageTotals => ({
+	inputTokens: a.inputTokens + b.inputTokens,
+	outputTokens: a.outputTokens + b.outputTokens,
+	cacheReadInputTokens: (a.cacheReadInputTokens ?? 0) + (b.cacheReadInputTokens ?? 0),
+	cacheCreationInputTokens: (a.cacheCreationInputTokens ?? 0) + (b.cacheCreationInputTokens ?? 0),
+})
+
+export type TaskEfficiency = {
+	message: 'task efficiency'
+	taskId: string
+	size: SizeClass
+	model: string
+	/** Assistant turns across both sessions (0 when a fake/older session reports none) */
+	turns: number
+	/** The turn cap the implementation session ran under (foundation floor or size cap) */
+	turnCap: number
+	/** A session hit its cap (the repair valve or a re-measure of the cap is warranted) */
+	capHit: boolean
+	/** How many times the harness gate ran for this task (1, or 2 with a repair pass) */
+	gateRuns: number
+	/** The final gate was scoped to the task's workspaces, not widened to the full repo */
+	scopedGate: boolean
+	/** Raw four-bucket usage — kept so cost can be recomputed if prices change */
+	usage: UsageTotals
+	/** The budget-cap metric (`totalTokens`: cache reads at 0.1×), unchanged in meaning */
+	budgetTokens: number
+	/** Billed USD at the worker model's list prices (`cost`), rounded to the cent-thousandth */
+	costUsd: number
+}
+
+/**
+ * The per-task efficiency summary that `runTask` logs once, structured so a dogfood run can grep
+ * it: turns spent, the raw four-bucket usage, the billed USD `cost()` at the worker model's prices,
+ * how many times the harness gate ran, and whether the scoped gate applied (vs. the full-repo
+ * gate). Pure — the shape is unit-tested — and it only *reads* `cost`/`totalTokens`, changing
+ * neither's semantics (billing basis vs. budget cap stay as wave-7 s6 defined them).
+ */
+export const taskEfficiency = (input: {
+	taskId: string
+	size: SizeClass
+	model: string
+	turns: number
+	turnCap: number
+	capHit: boolean
+	gateRuns: number
+	scopedGate: boolean
+	usage: UsageTotals
+}): TaskEfficiency => ({
+	message: 'task efficiency',
+	taskId: input.taskId,
+	size: input.size,
+	model: input.model,
+	turns: input.turns,
+	turnCap: input.turnCap,
+	capHit: input.capHit,
+	gateRuns: input.gateRuns,
+	scopedGate: input.scopedGate,
+	usage: input.usage,
+	budgetTokens: totalTokens(input.usage),
+	costUsd: Number(cost(input.usage, input.model).toFixed(4)),
+})
 
 // MARK: Task runner
 
@@ -895,7 +983,8 @@ const commitLeftovers = async (dir: string, task: Task, signal: AbortSignal) => 
 			branch: head.stdout.trim(),
 			commitsAhead: Number(ahead.stdout.trim()) || 0,
 			addError: add.code ? tail(add.stderr, 5) : undefined,
-			commitError: commit.code && !nothingToCommit ? tail(commit.stderr || commit.stdout, 5) : undefined,
+			commitError:
+				commit.code && !nothingToCommit ? tail(commit.stderr || commit.stdout, 5) : undefined,
 		})
 	)
 	// A git error other than "nothing to commit" (e.g. a lock/permission problem) is a real
@@ -903,11 +992,20 @@ const commitLeftovers = async (dir: string, task: Task, signal: AbortSignal) => 
 	if (add.code || (commit.code && !nothingToCommit)) {
 		const ls = await exec('ls', ['-ldn', join(dir, '.git'), join(dir, '.git/index')], { cwd: dir })
 		const id = await exec('id', [], { ...options })
-		console.log(JSON.stringify({ message: 'commit failure diag', taskId: task.id, git: ls.stdout.trim(), worker: id.stdout.trim() }))
+		console.log(
+			JSON.stringify({
+				message: 'commit failure diag',
+				taskId: task.id,
+				git: ls.stdout.trim(),
+				worker: id.stdout.trim(),
+			})
+		)
 	}
 	if (add.code) throw new Error(`git add failed in the task clone: ${tail(add.stderr, 5)}`)
 	if (commit.code && !nothingToCommit) {
-		throw new Error(`git commit failed in the task clone: ${tail(commit.stderr || commit.stdout, 5)}`)
+		throw new Error(
+			`git commit failed in the task clone: ${tail(commit.stderr || commit.stdout, 5)}`
+		)
 	}
 }
 
@@ -930,97 +1028,131 @@ export const runTask = async ({
 }: RunTaskInput): Promise<TaskOutcome> => {
 	const session = ports.runSession ?? runSession
 	const verify = ports.verifyRepo ?? verifyRepo
-	const { dir, branch } = await createWorktree(repoDir, task, signal)
-	const tdir = transcriptsDir(repoDir)
 	let tokens = 0
+	// Efficiency instrumentation (logged once in `finally`, so every exit path emits it — a normal
+	// return, an abort, or a throw from createWorktree/gate/a session): raw usage for cost(), turns
+	// across both sessions, how the gate ran. Accounting only — it changes no control flow.
+	let usageTotal = emptyUsage()
+	let turns = 0
+	let gateRuns = 0
+	let capHit = false
 	const count = (usage: TokenUsage) => {
 		tokens += totalTokens(usage)
+		usageTotal = addUsage(usageTotal, usage)
 		onUsage(usage)
 	}
 	const plannedScope = gateScopeForAreas(task.areas)
+	// Whether the final gate stayed scoped; the planned scope is the seed, `gate()` sets the real one
+	let scopedGate = !('full' in plannedScope)
 	const [lint, test] = gateCommands(plannedScope).map(renderCommand)
 	const systemPrompt = workerSystemPrompt(spec, plan, task, plannedScope)
 	const { size, maxTurns: sizeCap } = maxTurnsForSpec(spec)
 	// The foundation task (dependency-free) carries the size-independent scaffolding cost, so floor
 	// its cap at the measured foundation turns instead of the (possibly smaller) size cap.
-	const maxTurns = task.dependsOn.length === 0 ? Math.max(sizeCap, workerLimits.foundationTurns) : sizeCap
+	const maxTurns =
+		task.dependsOn.length === 0 ? Math.max(sizeCap, workerLimits.foundationTurns) : sizeCap
 	const notes: string[] = []
 	const noteCap = (outcome: SessionOutcome, label: string, cap: number) => {
 		if (!outcome.maxTurnsReached) return
+		capHit = true
 		notes.push(`${label} hit its turn cap (${cap} turns for size ${size})`)
 		console.log(
 			JSON.stringify({ message: 'turn cap reached', taskId: task.id, session: label, cap, size })
 		)
 	}
 	const withNotes = (reason: string) => (notes.length ? `${reason} (${notes.join('; ')})` : reason)
-	const gate = async () => {
-		const changed = await changedFiles(dir, signal)
-		const scope = gateScopeForChanges(task.areas, changed)
-		if ('full' in scope && !('full' in plannedScope)) {
-			notes.push('gate widened to the full repository (changes outside the task workspaces)')
+	try {
+		const { dir, branch } = await createWorktree(repoDir, task, signal)
+		const tdir = transcriptsDir(repoDir)
+		const gate = async () => {
+			const changed = await changedFiles(dir, signal)
+			const scope = gateScopeForChanges(task.areas, changed)
+			if ('full' in scope && !('full' in plannedScope)) {
+				notes.push('gate widened to the full repository (changes outside the task workspaces)')
+			}
+			scopedGate = !('full' in scope)
+			gateRuns += 1
+			const commands = gateCommands(scope).map(renderCommand)
+			return { verification: await verify(dir, signal, { areas: task.areas, changed }), commands }
 		}
-		const commands = gateCommands(scope).map(renderCommand)
-		return { verification: await verify(dir, signal, { areas: task.areas, changed }), commands }
-	}
 
-	const first = await session({
-		cwd: dir,
-		onMessage: openTranscript(tdir, `${task.id}.worker`).onMessage,
-		systemPrompt,
-		prompt: `Implement the task "${task.title}" as described in your instructions. Work through the task, run the gate (\`${lint}\`, \`${test}\`), fix, and commit.`,
-		signal,
-		onUsage: count,
-		model,
-		maxTurns,
-	})
-	if (signal.aborted) return { ok: false, tokens, branch, reason: 'aborted' }
-	if (!first.ok && !first.maxTurnsReached) {
-		return { ok: false, tokens, branch, reason: `agent session failed: ${first.result}` }
-	}
-	noteCap(first, 'worker session', maxTurns)
-
-	// A capped session is not a failure yet: whatever it left is committed and gated, and the
-	// second session is the safety valve that finishes the last mile.
-	await commitLeftovers(dir, task, signal)
-	const gated = await gate()
-	let { verification } = gated
-	const { commands } = gated
-	if (!verification.ok || first.maxTurnsReached) {
-		const [scopedLint, scopedTest] = commands
-		const prompt = verification.ok
-			? `Your previous session was cut off by its turn cap (${maxTurns} turns for size ${size}) and its work was committed; the gate (\`${scopedLint}\`, \`${scopedTest}\`) is green. Check the task against its description and acceptance criteria, finish whatever is missing, run the gate once, and commit.`
-			: `Verification failed after your work${first.maxTurnsReached ? ` (your session hit its turn cap: ${maxTurns} turns for size ${size})` : ''}. Fix it so that \`${scopedLint}\` and \`${scopedTest}\` pass, then commit. Run the gate at most once more after your fixes.\n\n${verification.output}`
-		const repair = await session({
+		const first = await session({
 			cwd: dir,
-			onMessage: openTranscript(tdir, `${task.id}.repair`).onMessage,
+			onMessage: openTranscript(tdir, `${task.id}.worker`).onMessage,
 			systemPrompt,
-			prompt,
+			prompt: `Implement the task "${task.title}" as described in your instructions. Work through the task, run the gate (\`${lint}\`, \`${test}\`), fix, and commit.`,
 			signal,
 			onUsage: count,
 			model,
-			maxTurns: workerLimits.repairTurns,
+			maxTurns,
 		})
+		turns += first.turns ?? 0
 		if (signal.aborted) return { ok: false, tokens, branch, reason: 'aborted' }
-		if (!repair.ok && !repair.maxTurnsReached) {
-			return {
-				ok: false,
-				tokens,
-				branch,
-				reason: withNotes(`repair session failed: ${repair.result}`),
+		if (!first.ok && !first.maxTurnsReached) {
+			return { ok: false, tokens, branch, reason: `agent session failed: ${first.result}` }
+		}
+		noteCap(first, 'worker session', maxTurns)
+
+		// A capped session is not a failure yet: whatever it left is committed and gated, and the
+		// second session is the safety valve that finishes the last mile.
+		await commitLeftovers(dir, task, signal)
+		const gated = await gate()
+		let { verification } = gated
+		const { commands } = gated
+		if (!verification.ok || first.maxTurnsReached) {
+			const [scopedLint, scopedTest] = commands
+			const prompt = verification.ok
+				? `Your previous session was cut off by its turn cap (${maxTurns} turns for size ${size}) and its work was committed; the gate (\`${scopedLint}\`, \`${scopedTest}\`) is green. Check the task against its description and acceptance criteria, finish whatever is missing, run the gate once, and commit.`
+				: `Verification failed after your work${first.maxTurnsReached ? ` (your session hit its turn cap: ${maxTurns} turns for size ${size})` : ''}. Fix it so that \`${scopedLint}\` and \`${scopedTest}\` pass, then commit. Run the gate at most once more after your fixes.\n\n${verification.output}`
+			const repair = await session({
+				cwd: dir,
+				onMessage: openTranscript(tdir, `${task.id}.repair`).onMessage,
+				systemPrompt,
+				prompt,
+				signal,
+				onUsage: count,
+				model,
+				maxTurns: workerLimits.repairTurns,
+			})
+			turns += repair.turns ?? 0
+			if (signal.aborted) return { ok: false, tokens, branch, reason: 'aborted' }
+			if (!repair.ok && !repair.maxTurnsReached) {
+				return {
+					ok: false,
+					tokens,
+					branch,
+					reason: withNotes(`repair session failed: ${repair.result}`),
+				}
+			}
+			noteCap(repair, 'repair session', workerLimits.repairTurns)
+			await commitLeftovers(dir, task, signal)
+			;({ verification } = await gate())
+			if (!verification.ok) {
+				return { ok: false, tokens, branch, reason: withNotes(verification.output) }
 			}
 		}
-		noteCap(repair, 'repair session', workerLimits.repairTurns)
-		await commitLeftovers(dir, task, signal)
-		;({ verification } = await gate())
-		if (!verification.ok) {
-			return { ok: false, tokens, branch, reason: withNotes(verification.output) }
+		await fetchTaskBranch(repoDir, dir, branch, signal)
+		if (!(await hasCommits(repoDir, branch, signal))) {
+			return { ok: false, tokens, branch, reason: withNotes('worker produced no commits') }
 		}
+		return { ok: true, tokens, branch, ...(notes.length ? { notes } : {}) }
+	} finally {
+		console.log(
+			JSON.stringify(
+				taskEfficiency({
+					taskId: task.id,
+					size,
+					model: resolveWorkerModel(model),
+					turns,
+					turnCap: maxTurns,
+					capHit,
+					gateRuns,
+					scopedGate,
+					usage: usageTotal,
+				})
+			)
+		)
 	}
-	await fetchTaskBranch(repoDir, dir, branch, signal)
-	if (!(await hasCommits(repoDir, branch, signal))) {
-		return { ok: false, tokens, branch, reason: withNotes('worker produced no commits') }
-	}
-	return { ok: true, tokens, branch, ...(notes.length ? { notes } : {}) }
 }
 
 /** True when the directory exists (used by callers that clean up worktrees defensively) */

@@ -3,7 +3,13 @@ import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 
 import { exec } from '#job/exec.ts'
-import { runSession, runTask, workerLimits } from '#job/worker.ts'
+import {
+	resolveWorkerModel,
+	runSession,
+	runTask,
+	taskEfficiency,
+	workerLimits,
+} from '#job/worker.ts'
 
 import type { Plan, Spec, Task } from '@mf/models'
 import type { VerifyOutcome } from '#job/types.ts'
@@ -247,6 +253,64 @@ describe('runTask', () => {
 			`worker session hit its turn cap (${workerLimits.foundationTurns} turns for size S)`,
 		])
 		expect(workerLimits.foundationTurns).toBeGreaterThan(workerLimits.maxTurnsBySize.S)
+	})
+
+	it('Logs a per-task efficiency summary: turns, scoped gate, one gate run, cost from the usage', async () => {
+		const sessions = fakeSessions([{ edits: { 'apps/app/src/x.ts': 'x' }, outcome: { turns: 12 } }])
+		const outcome = await runTask({
+			task,
+			spec,
+			plan,
+			repoDir,
+			signal,
+			onUsage,
+			ports: { ...sessions, ...fakeVerify([]) },
+		})
+		expect(outcome.ok).toBe(true)
+		expect(log).toHaveBeenCalledWith(
+			JSON.stringify(
+				taskEfficiency({
+					taskId: 'app-landing',
+					size: 'S',
+					model: resolveWorkerModel(),
+					turns: 12,
+					turnCap: 80,
+					capHit: false,
+					gateRuns: 1,
+					scopedGate: true,
+					usage: {
+						inputTokens: 10,
+						outputTokens: 5,
+						cacheReadInputTokens: 0,
+						cacheCreationInputTokens: 0,
+					},
+				})
+			)
+		)
+	})
+
+	it('Marks the efficiency summary full-gate and two gate runs when the gate widened and a repair ran', async () => {
+		const sessions = fakeSessions([
+			{
+				edits: { 'apps/app/src/x.ts': 'x', 'packages/models/schemas/Order.ts': 'z' },
+				outcome: capped,
+			},
+			{ edits: { 'apps/app/src/x.ts': 'fixed' }, outcome: { turns: 7 } },
+		])
+		const outcome = await runTask({
+			task,
+			spec,
+			plan,
+			repoDir,
+			signal,
+			onUsage,
+			ports: { ...sessions, ...fakeVerify([{ ok: false, output: 'boom' }]) },
+		})
+		expect(outcome.ok).toBe(true)
+		const summary = log.mock.calls
+			.map(([line]) => JSON.parse(String(line)))
+			.find(entry => entry.message === 'task efficiency')
+		expect(summary).toMatchObject({ scopedGate: false, gateRuns: 2, capHit: true, turns: 7 })
 	})
 
 	it('Fails a session that errored without hitting its cap', async () => {
