@@ -1,5 +1,6 @@
 import { z } from 'zod'
 
+import { LifecycleStateSchema } from './Lifecycle.ts'
 import { sizeClass } from './Spec.ts'
 
 import type { SpecStatus } from './Spec.ts'
@@ -99,6 +100,21 @@ export const OrderSchema = z.object({
 	 * (M6 sign-in) from this user at delivery time rather than from a snapshot on the order
 	 */
 	createdBy: z.string().optional(),
+	/**
+	 * Deprovisioning lifecycle of this order's delivery (teardown-deprovisioning.md #2). `active`
+	 * by default; an admin action or the grace-period sweep moves it to `suspended` (reversible
+	 * cost-stop) and then `torn_down` (permanent). See {@link LifecycleStateSchema}.
+	 */
+	lifecycle: LifecycleStateSchema.default('active'),
+	/** When the lifecycle last changed — the grace-period sweep counts N days from this instant. */
+	lifecycleChangedAt: z.iso.datetime().optional(),
+	/**
+	 * The per-customer fence tag value (`Customer=<slug>`) the delivery stamps on this order's ECS
+	 * Express service and everything it provisions. @mf/org `deprovision` scopes a real
+	 * suspend/teardown to exactly this slug, so a destructive run can never span orders. Set when
+	 * the build starts (from the same app-name/job derivation delivery uses); absent before a build.
+	 */
+	customerSlug: z.string().optional(),
 	createdAt: z.iso.datetime(),
 	updatedAt: z.iso.datetime(),
 })

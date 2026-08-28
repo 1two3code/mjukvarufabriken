@@ -21,6 +21,8 @@ type OrgRow = {
 	id: string
 	name: string
 	org_number: string | null
+	aws_account_id: string | null
+	aws_account_slug: string | null
 	created_at: Date
 }
 
@@ -38,6 +40,8 @@ export const toUser = (row: UserRow): User => ({
 export const toOrg = (row: OrgRow): Org => ({
 	id: row.id,
 	name: row.name,
+	awsAccountId: row.aws_account_id ?? undefined,
+	awsAccountSlug: row.aws_account_slug ?? undefined,
 	createdAt: row.created_at.toISOString(),
 })
 
@@ -121,6 +125,24 @@ export const listOrgs = async (db: Db): Promise<Org[]> => {
 	return rows.map(toOrg)
 }
 
+/**
+ * Records the vended AWS account id (and the slug it was vended under) on the org — the onboarding
+ * `provisionCustomerAccount` step (org-accounts.md #4). `undefined` when the org is missing.
+ */
+export const linkAwsAccount = async (
+	db: Db,
+	orgId: string,
+	account: { accountId: string; slug: string }
+): Promise<Org | undefined> => {
+	if (!isUuid(orgId)) return undefined
+	const [row] = await db.sql<OrgRow[]>`
+		update orgs
+			set aws_account_id = ${account.accountId}, aws_account_slug = ${account.slug}
+		where id = ${orgId}
+		returning *`
+	return row && toOrg(row)
+}
+
 export const createUsersRepository = (db: Db): UsersRepository => ({
 	get: id => getUser(db, id),
 	findByEmail: email => findUserByEmail(db, email),
@@ -131,4 +153,5 @@ export const createUsersRepository = (db: Db): UsersRepository => ({
 	getOrg: id => getOrg(db, id),
 	insertOrg: org => insertOrg(db, org),
 	listOrgs: () => listOrgs(db),
+	linkAwsAccount: (orgId, account) => linkAwsAccount(db, orgId, account),
 })

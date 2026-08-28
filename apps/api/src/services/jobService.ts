@@ -12,6 +12,7 @@ import {
 	SpecSchema,
 } from '@mf/models'
 
+import { customerSlugForBuild } from '#/lib/customerSlug.ts'
 import { EntityInvalid, EntityNotFound } from '#/lib/entityError.ts'
 import { defaultDownloadExpirySeconds } from '#/plugins/s3.ts'
 
@@ -309,6 +310,15 @@ const plugin: FastifyPluginAsync = async app => {
 					if (error.code === '23505') throw new JobAlreadyActive(orderId)
 					throw error
 				})
+
+			// Record the per-customer fence slug delivery will stamp on this build's ECS Express
+			// service (`Customer=<slug>`), so the admin deprovisioning lifecycle can later scope a
+			// suspend/teardown to exactly this order's resources. Best-effort — never fail a build over it.
+			await db.orders
+				.setCustomerSlug(orderId, customerSlugForBuild(spec.goal, job.id))
+				.catch((error: Error) =>
+					app.log.warn({ err: error, jobId: job.id }, 'Could not record the order customer slug')
+				)
 
 			if (!ecs.configured) {
 				app.log.warn({ jobId: job.id }, `ECS not configured — run: npm run job:dev -- ${job.id}`)

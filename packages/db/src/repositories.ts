@@ -6,6 +6,7 @@
 import type {
 	Job,
 	JobEvent,
+	LifecycleState,
 	NewJobEvent,
 	Order,
 	OrderStatus,
@@ -92,6 +93,23 @@ export type OrdersRepository = {
 	 */
 	setApproveBeforeDeliver: (orderId: string, enabled: boolean) => Promise<Order | undefined>
 
+	// MARK: Lifecycle (wave 9, deprovisioning)
+	/**
+	 * Compare-and-set on the deprovisioning lifecycle (`active` | `suspended` | `torn_down`),
+	 * stamping the change time. `from` guards the transition; `undefined` when the row is missing
+	 * or its lifecycle is not in `from`. Writing the state it already holds is an idempotent no-op
+	 * that still returns the row (the current state is in `from`).
+	 */
+	setLifecycle: (
+		orderId: string,
+		from: readonly LifecycleState[],
+		to: LifecycleState
+	) => Promise<Order | undefined>
+	/** Stores the per-customer fence slug (set when the build starts); `undefined` when missing */
+	setCustomerSlug: (orderId: string, customerSlug: string) => Promise<Order | undefined>
+	/** Suspended orders whose lifecycle changed before the instant — the grace-period sweep's candidates */
+	listSuspendedBefore: (changedBefore: Date) => Promise<Order[]>
+
 	// MARK: Payments (M6)
 	insertPayment: (payment: NewPayment) => Promise<Payment>
 	getPayment: (id: string) => Promise<Payment | undefined>
@@ -138,6 +156,14 @@ export type UsersRepository = {
 	getOrg: (id: string) => Promise<Org | undefined>
 	insertOrg: (org: NewOrg) => Promise<Org>
 	listOrgs: () => Promise<Org[]>
+	/**
+	 * Records the vended per-customer AWS account id + slug on the org (onboarding's
+	 * `provisionCustomerAccount` step, org-accounts.md #4). `undefined` when the org is missing.
+	 */
+	linkAwsAccount: (
+		orgId: string,
+		account: { accountId: string; slug: string }
+	) => Promise<Org | undefined>
 }
 
 /** `email`: an emailed magic link; `login`: the one-shot link a provider sign-in ends in (M6) */
