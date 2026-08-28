@@ -4,7 +4,7 @@ import { join } from 'node:path'
 
 import { describe, expect, it } from 'vitest'
 
-import { openTranscript, transcriptsDir } from '../../src/job/transcript.ts'
+import { openTranscript, transcriptsDir } from '#job/transcript.ts'
 
 import type { SDKMessage } from '@anthropic-ai/claude-agent-sdk'
 
@@ -30,7 +30,6 @@ describe('transcript', () => {
 			)
 			t.onMessage({ type: 'system' } as unknown as SDKMessage)
 			t.onMessage(result('error_max_turns'))
-			await t.flush()
 			const lines = (await readFile(join(dir, 'foundation.worker.jsonl'), 'utf8'))
 				.trim()
 				.split('\n')
