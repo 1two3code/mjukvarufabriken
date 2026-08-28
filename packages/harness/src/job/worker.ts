@@ -16,6 +16,7 @@ import {
 	workerEnv,
 } from './exec.ts'
 import { renderSpecForPlanning } from './planner.ts'
+import { openTranscript, transcriptsDir } from './transcript.ts'
 import { totalTokens } from './types.ts'
 import { createUsageAccumulator } from './usage.ts'
 
@@ -578,6 +579,8 @@ export type SessionInput = {
 	prompt: string
 	signal: AbortSignal
 	onUsage: (usage: TokenUsage) => void
+	/** Per-message tap for capturing a session transcript (see transcript.ts) */
+	onMessage?: (message: SDKMessage) => void
 	model?: string
 	maxTurns?: number
 	/** Reasoning effort (default: the model's; `WORKER_EFFORT` env overrides, see docs/EFFICIENCY.md) */
@@ -713,6 +716,7 @@ export const runSession = async ({
 	prompt,
 	signal,
 	onUsage,
+	onMessage,
 	model,
 	maxTurns = 200,
 	effort,
@@ -760,6 +764,7 @@ export const runSession = async ({
 	let turns = 0
 	try {
 		for await (const message of sessionQuery({ prompt, options })) {
+			onMessage?.(message)
 			const messageUsageValue = messageUsage(message)
 			if (messageUsageValue && message.type === 'assistant') {
 				const delta = usage.add(message.message.id, messageUsageValue)
@@ -926,6 +931,7 @@ export const runTask = async ({
 	const session = ports.runSession ?? runSession
 	const verify = ports.verifyRepo ?? verifyRepo
 	const { dir, branch } = await createWorktree(repoDir, task, signal)
+	const tdir = transcriptsDir(repoDir)
 	let tokens = 0
 	const count = (usage: TokenUsage) => {
 		tokens += totalTokens(usage)
@@ -959,6 +965,7 @@ export const runTask = async ({
 
 	const first = await session({
 		cwd: dir,
+		onMessage: openTranscript(tdir, `${task.id}.worker`).onMessage,
 		systemPrompt,
 		prompt: `Implement the task "${task.title}" as described in your instructions. Work through the task, run the gate (\`${lint}\`, \`${test}\`), fix, and commit.`,
 		signal,
@@ -985,6 +992,7 @@ export const runTask = async ({
 			: `Verification failed after your work${first.maxTurnsReached ? ` (your session hit its turn cap: ${maxTurns} turns for size ${size})` : ''}. Fix it so that \`${scopedLint}\` and \`${scopedTest}\` pass, then commit. Run the gate at most once more after your fixes.\n\n${verification.output}`
 		const repair = await session({
 			cwd: dir,
+			onMessage: openTranscript(tdir, `${task.id}.repair`).onMessage,
 			systemPrompt,
 			prompt,
 			signal,

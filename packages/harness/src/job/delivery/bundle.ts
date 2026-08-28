@@ -4,6 +4,7 @@ import { extname, join, relative } from 'node:path'
 
 import { exec, git, tail } from '#job/exec.ts'
 import { ensureShared } from '#job/worker.ts'
+import { transcriptsDir } from '#job/transcript.ts'
 
 import { acceptanceReportOf } from './types.ts'
 
@@ -31,6 +32,7 @@ const contentTypes: Record<string, string> = {
 	'.zip': 'application/zip',
 	'.md': 'text/markdown; charset=utf-8',
 	'.json': 'application/json',
+	'.jsonl': 'application/x-ndjson',
 	'.html': 'text/html; charset=utf-8',
 	'.js': 'text/javascript',
 	'.css': 'text/css',
@@ -105,10 +107,26 @@ export const uploadDebugBundle = async ({
 	signal,
 }: DebugBundleInput): Promise<DeliverableFile[]> => {
 	const prefix = debugKeyOf(jobId)
+	// Worker session transcripts (best-effort; present only when sessions ran) — the 'why' behind
+	// a failure, which repo.zip (main, so without a failed task's uncommitted work) can't show.
+	const tdir = transcriptsDir(repoDir)
+	const transcriptNames = (await readdir(tdir).catch(() => [] as string[])).filter(name =>
+		name.endsWith('.jsonl')
+	)
+	const transcriptEntries = await Promise.all(
+		transcriptNames.map(
+			async name =>
+				[`transcripts/${name}`, await readFile(join(tdir, name))] as unknown as [
+					DeliverableFileName,
+					Uint8Array,
+				]
+		)
+	)
 	const entries: [DeliverableFileName, Uint8Array | string][] = [
 		['repo.zip', await archiveMain(repoDir, signal)],
 		['gates.json', JSON.stringify(gates, null, 2)],
 		['acceptance.json', JSON.stringify(acceptanceReportOf(gates) ?? {}, null, 2)],
+		...transcriptEntries,
 	]
 	const files: DeliverableFile[] = []
 	for (const [name, body] of entries) {
