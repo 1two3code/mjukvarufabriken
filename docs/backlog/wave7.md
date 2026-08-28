@@ -12,15 +12,16 @@ Brief: [stripe-klarna.md](stripe-klarna.md). Handle Klarna's async payment event
 provider in test mode, invoices, explicit payment methods. The code + tests are buildable now; the live
 test-mode run waits on the Stripe keys.
 
-## Stream 2 — delivered-frontend-visible (the gap the e2e exposed)
-Today delivery pushes the SPA build to a **private** S3 prefix — so a delivered *frontend* app has no
-public URL to visit (the ECS Express URL serves the API only). Make a delivered app actually visitable:
-- **Static / no-backend apps → S3 + CloudFront** (a per-delivery public distribution), the decided path.
-- **Full-stack apps** → keep the ECS Express API + serve the SPA (either the api serves its built static
-  files as one URL, or the SPA on CloudFront calls the API). Pick one and make delivery choose by whether
-  the spec has a backend. The portal deliverables view shows the visitable URL.
-Areas: `packages/harness/src/job/delivery/*`, `infra` (per-delivery CloudFront or a shared one),
-`apps/portal` (show the site URL).
+## Stream 2 — delivered-frontend-visible ✅ core done 2026-08-28 (commit 1ca1ac4)
+The delivered ECS Express service now serves the built SPA at `/` and the BFF under `/bff`
+(`registerSpa` + a multi-stage api Dockerfile that builds the SPA), so the delivered URL shows
+the actual website and the portal's `deployUrl` link is the visitable site. Verified with a real
+docker build + container smoke and the offline e2e. Remaining (optional, this wave):
+- **Static / no-backend apps → S3 + CloudFront** so a purely-static site isn't served by a
+  Fargate container (cost/CDN). The api-serves-SPA path already covers full-stack + static for v1.
+- Rename the portal "preview" label to "Your site"; optionally drop the now-redundant private-S3
+  `uploadSite` step (kept only as a downloadable bundle artifact).
+Areas: `packages/harness/src/job/delivery/*`, `infra` (CloudFront), `apps/portal`.
 
 ## Stream 3 — delivered-repo-hygiene (option 2, decided 2026-08-28)
 The delivered customer repo ships OUR CI/deploy workflows (OIDC into our account). Strip/replace
