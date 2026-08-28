@@ -6,6 +6,7 @@ import {
 	isSpecComplete,
 	orderTransitions,
 } from '@mf/models'
+
 import { EntityInvalid, EntityNotFound } from '#/lib/entityError.ts'
 
 import type { FastifyInstance, FastifyPluginAsync } from 'fastify'
@@ -28,12 +29,14 @@ declare module 'fastify' {
 			 */
 			transition: (orderId: string, to: OrderStatus) => Promise<Order>
 			/**
-			 * Approve-before-deliver gate (W7): moves an `awaiting_approval` order to `delivered`.
+			 * Customer-facing order approval (W7): moves an `awaiting_approval` order to `delivered`.
 			 * Org-scoped — a customer or an admin of the order's org may approve. Throws
-			 * `InvalidOrderTransition` when the order is not awaiting approval.
+			 * `InvalidOrderTransition` when the order is not awaiting approval. Note this approves the
+			 * ORDER after the harness has already delivered the build; it is not a pre-delivery hold
+			 * (see `syncWithJob`).
 			 */
 			approve: (orderId: string, session: BackendSession) => Promise<Order>
-			/** Admin toggle of the per-order approve-before-deliver gate (W7) */
+			/** Admin toggle of the per-order approval step (`approveBeforeDeliver`, W7) */
 			setApprovalGate: (
 				orderId: string,
 				enabled: boolean,
@@ -110,11 +113,18 @@ const plugin: FastifyPluginAsync = async app => {
 	/**
 	 * The build's outcome moves the order on: a delivered job means the order is delivered and
 	 * the balance can be invoiced. Applied lazily on read so no job-side hook is needed.
+	 *
+	 * Honest scope of `awaiting_approval` (W7): this is a customer-facing ORDER-approval step, not
+	 * a pre-delivery hold. It only fires once `latest.status === 'delivered'`, i.e. the harness has
+	 * ALREADY delivered (repo pushed / gone live). So parking in `awaiting_approval` gates the
+	 * order-status/balance-invoice, not the build handover. A true pre-delivery HOLD (pausing the
+	 * harness before repo push / go-live and resuming on approval) needs a harness change and is a
+	 * follow-up out of this stream — do not read this as blocking delivery.
 	 */
 	const syncWithJob = async (order: Order, latest: Job | undefined) => {
 		if (!latest || order.status !== 'building' || latest.status !== 'delivered') return order
-		// The approve-before-deliver gate (W7) parks a flagged order for a human to approve;
-		// without the flag the order auto-delivers exactly as before.
+		// With the per-order flag on, the (already-delivered) build parks the order for a human to
+		// approve; without the flag the order auto-delivers exactly as before.
 		const next: OrderStatus = order.approveBeforeDeliver ? 'awaiting_approval' : 'delivered'
 		return (await db.orders.transition(order.id, ['building'], next)) ?? order
 	}

@@ -28,11 +28,13 @@ export type OrderStatus = (typeof orderStatus)[number]
  * without the deposit); `deposit_paid`/`building → cancelled` is admin-only too (the running
  * build is killed and the deposit needs a refund) — see `customerCancellableOrderStatus`.
  *
- * `awaiting_approval` is the optional approve-before-deliver gate (per-order flag
+ * `awaiting_approval` is the optional customer-facing order-approval step (per-order flag
  * `Order.approveBeforeDeliver`, default off, W7): once the build's job has delivered, an order
- * with the gate on parks in `awaiting_approval` — the gate reports and preview are shown and an
- * admin/customer must approve (`awaiting_approval → delivered`) before the order is delivered.
- * `building → delivered` stays legal so the default auto-deliver flow is unchanged.
+ * with the flag on parks in `awaiting_approval` — the gate reports and preview are shown and an
+ * admin/customer must approve (`awaiting_approval → delivered`) to accept the order. Honest scope:
+ * this parks AFTER the harness has delivered (repo pushed / gone live), so it gates the order
+ * status and balance invoice, not the build handover; a true pre-delivery hold needs a harness
+ * change and is a follow-up. `building → delivered` stays legal so the default flow is unchanged.
  */
 export const orderTransitions: Record<OrderStatus, readonly OrderStatus[]> = {
 	drafting: ['ready', 'cancelled'],
@@ -49,7 +51,7 @@ export const orderTransitions: Record<OrderStatus, readonly OrderStatus[]> = {
 export const canTransitionOrder = (from: OrderStatus, to: OrderStatus) =>
 	orderTransitions[from].includes(to)
 
-/** True while the order sits at the approve-before-deliver gate awaiting a human approval */
+/** True while the order sits at the order-approval step awaiting a human approval (W7) */
 export const isOrderAwaitingApproval = (status: OrderStatus) => status === 'awaiting_approval'
 
 /** Statuses a customer may cancel from: until the deposit is paid. Admins may also cancel later. */
@@ -85,9 +87,11 @@ export const OrderSchema = z.object({
 	priceSek: z.number().int().nonnegative().optional(),
 	frozenAt: z.iso.datetime().optional(),
 	/**
-	 * Approve-before-deliver gate (W7): when true, a delivered build parks the order in
-	 * `awaiting_approval` for a human to approve before it is delivered. Default off (undefined ⇒
-	 * the existing auto-deliver flow); toggled per order by an admin.
+	 * Order-approval step (W7): when true, an already-delivered build parks the order in
+	 * `awaiting_approval` for a human to accept before it moves to `delivered`. This gates the
+	 * customer-facing order status, not the build handover (the harness has already pushed by then;
+	 * a real pre-delivery hold is a follow-up harness change). Default off (undefined ⇒ the existing
+	 * auto-deliver flow); toggled per order by an admin.
 	 */
 	approveBeforeDeliver: z.boolean().optional(),
 	/**
