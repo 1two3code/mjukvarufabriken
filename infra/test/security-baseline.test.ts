@@ -45,7 +45,7 @@ const isSecretArnValue = (value: unknown) => {
 }
 
 describe('security baseline', () => {
-	for (const env of ['dev', 'live'] as const) {
+	for (const env of ['dev', 'qa', 'live'] as const) {
 		describe(env, () => {
 			const { resources, web } = synthEnvironment(env)
 

@@ -1,6 +1,6 @@
 import { InstanceClass, InstanceSize, InstanceType } from 'aws-cdk-lib/aws-ec2'
 
-export type EnvironmentName = 'dev' | 'live'
+export type EnvironmentName = 'dev' | 'qa' | 'live'
 
 export type DomainConfig = {
 	/** Custom domain for the public site, e.g. `mjukvaruhuset.se` */
@@ -131,6 +131,49 @@ export const config: Config = {
 				backupRetentionDays: 7,
 			},
 			jobs: { cpu: 2048, memoryMiB: 4096 }, // deliveryDryRun off 2026-08-28 — dev delivers for real now
+			alerts: {
+				jobTokensThreshold: 20_000_000,
+				monthlyBudgetUsd: 150,
+				natBytesOutPerHourThreshold: 2 * 1024 ** 3,
+			},
+		},
+		{
+			// qa — staging that mirrors the platform (environments.md phase 1). Deployed between dev
+			// and live (dev → qa → live). Sizing/behaviour mirror dev (log email, t4g.micro, 7-day
+			// backups) so qa is a cheap, safe rehearsal of a deploy; only the domains differ.
+			name: 'qa',
+			account,
+			region,
+			auth: { ...auth, issuer: 'https://api.qa.mjukvaruhuset.se' },
+			adminEmails: ['hasse.lofgren@outlook.com'],
+			// githubOAuth / githubDelivery are per-environment external credentials (one OAuth App and
+			// one GitHub App install per env — TODO-EXTERNAL). Left unset until the qa apps exist:
+			// the api then answers 404 on `/bff/auth/github` and delivery fails closed at `createRepo`.
+			// `log` until a qa SES identity is set up (TODO-EXTERNAL): copy the link from the api log
+			email: { transport: 'log', from: emailFrom },
+			domain: {
+				siteDomainName: 'qa.mjukvaruhuset.se',
+				portalDomainName: 'portal.qa.mjukvaruhuset.se',
+				apiDomainName: 'api.qa.mjukvaruhuset.se',
+				// Same hosted zone as dev/live — qa.* records live in the mjukvaruhuset.se zone
+				hostedZoneId: 'Z002863610X79ZE1B3K8F',
+				hostedZoneName: 'mjukvaruhuset.se',
+				// TODO-EXTERNAL: issue the qa ACM certificates (CloudFront cert in us-east-1, api cert
+				// in eu-north-1) covering qa.mjukvaruhuset.se / portal.qa… / api.qa… and paste the
+				// ARNs here. The placeholders below let `cdk synth` run offline but a real deploy
+				// fails closed until the certs exist (CloudFront/ALB reject an unknown ARN).
+				cloudFrontCertificateArn:
+					'arn:aws:acm:us-east-1:814967776290:certificate/PENDING-QA-CLOUDFRONT-CERT',
+				apiCertificateArn:
+					'arn:aws:acm:eu-north-1:814967776290:certificate/PENDING-QA-API-CERT',
+			},
+			// db.t4g.micro ≈ 15 USD/month; mirrors dev — qa is a rehearsal, not production traffic
+			database: {
+				instanceType: InstanceType.of(InstanceClass.T4G, InstanceSize.MICRO),
+				allocatedStorageGb: 20,
+				backupRetentionDays: 7,
+			},
+			jobs: { cpu: 2048, memoryMiB: 4096 },
 			alerts: {
 				jobTokensThreshold: 20_000_000,
 				monthlyBudgetUsd: 150,
