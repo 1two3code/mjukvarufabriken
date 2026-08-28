@@ -11,6 +11,7 @@ import { Deliverables } from '#/features/jobs/Deliverables.tsx'
 import { GateReports } from '#/features/jobs/GateReports.tsx'
 import { OrderStatusBadge } from '#/features/orders/OrderStatusBadge.tsx'
 import { OrderStepper } from '#/features/orders/OrderStepper.tsx'
+import { ApprovalPanel } from '#/features/orders/ApprovalPanel.tsx'
 import { PaymentPanel } from '#/features/orders/PaymentPanel.tsx'
 
 import { Button } from '#/components/Button.tsx'
@@ -34,6 +35,8 @@ const nextStep = (detail: OrderDetail) => {
 			return 'starting'
 		case 'building':
 			return 'building'
+		case 'awaiting_approval':
+			return 'approval'
 		case 'delivered':
 			return 'balance'
 		case 'paid':
@@ -48,6 +51,7 @@ const adminCancellable = new Set<OrderDetail['order']['status']>([
 	...customerCancellableOrderStatus,
 	'deposit_paid',
 	'building',
+	'awaiting_approval',
 ])
 
 export function OrderPage() {
@@ -174,6 +178,7 @@ export function OrderPage() {
 				</section>
 
 				<aside className={styles.side}>
+					<ApprovalPanel orderId={order.id} status={order.status} job={job} />
 					<PaymentPanel detail={detail} />
 					{job && (
 						<>

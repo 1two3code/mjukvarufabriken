@@ -20,6 +20,7 @@ type OrderRow = {
 	size_class: 'S' | 'M' | 'L' | null
 	price_sek: number | null
 	frozen_at: Date | null
+	approve_before_deliver: boolean
 	created_at: Date
 	updated_at: Date
 }
@@ -60,6 +61,7 @@ export const toOrder = (row: OrderRow): Order => ({
 	sizeClass: row.size_class ?? undefined,
 	priceSek: row.price_sek ?? undefined,
 	frozenAt: row.frozen_at?.toISOString(),
+	approveBeforeDeliver: row.approve_before_deliver,
 	createdBy: row.created_by ?? undefined,
 	createdAt: row.created_at.toISOString(),
 	updatedAt: row.updated_at.toISOString(),
@@ -201,6 +203,19 @@ export const transitionOrder = async (
 	return row && toOrder(row)
 }
 
+/** Toggles the approve-before-deliver gate (W7); `undefined` when the order is missing */
+export const setApproveBeforeDeliver = async (
+	db: Db,
+	orderId: string,
+	enabled: boolean
+): Promise<Order | undefined> => {
+	const [row] = await db.sql<OrderRow[]>`
+		update orders set approve_before_deliver = ${enabled}, updated_at = now()
+		where id = ${orderId}
+		returning *`
+	return row && toOrder(row)
+}
+
 // MARK: Payments (M6)
 
 export const insertPayment = async (db: Db, payment: NewPayment): Promise<Payment> => {
@@ -275,6 +290,8 @@ export const createOrdersRepository = (db: Db): OrdersRepository => ({
 	getOrder: orderId => getOrderRecord(db, orderId),
 	listOrders: filter => listOrderRecords(db, filter),
 	transition: (orderId, from, to) => transitionOrder(db, orderId, from, to),
+	setApproveBeforeDeliver: (orderId, enabled) =>
+		setApproveBeforeDeliver(db, orderId, enabled),
 	insertPayment: payment => insertPayment(db, payment),
 	getPayment: id => getPayment(db, id),
 	findPaymentBySession: sessionId => findPaymentBySession(db, sessionId),

@@ -14,6 +14,7 @@ const tone: Record<OrderStatus, string> = {
 	frozen: styles.info,
 	deposit_paid: styles.info,
 	building: styles.active,
+	awaiting_approval: styles.active,
 	delivered: styles.success,
 	paid: styles.success,
 	cancelled: styles.error,

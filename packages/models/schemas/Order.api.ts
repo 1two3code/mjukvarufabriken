@@ -8,10 +8,13 @@ import { specStatus } from './Spec.ts'
 // MARK: Mutations
 export const OrderMutationSchemas = {
 	CreateOrder: z.object({ name: z.string().trim().min(1).max(120) }).strict(),
+	/** Admin toggle of the per-order approve-before-deliver gate (W7) */
+	SetApprovalGate: z.object({ enabled: z.boolean() }).strict(),
 }
 
 export type OrderMutation = {
 	CreateOrder: z.infer<typeof OrderMutationSchemas.CreateOrder>
+	SetApprovalGate: z.infer<typeof OrderMutationSchemas.SetApprovalGate>
 }
 
 // MARK: Operations

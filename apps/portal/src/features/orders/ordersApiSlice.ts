@@ -35,6 +35,23 @@ export const ordersApiSlice = appApi.enhanceEndpoints({ addTagTypes: ['order'] }
 				{ type: 'order', id: 'list' },
 			],
 		}),
+		/** Approve-before-deliver gate (W7): approve an awaiting_approval order → it delivers */
+		approveOrder: build.mutation<Order, string>({
+			query: orderId => ({ url: `/orders/${orderId}/approve`, method: 'POST' }),
+			invalidatesTags: (_result, _error, orderId) => [
+				{ type: 'order', id: orderId },
+				{ type: 'order', id: 'list' },
+			],
+		}),
+		/** Admin toggle of the per-order approve-before-deliver gate */
+		setApprovalGate: build.mutation<Order, { orderId: string; enabled: boolean }>({
+			query: ({ orderId, enabled }) => ({
+				url: `/orders/${orderId}/approval-gate`,
+				method: 'PATCH',
+				body: { enabled },
+			}),
+			invalidatesTags: (_result, _error, { orderId }) => [{ type: 'order', id: orderId }],
+		}),
 		/** Returns the Checkout url; the caller sends the browser there */
 		createCheckout: build.mutation<CheckoutResponse, { orderId: string; kind: PaymentKind }>({
 			query: ({ orderId, kind }) => ({
@@ -59,6 +76,8 @@ export const {
 	useGetOrderQuery,
 	useCreateOrderMutation,
 	useCancelOrderMutation,
+	useApproveOrderMutation,
+	useSetApprovalGateMutation,
 	useCreateCheckoutMutation,
 	useCompleteFakeCheckoutMutation,
 } = ordersApiSlice

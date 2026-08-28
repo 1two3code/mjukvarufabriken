@@ -28,6 +28,7 @@ describe('row mapping', () => {
 				size_class: null,
 				price_sek: null,
 				frozen_at: null,
+				approve_before_deliver: false,
 				created_at: at,
 				updated_at: at,
 			})
@@ -54,6 +55,7 @@ describe('row mapping', () => {
 				size_class: 'M',
 				price_sek: 45_000,
 				frozen_at: at,
+				approve_before_deliver: true,
 				created_at: at,
 				updated_at: at,
 			})

@@ -110,6 +110,7 @@ export const createMemoryRepositories = (): MemoryRepositories => {
 		orgId: order.orgId,
 		name: order.name,
 		status,
+		approveBeforeDeliver: false,
 		createdBy: order.createdBy,
 		createdAt: now(),
 		updatedAt: now(),
@@ -416,6 +417,12 @@ export const createMemoryRepositories = (): MemoryRepositories => {
 				const entry = orders.get(orderId)
 				if (!entry || !from.includes(entry.order.status)) return undefined
 				entry.order = { ...entry.order, status: to, updatedAt: now() }
+				return clone(entry.order)
+			},
+			setApproveBeforeDeliver: async (orderId, enabled) => {
+				const entry = orders.get(orderId)
+				if (!entry) return undefined
+				entry.order = { ...entry.order, approveBeforeDeliver: enabled, updatedAt: now() }
 				return clone(entry.order)
 			},
 

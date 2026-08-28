@@ -92,7 +92,9 @@ describe('Order Service', () => {
 				'frozen',
 				'deposit_paid',
 				'building',
+				'awaiting_approval',
 			])
+			expect(transitionSources('delivered')).toEqual(['building', 'awaiting_approval'])
 			expect(transitionSources('paid')).toEqual(['delivered'])
 			expect(transitionSources('drafting')).toEqual(['ready'])
 		})
@@ -152,6 +154,92 @@ describe('Order Service', () => {
 			})
 			expect(app.jobService.kill).toHaveBeenCalledTimes(1)
 			expect(app.jobService.kill).toHaveBeenCalledWith('job-live')
+		})
+	})
+
+	describe('approve-before-deliver gate (W7)', () => {
+		const walk = async (id: string, path: OrderStatus[]) => {
+			for (const status of path) await app.orderService.transition(id, status)
+		}
+		const toBuilding = async () => {
+			const { id } = await app.orderService.create('x', user)
+			await walk(id, ['ready', 'frozen', 'deposit_paid', 'building'])
+			return id
+		}
+		const delivered = (id: string) => [createMockJob({ orderId: id, status: 'delivered' })]
+
+		it('Flag off: a delivered build auto-delivers the order (unchanged flow)', async () => {
+			const id = await toBuilding()
+			vi.spyOn(app.db.jobs, 'list').mockResolvedValue(delivered(id))
+
+			const detail = await app.orderService.getDetail(id, user)
+
+			expect(detail.order.status).toBe('delivered')
+			await expect(app.orderService.get(id, user)).resolves.toMatchObject({
+				approveBeforeDeliver: false,
+			})
+		})
+
+		it('Flag on: a delivered build parks the order in awaiting_approval', async () => {
+			const id = await toBuilding()
+			await app.db.orders.setApproveBeforeDeliver(id, true)
+			vi.spyOn(app.db.jobs, 'list').mockResolvedValue(delivered(id))
+
+			const detail = await app.orderService.getDetail(id, user)
+
+			expect(detail.order.status).toBe('awaiting_approval')
+			// The gate only holds until approval; it never regresses back to building on re-read
+			await expect(app.orderService.get(id, user)).resolves.toMatchObject({
+				status: 'awaiting_approval',
+			})
+		})
+
+		it('approve moves awaiting_approval → delivered', async () => {
+			const id = await toBuilding()
+			await app.db.orders.setApproveBeforeDeliver(id, true)
+			vi.spyOn(app.db.jobs, 'list').mockResolvedValue(delivered(id))
+			await app.orderService.getDetail(id, user)
+
+			await expect(app.orderService.approve(id, user)).resolves.toMatchObject({
+				status: 'delivered',
+			})
+		})
+
+		it('approve rejects when the order is not awaiting approval', async () => {
+			const id = await toBuilding()
+			await expect(app.orderService.approve(id, user)).rejects.toMatchObject({
+				from: 'building',
+				to: 'delivered',
+			})
+		})
+
+		it("approve hides another org's order and 404s the unknown", async () => {
+			const id = await toBuilding()
+			await app.db.orders.setApproveBeforeDeliver(id, true)
+			vi.spyOn(app.db.jobs, 'list').mockResolvedValue(delivered(id))
+			await app.orderService.getDetail(id, user)
+
+			await expect(app.orderService.approve(id, other)).rejects.toBeInstanceOf(EntityNotFound)
+			await expect(app.orderService.approve('missing', admin)).rejects.toBeInstanceOf(
+				EntityNotFound
+			)
+		})
+
+		it('setApprovalGate toggles the flag, org-scoped', async () => {
+			const { id } = await app.orderService.create('x', user)
+
+			await expect(app.orderService.setApprovalGate(id, true, admin)).resolves.toMatchObject({
+				approveBeforeDeliver: true,
+			})
+			await expect(app.orderService.setApprovalGate(id, false, admin)).resolves.toMatchObject({
+				approveBeforeDeliver: false,
+			})
+			await expect(app.orderService.setApprovalGate(id, true, other)).rejects.toBeInstanceOf(
+				EntityNotFound
+			)
+			await expect(app.orderService.setApprovalGate('missing', true, admin)).rejects.toBeInstanceOf(
+				EntityNotFound
+			)
 		})
 	})
 

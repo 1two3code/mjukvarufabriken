@@ -32,6 +32,12 @@ const mockPlugin: FastifyPluginAsync = async app => {
 		get: vi.fn((id: string) => Promise.resolve(createMockOrder({ id }))),
 		getDetail: vi.fn((id: string) => Promise.resolve(createMockOrderDetail({ order: { id } }))),
 		transition: vi.fn((id: string, status) => Promise.resolve(createMockOrder({ id, status }))),
+		approve: vi.fn((id: string) =>
+			Promise.resolve(createMockOrder({ id, status: 'delivered' }))
+		),
+		setApprovalGate: vi.fn((id: string, enabled: boolean) =>
+			Promise.resolve(createMockOrder({ id, approveBeforeDeliver: enabled }))
+		),
 		cancel: vi.fn((id: string) => Promise.resolve(createMockOrder({ id, status: 'cancelled' }))),
 	}
 

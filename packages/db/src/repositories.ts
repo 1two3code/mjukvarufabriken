@@ -86,6 +86,11 @@ export type OrdersRepository = {
 		from: readonly OrderStatus[],
 		to: OrderStatus
 	) => Promise<Order | undefined>
+	/**
+	 * Sets the approve-before-deliver gate flag (W7); `undefined` when the order is missing.
+	 * Idempotent — writing the same value returns the row unchanged.
+	 */
+	setApproveBeforeDeliver: (orderId: string, enabled: boolean) => Promise<Order | undefined>
 
 	// MARK: Payments (M6)
 	insertPayment: (payment: NewPayment) => Promise<Payment>

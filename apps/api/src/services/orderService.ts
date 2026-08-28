@@ -28,6 +28,18 @@ declare module 'fastify' {
 			 */
 			transition: (orderId: string, to: OrderStatus) => Promise<Order>
 			/**
+			 * Approve-before-deliver gate (W7): moves an `awaiting_approval` order to `delivered`.
+			 * Org-scoped — a customer or an admin of the order's org may approve. Throws
+			 * `InvalidOrderTransition` when the order is not awaiting approval.
+			 */
+			approve: (orderId: string, session: BackendSession) => Promise<Order>
+			/** Admin toggle of the per-order approve-before-deliver gate (W7) */
+			setApprovalGate: (
+				orderId: string,
+				enabled: boolean,
+				session: BackendSession
+			) => Promise<Order>
+			/**
 			 * Cancels the order. Customers may cancel until the deposit is paid; admins also from
 			 * `deposit_paid`/`building`. Any active build is killed and open Checkout sessions are
 			 * expired so nothing can be paid for a cancelled order; a paid deposit is reported as a
@@ -101,12 +113,29 @@ const plugin: FastifyPluginAsync = async app => {
 	 */
 	const syncWithJob = async (order: Order, latest: Job | undefined) => {
 		if (!latest || order.status !== 'building' || latest.status !== 'delivered') return order
-		return (await db.orders.transition(order.id, ['building'], 'delivered')) ?? order
+		// The approve-before-deliver gate (W7) parks a flagged order for a human to approve;
+		// without the flag the order auto-delivers exactly as before.
+		const next: OrderStatus = order.approveBeforeDeliver ? 'awaiting_approval' : 'delivered'
+		return (await db.orders.transition(order.id, ['building'], next)) ?? order
 	}
 
 	app.decorate('orderService', {
 		get,
 		transition,
+		approve: async (orderId, session) => {
+			const order = await get(orderId, session)
+			if (order.status !== 'awaiting_approval') {
+				throw new InvalidOrderTransition(orderId, order.status, 'delivered')
+			}
+			return transition(orderId, 'delivered')
+		},
+		setApprovalGate: async (orderId, enabled, session) => {
+			// Org-scoped read first: another org's order is EntityNotFound before any write
+			await get(orderId, session)
+			const updated = await db.orders.setApproveBeforeDeliver(orderId, enabled)
+			if (!updated) throw new EntityNotFound('order', orderId)
+			return updated
+		},
 		create: async (name, session) =>
 			db.orders.insert({
 				id: crypto.randomUUID(),
