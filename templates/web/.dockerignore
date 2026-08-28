@@ -2,10 +2,8 @@
 .github
 .claude
 .husky
-apps/app
 docs
 infra
-dist
+.git
 **/node_modules
 **/dist
-.git
