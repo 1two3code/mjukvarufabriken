@@ -1,4 +1,4 @@
-import { appendFile, mkdir } from 'node:fs/promises'
+import { appendFileSync, mkdirSync } from 'node:fs'
 import { dirname, join } from 'node:path'
 
 import type { SDKMessage } from '@anthropic-ai/claude-agent-sdk'
@@ -40,29 +40,33 @@ const compact = (message: SDKMessage): Record<string, unknown> | undefined => {
 	return undefined
 }
 
-export type Transcript = {
-	onMessage: (message: SDKMessage) => void
-	/** Resolves when all queued writes have flushed — for tests and pre-upload draining. */
-	flush: () => Promise<unknown>
-}
+export type Transcript = { onMessage: (message: SDKMessage) => void }
 
 /**
  * A best-effort, fire-and-forget transcript sink appending compact JSONL to
  * `<transcripts>/<name>.jsonl`. Only assistant turns (text + tool calls) and the final result are
  * recorded — tool results (file dumps) are omitted to keep it small. A write error must never
- * disturb the session, so failures are swallowed; writes are serialised through a promise chain so
- * lines never interleave.
+ * disturb the session, so failures are swallowed; writes are synchronous so
+ * lines never interleave and are on disk before the debug bundle reads them.
  */
 export const openTranscript = (dir: string, name: string): Transcript => {
 	const path = join(dir, `${name}.jsonl`)
-	let chain: Promise<unknown> = mkdir(dir, { recursive: true }).catch(() => {})
+	try {
+		mkdirSync(dir, { recursive: true })
+	} catch {
+		// best-effort: a debug transcript must never disturb the build
+	}
 	return {
+		// Synchronous so the file is complete the instant the session loop ends — the debug bundle
+		// reads it right after, and an async fire-and-forget write would race that read.
 		onMessage: message => {
 			const record = compact(message)
 			if (!record) return
-			const line = `${JSON.stringify(record)}\n`
-			chain = chain.then(() => appendFile(path, line)).catch(() => {})
+			try {
+				appendFileSync(path, `${JSON.stringify(record)}\n`)
+			} catch {
+				// swallow — best-effort, see above
+			}
 		},
-		flush: () => chain,
 	}
 }

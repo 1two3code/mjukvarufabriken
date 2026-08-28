@@ -741,7 +741,10 @@ describe('offline build-job e2e — delivery variants', () => {
 			const files = await uploadDebugBundle({ jobId: job.id, repoDir, gates: outcome.gates, artifacts })
 			const prefix = debugKeyOf(job.id)
 			expect(prefix).toBe(`deliverables/${job.id}/debug/`)
-			expect(files.map(file => file.name)).toEqual(['repo.zip', 'gates.json', 'acceptance.json'])
+			const names = files.map(file => file.name)
+			expect(names).toEqual(expect.arrayContaining(['repo.zip', 'gates.json', 'acceptance.json']))
+			// the failed build's worker sessions also leave compact transcripts in the bundle
+			expect(names.some(name => name.startsWith('transcripts/'))).toBe(true)
 			for (const name of ['repo.zip', 'gates.json', 'acceptance.json']) {
 				expect([...artifacts.objects.keys()], name).toContain(`${prefix}${name}`)
 			}
