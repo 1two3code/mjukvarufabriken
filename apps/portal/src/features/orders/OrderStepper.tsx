@@ -19,6 +19,7 @@ const currentStepIndex: Record<OrderStatus, number> = {
 	frozen: 2,
 	deposit_paid: 3,
 	building: 3,
+	awaiting_approval: 4,
 	delivered: 5,
 	paid: 6,
 	cancelled: -1,
