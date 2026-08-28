@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# Usage: infra/scripts/deploy.sh <env> [stack...]   e.g. infra/scripts/deploy.sh dev
+# Usage: infra/scripts/deploy.sh <env> [stack...]   e.g. infra/scripts/deploy.sh qa
 # Loads AWS credentials (AWS_* only) from the root .env, makes sure the account is CDK-bootstrapped
 # in every region the requested stacks use (the stack region, plus us-east-1 when a budget-<env>
 # stack is in the list — AWS Budgets is a us-east-1 service), then deploys resources-<env>, mf-<env>,
@@ -8,7 +8,12 @@
 # (scripts/ensure-bootstrapped.sh) as .github/workflows/deploy-environment.yml.
 set -euo pipefail
 cd "$(dirname "$0")/.."
-env=${1:?env (dev|live)}; shift || true
+env=${1:?env (dev|qa|live)}; shift || true
+# Deploy progression: dev → qa → live (environments.md phase 1). Reject anything else early.
+case "$env" in
+dev | qa | live) ;;
+*) echo "unknown env '$env' (expected dev|qa|live)" >&2; exit 1 ;;
+esac
 # Only the AWS_* lines — the root .env also holds api secrets the deploy has no use for.
 set -a; eval "$(grep -E '^AWS_[A-Z_]+=' ../.env || true)"; set +a
 export CDK_DEFAULT_ACCOUNT=$(aws sts get-caller-identity --query Account --output text)
