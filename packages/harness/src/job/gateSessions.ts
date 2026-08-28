@@ -5,6 +5,15 @@ import { z } from 'zod'
 import { AcceptanceReportSchema, ReviewFindingSchema } from '@mf/models'
 
 import { exec, tail } from './exec.ts'
+import {
+	citationExists,
+	RefuteOutputSchema,
+	refuteOutputJsonSchema,
+	resolveSkeptics,
+	skepticPrompt,
+	skepticSystemPrompt,
+	tallyRefutations,
+} from './gates/review.ts'
 import { renderSpecForPlanning } from './planner.ts'
 import { totalTokens } from './types.ts'
 import {
@@ -15,6 +24,7 @@ import {
 	verifyRepo,
 } from './worker.ts'
 
+import type { FindingVerdict, RefuteResult } from './gates/review.ts'
 import type { AcceptanceReport, ReviewFinding, Spec } from '@mf/models'
 import type { GateInput, GateOutcome, TokenUsage } from './types.ts'
 
@@ -187,6 +197,9 @@ const usageCounter = (onUsage: (usage: TokenUsage) => void) => {
 const readOnlyRule = `You are READ-ONLY: never create, edit, move or delete files, never run commands that change the working tree or git state (no git add/commit/checkout/reset, no npm install, no formatters with --write). Bash is for inspection only (git diff/log/show, npm test, grep, cat).`
 
 export type LiveGateOptions = { model?: string }
+
+/** Review gate options: the model, plus how many adversarial skeptics vote on the findings */
+export type ReviewGateOptions = LiveGateOptions & { skeptics?: number }
 
 // MARK: Gate 1 — acceptance tests from criteria
 
@@ -388,6 +401,112 @@ const reviewSession = async (
 const isActionable = (finding: ReviewFinding, waivers: string[]) =>
 	finding.severity !== 'low' && !waivers.includes(finding.id)
 
+// MARK: Adversarial refute pass
+
+/** One skeptic session: read-only, disproves the findings, discards anything it left behind */
+const skepticSession = async (
+	input: GateInput,
+	range: string,
+	findings: ReviewFinding[],
+	count: (usage: TokenUsage) => void,
+	model?: string
+): Promise<FindingVerdict[]> => {
+	const snapshot = await snapshotRepo(input.repoDir)
+	const session = await runSession({
+		cwd: input.repoDir,
+		systemPrompt: skepticSystemPrompt(input.spec, range, findings),
+		prompt: skepticPrompt(range),
+		signal: input.signal,
+		onUsage: count,
+		model,
+		maxTurns: 60,
+		tools: readOnlyTools,
+		outputSchema: refuteOutputJsonSchema,
+	})
+	await discardChanges(input.repoDir, snapshot)
+	if (!session.ok) return []
+	const parsed = RefuteOutputSchema.safeParse(session.structuredOutput)
+	return parsed.success ? parsed.data.verdicts : []
+}
+
+/**
+ * Verify every finding against the actual code before it can fail the gate. First a deterministic
+ * pass drops findings whose cited file does not exist in the tree (a hallucinated citation). Then
+ * `skeptics` independent adversaries each try to disprove the survivors by reading the cited
+ * lines; a finding a majority refutes is dropped. Everything dropped is counted as a false
+ * positive. Runs `skeptics` sessions total (each votes on all findings), regardless of how many
+ * findings there are; skips the sessions entirely when nothing survives the citation check.
+ */
+export const refuteFindings = async (
+	input: GateInput,
+	range: string,
+	findings: ReviewFinding[],
+	count: (usage: TokenUsage) => void,
+	options: { model?: string; skeptics: number }
+): Promise<RefuteResult> => {
+	if (!findings.length) return { kept: [], refuted: [] }
+	const cited: ReviewFinding[] = []
+	const refuted: RefuteResult['refuted'] = []
+	for (const finding of findings) {
+		if (await citationExists(input.repoDir, finding)) cited.push(finding)
+		else refuted.push({ finding, reason: 'cited file does not exist in the tree', votes: [] })
+	}
+
+	const { skeptics } = options
+	if (cited.length && skeptics > 0) {
+		const ballots: FindingVerdict[][] = []
+		for (let index = 0; index < skeptics; index += 1) {
+			if (input.signal.aborted) break
+			ballots.push(await skepticSession(input, range, cited, count, options.model))
+		}
+		const tally = tallyRefutations(cited, ballots, skeptics)
+		return { kept: tally.kept, refuted: [...refuted, ...tally.refuted] }
+	}
+	return { kept: cited, refuted }
+}
+
+/** Runs the refute pass, logs the false-positive count, and folds it into the gate's details */
+const applyRefutePass = async (
+	input: GateInput,
+	range: string,
+	findings: ReviewFinding[],
+	count: (usage: TokenUsage) => void,
+	options: { model?: string; skeptics: number },
+	stage: 'initial' | 'after-fix'
+): Promise<RefuteResult> => {
+	const result = await refuteFindings(input, range, findings, count, options)
+	if (result.refuted.length) {
+		console.warn(
+			JSON.stringify({
+				message: 'review refute pass dropped false positives',
+				stage,
+				skeptics: options.skeptics,
+				reviewed: findings.length,
+				kept: result.kept.length,
+				falsePositives: result.refuted.length,
+				refuted: result.refuted.map(entry => ({
+					id: entry.finding.id,
+					severity: entry.finding.severity,
+					claim: entry.finding.claim,
+					reason: entry.reason,
+					votes: entry.votes,
+				})),
+			})
+		)
+	}
+	return result
+}
+
+/** The false positives, shaped for a gate's `details` (no full finding object, just the essentials) */
+const refutedForDetails = (refuted: RefuteResult['refuted']) =>
+	refuted.map(entry => ({
+		id: entry.finding.id,
+		severity: entry.finding.severity,
+		claim: entry.finding.claim,
+		reason: entry.reason,
+		votes: entry.votes,
+	}))
+
 // MARK: Waiver line mapping
 
 export type Hunk = { oldStart: number; oldCount: number; newStart: number; newCount: number }
@@ -466,26 +585,38 @@ export const remapWaivers = async (
  */
 export const reviewGate = async (
 	input: GateInput,
-	{ model }: LiveGateOptions = {}
+	{ model, skeptics: skepticOption }: ReviewGateOptions = {}
 ): Promise<GateOutcome> => {
 	const { repoDir, signal, waivers, onUsage } = input
 	const { count, tokens } = usageCounter(onUsage)
+	const skeptics = resolveSkeptics(skepticOption)
+	const refuteOptions = { model, skeptics }
 	const seed = input.seedCommit ?? (await rootCommit(repoDir, signal))
 	const range = `${seed}..HEAD`
 
-	let findings: ReviewFinding[]
+	let reviewed: ReviewFinding[]
 	try {
-		findings = await reviewSession(input, range, count, model)
+		reviewed = await reviewSession(input, range, count, model)
 	} catch (error) {
 		if (signal.aborted) return { ok: false, tokens: tokens(), summary: 'aborted' }
 		return { ok: false, tokens: tokens(), summary: (error as Error).message }
 	}
 	if (signal.aborted) return { ok: false, tokens: tokens(), summary: 'aborted' }
 
+	// Verify every finding against the actual code before it can fail the gate: hallucinated
+	// citations and findings the skeptics refute are dropped and counted as false positives.
+	const refutePass = await applyRefutePass(input, range, reviewed, count, refuteOptions, 'initial')
+	if (signal.aborted) return { ok: false, tokens: tokens(), summary: 'aborted' }
+	const findings = refutePass.kept
+	let falsePositives = refutePass.refuted.length
+
 	const details: Record<string, unknown> = {
 		range,
 		findings,
 		waived: findings.filter(f => waivers.includes(f.id)).map(f => f.id),
+		skeptics,
+		falsePositives,
+		refuted: refutedForDetails(refutePass.refuted),
 		fixed: false,
 	}
 	const actionable = findings.filter(finding => isActionable(finding, waivers))
@@ -493,7 +624,9 @@ export const reviewGate = async (
 		return {
 			ok: true,
 			tokens: tokens(),
-			summary: `${findings.length} finding(s), none high/medium open`,
+			summary:
+				`${findings.length} finding(s), none high/medium open` +
+				(falsePositives ? ` (${falsePositives} false positive(s) refuted)` : ''),
 			details,
 		}
 	}
@@ -529,15 +662,31 @@ export const reviewGate = async (
 
 	const waiversAfterFix = await remapWaivers(repoDir, waivers, beforeFix, signal)
 	details.waiversAfterFix = waiversAfterFix
-	let afterFix: ReviewFinding[]
+	let reviewedAfterFix: ReviewFinding[]
 	try {
-		afterFix = await reviewSession(input, range, count, model)
+		reviewedAfterFix = await reviewSession(input, range, count, model)
 	} catch (error) {
 		if (signal.aborted) return { ok: false, tokens: tokens(), summary: 'aborted', details }
 		return { ok: false, tokens: tokens(), summary: (error as Error).message, details }
 	}
 	if (signal.aborted) return { ok: false, tokens: tokens(), summary: 'aborted', details }
+
+	// A high finding must survive the refute pass too before it re-fails the gate closed.
+	const refuteAfterFix = await applyRefutePass(
+		input,
+		range,
+		reviewedAfterFix,
+		count,
+		refuteOptions,
+		'after-fix'
+	)
+	if (signal.aborted) return { ok: false, tokens: tokens(), summary: 'aborted', details }
+	const afterFix = refuteAfterFix.kept
+	falsePositives += refuteAfterFix.refuted.length
 	details.findingsAfterFix = afterFix
+	details.falsePositives = falsePositives
+	details.falsePositivesAfterFix = refuteAfterFix.refuted.length
+	details.refutedAfterFix = refutedForDetails(refuteAfterFix.refuted)
 	const openHigh = afterFix.filter(f => f.severity === 'high' && !waiversAfterFix.includes(f.id))
 	if (openHigh.length) {
 		return {
@@ -550,7 +699,9 @@ export const reviewGate = async (
 	return {
 		ok: true,
 		tokens: tokens(),
-		summary: `${actionable.length} finding(s) fixed, ${afterFix.length} remaining (no open high)`,
+		summary:
+			`${actionable.length} finding(s) fixed, ${afterFix.length} remaining (no open high)` +
+			(falsePositives ? `, ${falsePositives} false positive(s) refuted` : ''),
 		details,
 	}
 }

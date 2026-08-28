@@ -89,14 +89,45 @@ const session = (overrides: Partial<SessionOutcome> = {}): SessionOutcome => ({
 	...overrides,
 })
 
-/** Queue session outcomes; each can also act on the repo (write files, ...) */
+const isSkeptic = (input: SessionInput) => input.systemPrompt.includes('adversarial skeptic')
+
+/** Finding ids a skeptic system prompt lists under "# Findings to disprove" */
+const skepticFindingIds = (input: SessionInput) =>
+	[...input.systemPrompt.matchAll(/^- \[([^\]]+)\]/gm)].map(match => match[1]!)
+
+/**
+ * How the mocked skeptics vote: `upheld` for every finding by default. `refute` names the ids a
+ * majority of skeptics refute; `fail` makes every skeptic session return `ok: false` (an
+ * abstention, so nothing is dropped by the vote).
+ */
+let skepticConfig: { refute: string[]; fail: boolean } = { refute: [], fail: false }
+const setSkepticVerdicts = (config: { refute?: string[]; fail?: boolean } = {}) => {
+	skepticConfig = { refute: config.refute ?? [], fail: config.fail ?? false }
+}
+
+const skepticOutcome = (input: SessionInput): SessionOutcome => {
+	if (skepticConfig.fail) return session({ ok: false, result: 'skeptic failed' })
+	const verdicts = skepticFindingIds(input).map(id => ({
+		id,
+		verdict: skepticConfig.refute.includes(id) ? ('refuted' as const) : ('upheld' as const),
+	}))
+	return session({ structuredOutput: { verdicts } })
+}
+
+/**
+ * Queue session outcomes; each can also act on the repo (write files, ...). Skeptic sessions
+ * (the refute pass) are answered from `skepticConfig` and do NOT advance the queue, so a test
+ * queues only the review / fix / re-review sessions in order.
+ */
 const queueSessions = (steps: ((input: SessionInput) => Promise<SessionOutcome>)[]) => {
 	const prompts: SessionInput[] = []
+	let mainStep = 0
 	vi.mocked(runSession).mockImplementation(async input => {
 		prompts.push(input)
 		input.onUsage({ inputTokens: 10, outputTokens: 0 })
-		const step = steps[prompts.length - 1]
-		if (!step) throw new Error(`unexpected session #${prompts.length}`)
+		if (isSkeptic(input)) return skepticOutcome(input)
+		const step = steps[mainStep++]
+		if (!step) throw new Error(`unexpected session #${mainStep}`)
 		return step(input)
 	})
 	return prompts
@@ -125,6 +156,10 @@ let usage: number
 
 beforeEach(async () => {
 	Object.assign(process.env, gitEnv)
+	// The review gate's refute pass is off by default here; tests that exercise it set skeptics
+	// explicitly via the gate option. This keeps the existing session counts and token totals.
+	process.env.REVIEW_SKEPTICS = '0'
+	setSkepticVerdicts()
 	repoDir = await initRepo()
 	usage = 0
 	input = {
@@ -139,7 +174,10 @@ beforeEach(async () => {
 	vi.mocked(runAcceptanceTests).mockReset()
 	vi.mocked(runAcceptanceTests).mockResolvedValue({ ok: true, output: 'green' })
 })
-afterEach(() => rm(repoDir, { recursive: true, force: true }))
+afterEach(async () => {
+	delete process.env.REVIEW_SKEPTICS
+	await rm(repoDir, { recursive: true, force: true })
+})
 
 // MARK: Pure helpers
 
@@ -628,6 +666,115 @@ describe('reviewGate', () => {
 
 		const outcome = await reviewGate({ ...input, signal: controller.signal })
 		expect(outcome).toEqual({ ok: false, tokens: 10, summary: 'aborted' })
+	})
+})
+
+// MARK: Gate 2 — adversarial refute pass
+
+describe('reviewGate refute pass', () => {
+	// A finding on a file that is not in the repo — the review gate's own hallucination shape
+	const hallucinated = {
+		severity: 'high' as const,
+		file: 'apps/app/src/Ghost.tsx',
+		line: 1,
+		claim: 'the user must type a raw UUID',
+		failureScenario: 'a member cannot book',
+	}
+	const mediumReal = { ...high, severity: 'medium' as const, claim: 'off-by-one at offset 0' }
+
+	it('Drops a finding whose cited file does not exist, without spending skeptic sessions', async () => {
+		queueSessions([async () => session({ structuredOutput: { findings: [hallucinated] } })])
+
+		const outcome = await reviewGate(input, { skeptics: 3 })
+
+		expect(outcome.ok).toBe(true)
+		expect(outcome.summary).toBe('0 finding(s), none high/medium open (1 false positive(s) refuted)')
+		expect(outcome.details).toMatchObject({ falsePositives: 1, findings: [] })
+		expect((outcome.details as { refuted: { reason: string }[] }).refuted[0]!.reason).toMatch(
+			/does not exist/
+		)
+		// Only the review session ran — the citation check dropped it before any skeptic
+		expect(runSession).toHaveBeenCalledTimes(1)
+	})
+
+	it('Drops a high finding the skeptics refute, so a hallucinated review does not fail the gate', async () => {
+		setSkepticVerdicts({ refute: ['app.ts:1'] })
+		queueSessions([async () => session({ structuredOutput: { findings: [high] } })])
+
+		const outcome = await reviewGate(input, { skeptics: 3 })
+
+		expect(outcome.ok).toBe(true)
+		expect(outcome.summary).toMatch(/^0 finding\(s\), none high\/medium open \(1 false positive/)
+		expect(outcome.details).toMatchObject({ falsePositives: 1, skeptics: 3 })
+		// review + 3 skeptics, and NO fix session — the finding was refuted away
+		expect(runSession).toHaveBeenCalledTimes(4)
+		const refuted = (outcome.details as { refuted: { id: string; votes: string[] }[] }).refuted
+		expect(refuted[0]!.id).toBe('app.ts:1')
+		expect(refuted[0]!.votes).toEqual(['refuted', 'refuted', 'refuted'])
+	})
+
+	it('Keeps a substantiated finding and still runs the fix', async () => {
+		setSkepticVerdicts() // all upheld
+		const prompts = queueSessions([
+			async () => session({ structuredOutput: { findings: [high] } }),
+			async () => {
+				await writeFile(join(repoDir, 'app.ts'), 'export const a = 2\n')
+				return session()
+			},
+			async () => session({ structuredOutput: { findings: [] } }),
+		])
+		queueVerify(true)
+
+		const outcome = await reviewGate(input, { skeptics: 3 })
+
+		expect(outcome.ok).toBe(true)
+		expect(outcome.summary).toBe('1 finding(s) fixed, 0 remaining (no open high)')
+		expect(outcome.details).toMatchObject({ falsePositives: 0, findings: [{ id: 'app.ts:1' }] })
+		// The fix session was reached (prompts: review, 3 skeptics, fix, re-review + 0 after-fix)
+		expect(prompts.some(p => p.systemPrompt.includes('Fix every one of them properly'))).toBe(true)
+		expect(prompts.filter(isSkeptic)).toHaveLength(3)
+	})
+
+	it('Refutes a hallucinated finding that only appears in the re-review after the fix', async () => {
+		setSkepticVerdicts() // the initial medium is upheld; the after-fix ghost is dropped on citation
+		queueSessions([
+			async () => session({ structuredOutput: { findings: [mediumReal] } }),
+			async () => {
+				await writeFile(join(repoDir, 'app.ts'), 'export const a = 2\n')
+				return session()
+			},
+			async () => session({ structuredOutput: { findings: [hallucinated] } }),
+		])
+		queueVerify(true)
+
+		const outcome = await reviewGate(input, { skeptics: 3 })
+
+		expect(outcome.ok).toBe(true)
+		expect(outcome.summary).toBe(
+			'1 finding(s) fixed, 0 remaining (no open high), 1 false positive(s) refuted'
+		)
+		expect(outcome.details).toMatchObject({
+			falsePositivesAfterFix: 1,
+			falsePositives: 1,
+			findingsAfterFix: [],
+		})
+	})
+
+	it('Keeps findings (fails closed) when every skeptic session fails to rule', async () => {
+		setSkepticVerdicts({ fail: true })
+		queueSessions([
+			async () => session({ structuredOutput: { findings: [high] } }),
+			async () => session(),
+			async () => session({ structuredOutput: { findings: [high] } }),
+		])
+		queueVerify(true)
+
+		const outcome = await reviewGate(input, { skeptics: 3 })
+
+		// Nothing was substantiated as a false positive, so the real high still drives the gate
+		expect(outcome.ok).toBe(false)
+		expect(outcome.summary).toMatch(/1 high finding\(s\) still open/)
+		expect(outcome.details).toMatchObject({ falsePositives: 0 })
 	})
 })
 
