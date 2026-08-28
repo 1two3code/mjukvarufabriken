@@ -187,6 +187,9 @@ try {
 			repoDir,
 			seedCommit,
 			delivery,
+			// Approve-before-deliver hold (W9): the flag rides in on the report view (resolved from
+			// the order). When on, the orchestrator pauses after green gates until `isApproved`.
+			approveBeforeDeliver: job.approveBeforeDeliver,
 		},
 		{
 			ports,
@@ -200,6 +203,12 @@ try {
 				},
 				// Kill switch: the api flips the row to `killed`; the orchestrator aborts on the next poll
 				isKilled: async () => killedByApi || (await reporter.isKilled()),
+				// Approve-before-deliver hold (W9): mark the row awaiting approval, then poll the resume
+				// signal the approve action sets. The kill switch above still aborts a parked job.
+				onAwaitingApproval: async () => {
+					await setStatus({ awaitingApproval: true })
+				},
+				isApproved: async () => reporter.isApproved(),
 				pollIntervalMs: 10_000,
 			},
 		}

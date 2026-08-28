@@ -30,6 +30,21 @@ export const runJob = async (
 		if (hooks.isKilled && (await hooks.isKilled().catch(() => false))) budget.abort('killed')
 	}, hooks.pollIntervalMs ?? 10_000)
 
+	const approvalDelay = () =>
+		new Promise<void>(resolve => setTimeout(resolve, hooks.pollIntervalMs ?? 10_000))
+
+	// Blocks at the approve-before-deliver hold (W9) until `isApproved` goes true, or the
+	// background poll above aborts the job (kill switch / wall-clock budget). Returns true only
+	// when a human approved; a killed/expired job returns false and ends via `abortedOutcome`.
+	const waitForApproval = async (): Promise<boolean> => {
+		while (!budget.aborted) {
+			if (hooks.isApproved && (await hooks.isApproved().catch(() => false))) return true
+			if (budget.aborted) return false
+			await approvalDelay()
+		}
+		return false
+	}
+
 	const gates: GateReport[] = []
 	let deliverable: Deliverable | undefined
 
@@ -225,6 +240,33 @@ export const runJob = async (
 	await persistTokens()
 	if (budget.aborted) return abortedOutcome(plan)
 	if (!gateRun.ok) return finish({ status: 'failed', plan, reason: gatesFailedReason(gates) })
+
+	// MARK: Approval hold (W9) — an actual pre-delivery pause, not just a post-delivery label.
+	// Only a job whose order set `approveBeforeDeliver` AND that has somewhere to deliver holds
+	// here; every other job falls straight through to delivery, byte-identical to before.
+	if (job.approveBeforeDeliver && ports.deliver && job.delivery) {
+		await hooks.onAwaitingApproval?.().catch(() => {})
+		await emit({
+			type: 'log',
+			payload: {
+				phase: 'awaiting_approval',
+				message: 'Green gates — holding for approval before delivery',
+			},
+		})
+		// The human approval wait is not compute: freeze the wall-clock budget so a slow approver
+		// never trips `maxDurationMinutes` and kills a green build (the kill switch still aborts).
+		budget.pauseClock()
+		const approved = await waitForApproval()
+		budget.resumeClock()
+		if (budget.aborted) return abortedOutcome(plan)
+		if (approved) {
+			await emit({
+				type: 'log',
+				payload: { phase: 'approved', message: 'Approved — resuming into delivery' },
+			})
+			await persistTokens()
+		}
+	}
 
 	// MARK: Delivery — docs → GitHub repo → ECS Express (best effort) → bundle; repo + bundle are the contract
 	if (ports.deliver && job.delivery) {

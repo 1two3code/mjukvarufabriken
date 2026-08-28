@@ -18,6 +18,12 @@ export type JobInput = Pick<Job, 'id' | 'spec' | 'budget' | 'gateWaivers'> & {
 	seedCommit?: string
 	/** Where to deliver after green gates (M5); without it the job ends at the gates */
 	delivery?: DeliveryTarget
+	/**
+	 * Approve-before-deliver hold (W9): when true, a job that reaches green gates with a delivery
+	 * target PAUSES before the delivery step and waits for `hooks.isApproved` to go true instead of
+	 * auto-delivering. Default (undefined/false) leaves the auto-deliver path byte-identical.
+	 */
+	approveBeforeDeliver?: boolean
 }
 
 export type JobOutcome = {
@@ -222,6 +228,17 @@ export type OrchestratorHooks = {
 	onTokens?: (tokensUsed: number) => Promise<void>
 	/** Polled every `pollIntervalMs`; returning true aborts the job with status `killed` */
 	isKilled?: () => Promise<boolean>
+	/**
+	 * Called once when the job reaches the approve-before-deliver hold (W9), before it starts
+	 * waiting — the container persists the awaiting-approval state so the api can expose it.
+	 */
+	onAwaitingApproval?: () => Promise<void>
+	/**
+	 * Polled while the job is held at the approve-before-deliver gate (W9); returning true resumes
+	 * it into delivery. Absent (or never true) leaves the job parked until it is killed or its
+	 * wall-clock budget runs out.
+	 */
+	isApproved?: () => Promise<boolean>
 	pollIntervalMs?: number
 }
 

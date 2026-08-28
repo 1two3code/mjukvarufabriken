@@ -30,6 +30,8 @@ describe('GET /internal/jobs/:jobId route', () => {
 			spec: createMockJob().spec,
 			budget: createMockJob().budget,
 			killed: false,
+			approveBeforeDeliver: false,
+			approved: false,
 		})
 	})
 

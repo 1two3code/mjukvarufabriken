@@ -131,3 +131,168 @@ describe('runJob delivery step', () => {
 		expect(noTarget.outcome.deliverable).toBeUndefined()
 	})
 })
+
+// MARK: Approve-before-deliver hold (W9)
+
+type ApprovalHooks = {
+	approveBeforeDeliver?: boolean
+	withTarget?: boolean
+	isApproved?: () => Promise<boolean>
+	isKilled?: () => Promise<boolean>
+	pollIntervalMs?: number
+	maxDurationMinutes?: number
+	now?: () => number
+}
+
+const okDeliver = () =>
+	vi.fn(async ({ emit }) => {
+		await emit({ type: 'delivery', payload: { step: 'bundle', ok: true } })
+		return { ok: true, tokens: 0, deliverable, steps: [] }
+	})
+
+const runWithApproval = async (deliver: OrchestratorPorts['deliver'], hooks: ApprovalHooks) => {
+	const events: NewJobEvent[] = []
+	const onAwaitingApproval = vi.fn(async () => {})
+	const outcome = await runJob(
+		{
+			id: 'job-1',
+			spec,
+			repoDir: '/tmp/repo',
+			budget: {
+				maxTokens: 1_000_000,
+				maxDurationMinutes: hooks.maxDurationMinutes ?? 60,
+				maxWorkers: 1,
+			},
+			delivery: hooks.withTarget === false ? undefined : { slug: 'gym', appName: 'Gym' },
+			approveBeforeDeliver: hooks.approveBeforeDeliver,
+		},
+		{
+			ports: createPorts(deliver),
+			hooks: {
+				emit: async event => {
+					events.push(event)
+				},
+				onAwaitingApproval,
+				isApproved: hooks.isApproved,
+				isKilled: hooks.isKilled,
+				pollIntervalMs: hooks.pollIntervalMs ?? 1_000_000,
+			},
+			...(hooks.now ? { now: hooks.now } : {}),
+		}
+	)
+	return { outcome, events, onAwaitingApproval }
+}
+
+describe('runJob approve-before-deliver hold', () => {
+	it('Holds after green gates, then delivers once approved', async () => {
+		// Arrange: not approved on the first poll, approved on the second
+		const isApproved = vi.fn()
+		isApproved.mockResolvedValueOnce(false).mockResolvedValue(true)
+		const deliver = okDeliver()
+
+		// Act
+		const { outcome, events, onAwaitingApproval } = await runWithApproval(deliver, {
+			approveBeforeDeliver: true,
+			isApproved,
+			pollIntervalMs: 1,
+		})
+
+		// Assert: the hold fired before delivery, and delivery still happened
+		expect(onAwaitingApproval).toHaveBeenCalledTimes(1)
+		expect(isApproved.mock.calls.length).toBeGreaterThanOrEqual(2)
+		expect(deliver).toHaveBeenCalledOnce()
+		expect(outcome.status).toBe('delivered')
+		expect(outcome.deliverable).toEqual(deliverable)
+		const types = events.map(event => event.type)
+		const holdAt = types.indexOf('log')
+		const deliveredAt = types.indexOf('delivery')
+		expect(holdAt).toBeGreaterThanOrEqual(0)
+		expect(holdAt).toBeLessThan(deliveredAt)
+		expect(events[holdAt]?.payload).toMatchObject({ phase: 'awaiting_approval' })
+	})
+
+	it('Does not deliver while unapproved; a kill during the hold ends the job', async () => {
+		// Arrange: never approved, kill flips true on the background poll
+		const deliver = okDeliver()
+
+		// Act
+		const { outcome } = await runWithApproval(deliver, {
+			approveBeforeDeliver: true,
+			isApproved: async () => false,
+			isKilled: async () => true,
+			pollIntervalMs: 2,
+		})
+
+		// Assert
+		expect(deliver).not.toHaveBeenCalled()
+		expect(outcome.status).toBe('killed')
+		expect(outcome.deliverable).toBeUndefined()
+	})
+
+	it('Does not charge the approval wait against the wall-clock budget', async () => {
+		// The clock jumps far past `maxDurationMinutes` WHILE the job is parked for approval. Because
+		// the hold freezes the duration budget, that wait must not abort the job: it still delivers.
+		let clockMs = 0
+		const budgetMs = 1 * 60_000 // maxDurationMinutes: 1
+		const isApproved = vi.fn(async () => {
+			// First poll: leap 10× the whole budget forward, still unapproved. Without the pause the
+			// background poll's checkDuration would abort here with 'duration exceeded'.
+			if (isApproved.mock.calls.length === 1) {
+				clockMs += budgetMs * 10
+				return false
+			}
+			return true
+		})
+		const deliver = okDeliver()
+
+		const { outcome, onAwaitingApproval } = await runWithApproval(deliver, {
+			approveBeforeDeliver: true,
+			isApproved,
+			maxDurationMinutes: 1,
+			pollIntervalMs: 1,
+			now: () => clockMs,
+		})
+
+		expect(onAwaitingApproval).toHaveBeenCalledTimes(1)
+		expect(outcome.status).toBe('delivered')
+		expect(deliver).toHaveBeenCalledOnce()
+	})
+
+	it('Auto-delivers unchanged when the flag is off (no hold, no approval poll)', async () => {
+		// Arrange
+		const deliver = okDeliver()
+		const isApproved = vi.fn(async () => true)
+
+		// Act
+		const { outcome, events, onAwaitingApproval } = await runWithApproval(deliver, {
+			approveBeforeDeliver: false,
+			isApproved,
+		})
+
+		// Assert
+		expect(onAwaitingApproval).not.toHaveBeenCalled()
+		expect(isApproved).not.toHaveBeenCalled()
+		expect(deliver).toHaveBeenCalledOnce()
+		expect(outcome.status).toBe('delivered')
+		expect(events.some(event => event.type === 'log')).toBe(false)
+	})
+
+	it('Skips the hold when there is nothing to deliver even with the flag on', async () => {
+		// Arrange: flag on but no delivery target — the job ends at the gates, never pausing
+		const deliver = okDeliver()
+		const isApproved = vi.fn(async () => false)
+
+		// Act
+		const { outcome, onAwaitingApproval } = await runWithApproval(deliver, {
+			approveBeforeDeliver: true,
+			withTarget: false,
+			isApproved,
+		})
+
+		// Assert
+		expect(onAwaitingApproval).not.toHaveBeenCalled()
+		expect(isApproved).not.toHaveBeenCalled()
+		expect(deliver).not.toHaveBeenCalled()
+		expect(outcome.status).toBe('delivered')
+	})
+})

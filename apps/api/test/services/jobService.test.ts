@@ -9,6 +9,7 @@ import {
 	deliverableFromEvents,
 	hashReportToken,
 	JobAlreadyActive,
+	JobNotAwaitingApproval,
 	MalformedGateReport,
 	ReportUnauthorized,
 	SpecNotFrozen,
@@ -271,7 +272,23 @@ describe('Job Service', () => {
 				budget: createMockJob().budget,
 				gateWaivers: ['a.ts:1'],
 				killed: true,
+				approveBeforeDeliver: false,
+				approved: false,
 			})
+		})
+
+		it('Reports the approve-before-deliver gate from the order and the job approval flag (W9)', async () => {
+			// Arrange — the order carries the flag; the job has been approved
+			await app.db.orders.insert({ id: 'order-1', orgId: 'org-1', name: 'Gym' })
+			await app.db.orders.setApproveBeforeDeliver('order-1', true)
+
+			// Act
+			const held = await app.jobService.reportView(createMockJob())
+			const released = await app.jobService.reportView(createMockJob({ approved: true }))
+
+			// Assert
+			expect(held).toMatchObject({ approveBeforeDeliver: true, approved: false })
+			expect(released).toMatchObject({ approveBeforeDeliver: true, approved: true })
 		})
 
 		it("Resolves the customer's GitHub login from the order creator at read time, never a snapshot", async () => {
@@ -509,6 +526,57 @@ describe('Job Service', () => {
 
 			vi.spyOn(app.db.jobs, 'get').mockResolvedValueOnce(undefined)
 			await expect(app.jobService.kill('nope')).rejects.toBeInstanceOf(EntityNotFound)
+		})
+	})
+
+	describe('approve (approve-before-deliver hold, W9)', () => {
+		const held = () =>
+			createMockJob({ status: 'verifying', awaitingApproval: true, approved: false })
+
+		it('Flips approved on a held job so the parked container resumes into delivery', async () => {
+			// Arrange
+			vi.spyOn(app.db.jobs, 'get').mockResolvedValue(held())
+
+			// Act
+			const job = await app.jobService.approve('job-1', user)
+
+			// Assert
+			expect(app.db.jobs.update).toHaveBeenCalledWith('job-1', { approved: true })
+			expect(job.approved).toBe(true)
+		})
+
+		it('An admin can approve another org’s held job', async () => {
+			vi.spyOn(app.db.jobs, 'get').mockResolvedValue({ ...held(), orgId: 'org-9' })
+			await expect(app.jobService.approve('job-1', admin)).resolves.toMatchObject({
+				approved: true,
+			})
+		})
+
+		it('Rejects a job that is not parked at the hold (not awaiting, already approved, finished)', async () => {
+			vi.spyOn(app.db.jobs, 'get').mockResolvedValue(createMockJob({ status: 'building' }))
+			await expect(app.jobService.approve('job-1', user)).rejects.toBeInstanceOf(
+				JobNotAwaitingApproval
+			)
+
+			vi.spyOn(app.db.jobs, 'get').mockResolvedValue({ ...held(), approved: true })
+			await expect(app.jobService.approve('job-1', user)).rejects.toBeInstanceOf(
+				JobNotAwaitingApproval
+			)
+
+			vi.spyOn(app.db.jobs, 'get').mockResolvedValue({ ...held(), status: 'delivered' })
+			await expect(app.jobService.approve('job-1', user)).rejects.toBeInstanceOf(
+				JobNotAwaitingApproval
+			)
+			expect(app.db.jobs.update).not.toHaveBeenCalledWith('job-1', { approved: true })
+		})
+
+		it("404s an unknown id and another org's job (no leak, no write)", async () => {
+			vi.spyOn(app.db.jobs, 'get').mockResolvedValueOnce(undefined)
+			await expect(app.jobService.approve('nope', user)).rejects.toBeInstanceOf(EntityNotFound)
+
+			vi.spyOn(app.db.jobs, 'get').mockResolvedValue({ ...held(), orgId: 'org-2' })
+			await expect(app.jobService.approve('job-1', user)).rejects.toBeInstanceOf(EntityNotFound)
+			expect(app.db.jobs.update).not.toHaveBeenCalledWith('job-1', { approved: true })
 		})
 	})
 

@@ -48,6 +48,9 @@ const mockPlugin: FastifyPluginAsync = async app => {
 		kill: vi.fn((id: string) =>
 			Promise.resolve(createMockJob({ id, status: 'killed', reason: 'killed by admin' }))
 		),
+		approve: vi.fn((id: string) =>
+			Promise.resolve(createMockJob({ id, awaitingApproval: true, approved: true }))
+		),
 		listAll: vi.fn().mockResolvedValue([createMockJob()]),
 		getDeliverables: vi.fn((jobId: string) => Promise.resolve(createMockDeliverables({ jobId }))),
 		authenticateReport: vi.fn((id: string) => Promise.resolve(createMockJob({ id }))),
@@ -60,6 +63,8 @@ const mockPlugin: FastifyPluginAsync = async app => {
 				budget: job.budget,
 				gateWaivers: job.gateWaivers,
 				killed: job.status === 'killed',
+				approveBeforeDeliver: false,
+				approved: job.approved ?? false,
 			})
 		),
 		reportEvents: vi.fn().mockResolvedValue({ lastEventId: 1 }),
