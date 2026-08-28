@@ -260,7 +260,21 @@ export const createEcsExpressDeployClient = ({
 			if (!service?.serviceArn) {
 				throw new Error('ECS CreateExpressGatewayService returned no service')
 			}
-			return { url: toHttpsUrl(await waitForEndpoint(service, signal)) }
+			const url = toHttpsUrl(await waitForEndpoint(service, signal))
+			// Report the service so the api can record it per order: teardown targets EVERY recorded
+			// service and resume replays `config` (the create input, minus the transient clientToken)
+			// to re-stand-up a suspended (deleted) one with the same image/roles/port/env.
+			const { clientToken: _clientToken, ...config } = createInput
+			return {
+				url,
+				service: {
+					serviceName: name,
+					serviceArn: service.serviceArn,
+					customerTag: customerTagValue(name),
+					image: imageUri,
+					config,
+				},
+			}
 		},
 	}
 }
@@ -282,6 +296,29 @@ export type FakeDeploy = DeployClient & {
 const fakeUrl = (name: string, region = 'eu-north-1') =>
 	`https://${expressServiceName(name)}.${region}.on.aws`
 
+/** A minimal, valid service report for the fakes — enough for the api's per-order recording */
+const fakeServiceReport = (
+	serviceName: string,
+	env?: Record<string, string>
+): NonNullable<Awaited<ReturnType<DeployClient['deployFromRepo']>>['service']> => {
+	const name = expressServiceName(serviceName)
+	return {
+		serviceName: name,
+		serviceArn: `arn:aws:ecs:eu-north-1:000000000000:service/default/${name}`,
+		customerTag: customerTagValue(name),
+		image: `000000000000.dkr.ecr.eu-north-1.amazonaws.com/mf-deliverables:${name}`,
+		config: {
+			serviceName: name,
+			cluster: 'default',
+			primaryContainer: {
+				image: `000000000000.dkr.ecr.eu-north-1.amazonaws.com/mf-deliverables:${name}`,
+				containerPort: 80,
+				environment: Object.entries(env ?? {}).map(([envName, value]) => ({ name: envName, value })),
+			},
+		},
+	}
+}
+
 export const createFakeDeployClient = (fail = false): FakeDeploy => {
 	const fake: FakeDeploy = {
 		deployments: [],
@@ -291,7 +328,7 @@ export const createFakeDeployClient = (fail = false): FakeDeploy => {
 			if (fail) throw new Error('fake: ECS Express deploy failed')
 			fake.deployments.push(input)
 			fake.envs.push(env)
-			return { url: fakeUrl(input.serviceName) }
+			return { url: fakeUrl(input.serviceName), service: fakeServiceReport(input.serviceName, env) }
 		},
 	}
 	return fake
@@ -303,6 +340,7 @@ export const createDryRunDeployClient = (log: (line: string) => void): DeployCli
 		log(
 			`[dry-run] ecs express: build image + create service ${name} from ${repositoryUrl}#${branch}`
 		)
+		// No `service`: a dry-run creates nothing, so there is nothing to record
 		return { url: fakeUrl(name) }
 	},
 })

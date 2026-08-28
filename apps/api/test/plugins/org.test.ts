@@ -25,4 +25,15 @@ describe('org plugin (disabled / dark mode)', () => {
 		})
 		expect(confirmed).toMatchObject({ dryRun: false, discovered: 0, fenced: 0 })
 	})
+
+	it('Runs redeploy dry (planned only) rather than touching AWS while unconfigured', async () => {
+		const result = await app.org.redeploy(
+			[{ id: 'row-1', serviceName: 'mf-1-app', config: { serviceName: 'mf-1-app' } }],
+			{ dryRun: false }
+		)
+		// Forced dry-run while unconfigured — nothing is created, the service is merely planned
+		expect(result).toMatchObject({ mode: 'resume', dryRun: true })
+		expect(result.summary.planned).toBe(1)
+		expect(result.items[0]).toMatchObject({ serviceName: 'mf-1-app', outcome: 'planned' })
+	})
 })

@@ -1,5 +1,7 @@
 import { z } from 'zod'
 
+import { DeployedServiceReportSchema } from './DeployedService.ts'
+
 // MARK: Enums
 /** Delivery steps in run order; each one is emitted as a `delivery` job event */
 export const deliveryStep = ['docs', 'repo', 'deploy', 'bundle'] as const
@@ -37,6 +39,12 @@ export const DeliverableSchema = z.object({
 	/** True when the customer's GitHub login was unknown — an admin adds them by hand */
 	transferPending: z.boolean(),
 	deployUrl: z.string().nullable(),
+	/**
+	 * The Express service delivery stood up (name/arn/image + the config `resume` replays), so
+	 * the api can record it per order for teardown + resume. Absent when the deploy was skipped
+	 * or failed (`deployUrl` null), or for a dry-run.
+	 */
+	deployedService: DeployedServiceReportSchema.optional(),
 	/** Public URL of the static SPA build in the artifacts bucket, when one was built */
 	siteUrl: z.string().nullable(),
 	/** Prefix of the bundle in the artifacts bucket: `deliverables/<jobId>/` */

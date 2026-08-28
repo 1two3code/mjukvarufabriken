@@ -1,5 +1,6 @@
 import fp from 'fastify-plugin'
 
+import type { RedeployInput } from '#/lib/expressRedeploy.ts'
 import type { FastifyInstance, FastifyPluginAsync } from 'fastify'
 import type { DeprovisionMode, DeprovisionResult, Outcome } from '@mf/org'
 
@@ -62,6 +63,31 @@ const mockPlugin: FastifyPluginAsync = async app => {
 				label: target.label,
 			})
 		),
+		redeploy: vi.fn(async (services: RedeployInput[], options?: { dryRun?: boolean }) => {
+			const dryRun = options?.dryRun ?? true
+			const outcome: Outcome = dryRun ? 'planned' : 'resumed'
+			const summary = emptyTally()
+			summary[outcome] = services.length
+			return {
+				mode: 'resume' as const,
+				dryRun,
+				discovered: services.length,
+				fenced: services.length,
+				skippedByFence: 0,
+				entries: [],
+				summary,
+				items: services.map(service => ({
+					id: service.id,
+					serviceName: service.serviceName,
+					outcome,
+					...(dryRun
+						? {}
+						: {
+								serviceArn: `arn:aws:ecs:eu-north-1:000000000000:service/default/${service.serviceName}`,
+							}),
+				})),
+			}
+		}),
 	}
 
 	app.decorate('org', mock)

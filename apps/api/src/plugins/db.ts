@@ -88,6 +88,13 @@ const unavailableRepositories = (error: () => Error): Repositories => {
 			'recordPaymentEvent',
 			'forgetPaymentEvent',
 		]),
+		deployedServices: repository([
+			'record',
+			'listForOrder',
+			'setArn',
+			'markSuspended',
+			'markTornDown',
+		]),
 		users: repository([
 			'get',
 			'findByEmail',

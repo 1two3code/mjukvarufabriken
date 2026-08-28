@@ -301,6 +301,38 @@ const plugin: FastifyPluginAsync = async app => {
 			? { event: await db.jobs.appendEvent(jobId, event), duplicate: false }
 			: db.jobs.appendEventOnce(jobId, seq, event)
 
+	/**
+	 * Records the Express service a delivery stood up against the order (wave 10,
+	 * delivery-lifecycle-followups). The final `bundle` delivery event carries the deliverable's
+	 * `deployedService` when a service was actually created (`deployUrl` non-null). Recording it
+	 * lets the admin teardown target EVERY recorded service of a rebuilt order and lets `resume`
+	 * replay the image/config to re-create a suspended (deleted) one. Best-effort: a failure here
+	 * never fails the container's report (the deploy already succeeded).
+	 */
+	const recordDeployedService = async (job: Job, event: JobReportEvent) => {
+		if (event.type !== 'delivery') return
+		const parsed = DeliveryEventPayloadSchema.safeParse(event.payload)
+		const deliverable = parsed.success ? parsed.data.deliverable : undefined
+		const service = deliverable?.deployedService
+		if (!deliverable || deliverable.deployUrl === null || !service) return
+		await db.deployedServices
+			.record({
+				orderId: job.orderId,
+				jobId: job.id,
+				serviceName: service.serviceName,
+				serviceArn: service.serviceArn ?? null,
+				customerTag: service.customerTag,
+				image: service.image ?? null,
+				config: service.config ?? null,
+			})
+			.catch((error: Error) =>
+				app.log.warn(
+					{ err: error, jobId: job.id, service: service.serviceName },
+					'Could not record the deployed service for teardown/resume'
+				)
+			)
+	}
+
 	app.decorate('jobService', {
 		get,
 		start: async (orderId, session) => {
@@ -455,6 +487,7 @@ const plugin: FastifyPluginAsync = async app => {
 				const gate = gateReports.get(event)
 				if (gate) gates.push(gate)
 				if (event.type === 'notify') await notifyAdmins(job, event)
+				if (event.type === 'delivery') await recordDeployedService(job, event)
 			}
 			if (gates.length) {
 				const current = (await db.jobs.get(job.id))?.gates ?? []
