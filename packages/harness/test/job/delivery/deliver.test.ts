@@ -479,6 +479,43 @@ describe('deliver', () => {
 		expect(clients.artifacts.bucket).toBe('mf-artifacts-dev')
 	})
 
+	it('Curates .github/workflows: the delivered archive drops our deploy workflows for a clean CI', async () => {
+		// Arrange — seed + commit the template's workflows (our CI + two OIDC deploy workflows)
+		const wf = join(repoDir, '.github', 'workflows')
+		await mkdir(wf, { recursive: true })
+		await writeFile(join(wf, 'ci.yml'), 'name: CI\njobs: { verify: { steps: [{ run: cdk synth }] } }\n')
+		await writeFile(join(wf, 'deploy.yml'), 'name: Deploy\npermissions: { id-token: write }\n')
+		await writeFile(join(wf, 'deploy-environment.yml'), 'name: Deploy env\n')
+		const run = (args: string[]) => exec('git', args, { cwd: repoDir, env: gitEnv })
+		await run(['add', '-A'])
+		await run(['commit', '-q', '-m', 'chore: template workflows'])
+		const { clients } = createClients()
+		const input = createInput(repoDir)
+
+		// Act
+		const outcome = await deliver(input, clients)
+
+		// Assert — delivery succeeded and the pushed/archived `main` tree is curated
+		expect(outcome.ok).toBe(true)
+		const tree = await exec('git', ['ls-tree', '-r', '--name-only', 'main'], { cwd: repoDir })
+		const workflows = tree.stdout
+			.split('\n')
+			.filter(name => name.startsWith('.github/workflows/'))
+		expect(workflows).toEqual(['.github/workflows/ci.yml'])
+
+		// The one workflow that ships is the clean lint+test CI — no deploy, no OIDC, no CDK
+		const ci = await exec('git', ['show', 'main:.github/workflows/ci.yml'], { cwd: repoDir })
+		expect(ci.stdout).toContain('name: CI')
+		expect(ci.stdout).toContain('npm run lint')
+		expect(ci.stdout).toContain('npm test')
+		expect(ci.stdout).not.toMatch(/id-token|cdk synth|role-to-assume/i)
+
+		// The curation was logged
+		expect(input.events.find(event => event.type === 'log')?.payload.message).toMatch(
+			/curated \.github\/workflows: removed .*deploy\.yml.*; wrote \.github\/workflows\/ci\.yml/
+		)
+	})
+
 	it('Live clients without configuration fail the repo step with a TODO-EXTERNAL reason', async () => {
 		// Arrange
 		const clients = createLiveDeliveryClients({})
