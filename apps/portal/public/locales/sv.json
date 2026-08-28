@@ -54,7 +54,7 @@
   "job.card.workers": "Parallella arbetare",
   "job.deliverables.none": "Inga leverabler har registrerats för det här bygget.",
   "job.deliverables.notDelivered": "Leverablerna visas här när bygget är levererat.",
-  "job.deliverables.preview": "Öppna förhandsvisningen",
+  "job.deliverables.preview": "Öppna din webbplats",
   "job.deliverables.repository": "Öppna repot",
   "job.deliverables.title": "Leverabler",
   "job.deliverables.transferPending": "Åtkomst ordnas — en administratör lägger till dig i repot",

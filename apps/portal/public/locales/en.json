@@ -54,7 +54,7 @@
   "job.card.workers": "Parallel workers",
   "job.deliverables.none": "No deliverables have been registered for this build.",
   "job.deliverables.notDelivered": "Deliverables appear here once the build is delivered.",
-  "job.deliverables.preview": "Open the preview",
+  "job.deliverables.preview": "Open your site",
   "job.deliverables.repository": "Open the repository",
   "job.deliverables.title": "Deliverables",
   "job.deliverables.transferPending": "Customer access is being set up — an admin adds you to the repository",
