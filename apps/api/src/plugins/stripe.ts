@@ -174,6 +174,11 @@ export const createStripeProvider = (
 			mode: 'payment',
 			billing_address_collection: 'required',
 			currency: 'sek',
+			// We are the merchant of record (VAT is itemized and remitted by us), so opt each session
+			// out of Stripe Managed Payments and offer the methods explicitly — this is what surfaces
+			// Klarna (Managed Payments wouldn't offer it on the unactivated account).
+			managed_payments: { enabled: false },
+			payment_method_types: ['card', 'klarna'],
 			line_items: [
 				{
 					quantity: 1,
