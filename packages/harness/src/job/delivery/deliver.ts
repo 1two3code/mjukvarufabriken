@@ -10,19 +10,19 @@ import type { Deliverable, DeliveryEventPayload, NotifyPayload } from '@mf/model
 import type { TokenUsage } from '#job/types.ts'
 import type { DeliveryClients, DeliveryInput, DeliveryOutcome } from './types.ts'
 
-/** Throws on a failed add/commit: the pushed repo and repo.zip must carry the docs + apprunner.yaml */
+/** Throws on a failed add/commit: the pushed repo and repo.zip must carry the docs */
 const commitDocs = async (repoDir: string, signal: AbortSignal) => {
 	await git(['add', '-A'], { cwd: repoDir, signal })
-	await git(['commit', '-q', '-m', 'docs: handover, test report and App Runner config'], {
+	await git(['commit', '-q', '-m', 'docs: handover and test report'], {
 		cwd: repoDir,
 		signal,
 	})
 }
 
 /**
- * App Runner service name: the job-unique part first, so the 40-char limit never cuts it off
- * (the slug already ends with the same job prefix — an app name of 37+ chars used to leave two
- * jobs with the same goal on one service)
+ * ECS Express service name: the job-unique part first (`mf-<job8>-<slug>`), so no length limit
+ * ever cuts off the discriminator (the slug already ends with the same job prefix — an app name
+ * of 37+ chars used to leave two jobs with the same goal on one service)
  */
 export const previewServiceName = (jobId: string, slug: string) =>
 	`mf-${jobId.slice(0, 8)}-${slug}`
@@ -35,18 +35,18 @@ export const deployFailedNotification = (
 ): NotifyPayload => ({
 	to: 'admins',
 	subject: `Build job ${jobId} delivered without a preview URL`,
-	text: `Job ${jobId} was delivered (repo ${repositoryUrl} + bundle uploaded) but the App Runner deployment failed:\n\n${reason}\n\nDeploy it by hand or re-run the delivery.`,
+	text: `Job ${jobId} was delivered (repo ${repositoryUrl} + bundle uploaded) but the ECS Express deployment failed:\n\n${reason}\n\nDeploy it by hand or re-run the delivery.`,
 })
 
 /**
  * Delivery after green gates, in four steps that each emit a `delivery` event:
- *   docs   — HANDOVER.md / TEST-REPORT.md / README.md / apprunner.yaml written + committed
+ *   docs   — HANDOVER.md / TEST-REPORT.md / README.md written + committed
  *   repo   — private GitHub repo `mjukvaruhuset/<slug>`, main pushed, customer added as admin
- *   deploy — App Runner service from the pushed repo + SPA build to the artifacts bucket
+ *   deploy — ECS Express service (built image → managed URL) + SPA build to the artifacts bucket
  *   bundle — repo.zip, docs and the gate/acceptance reports under `deliverables/<jobId>/`
  * The repo push and the bundle are the contract (`ok`); a failed deploy leaves `deployUrl`
  * null and raises a `notify` event for the admins. A docs failure is fatal: without the commit
- * the repo, the archive and the App Runner deployment (needs `apprunner.yaml`) would be wrong.
+ * the repo and the archive would be wrong.
  */
 export const deliver = async (
 	{
@@ -69,7 +69,6 @@ export const deliver = async (
 		artifacts,
 		prose,
 		githubOrg = defaultGitHubOrg,
-		previewAuth,
 		dryRun,
 	} = clients
 	const steps: DeliveryEventPayload[] = []
@@ -113,7 +112,6 @@ export const deliver = async (
 			summary,
 			repositoryUrl,
 			verifyOutput: verify?.summary,
-			previewAuth,
 		})
 		await commitDocs(repoDir, signal)
 		await step({ step: 'docs', ok: true })
@@ -173,7 +171,7 @@ export const deliver = async (
 			})
 		).url
 	} catch (error) {
-		deployReason = `app runner: ${(error as Error).message}`
+		deployReason = `ecs express: ${(error as Error).message}`
 	}
 	if (aborted()) return aborted()!
 	let siteUrl: string | null = null

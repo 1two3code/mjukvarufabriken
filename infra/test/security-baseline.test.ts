@@ -71,18 +71,20 @@ describe('security baseline', () => {
 				}
 			})
 
-			it('grants the job task role only the Anthropic/GitHub secrets, artifact writes and App Runner previews — no database', () => {
+			it('grants the job task role only the Anthropic/GitHub secrets, artifact writes, CodeBuild + ECS Express previews — no database', () => {
 				const policies = Object.values(resources.findResources('AWS::IAM::Policy'))
 				const jobPolicy = policies.find(p =>
 					JSON.stringify(p.Properties).includes('JobTaskDefinitionTaskRole')
 				)
 				assert.ok(jobPolicy, 'job task role policy')
 				const statements = (
-					jobPolicy.Properties as { PolicyDocument: { Statement: { Action: unknown }[] } }
+					jobPolicy.Properties as {
+						PolicyDocument: { Statement: { Action: unknown; Resource?: unknown; Condition?: unknown }[] }
+					}
 				).PolicyDocument.Statement
 				const actions = statements.flatMap(s => (Array.isArray(s.Action) ? s.Action : [s.Action]))
 				// grantPut, not grantWrite: a job may upload but never delete or overwrite-by-delete.
-				// App Runner: create/inspect/redeploy preview services, never delete or pause them.
+				// CodeBuild builds + pushes the image; ECS Express creates/inspects the preview service.
 				assert.deepEqual(
 					new Set(actions),
 					new Set([
@@ -94,11 +96,10 @@ describe('security baseline', () => {
 						's3:PutObjectTagging',
 						's3:PutObjectVersionTagging',
 						's3:Abort*',
-						'apprunner:CreateService',
-						'apprunner:DescribeService',
-						'apprunner:ListServices',
-						'apprunner:StartDeployment',
-						'apprunner:TagResource',
+						'codebuild:StartBuild',
+						'codebuild:BatchGetBuilds',
+						'ecs:CreateExpressGatewayService',
+						'ecs:DescribeExpressGatewayService',
 						'iam:PassRole',
 					])
 				)
@@ -116,45 +117,80 @@ describe('security baseline', () => {
 					!JSON.stringify(jobPolicy.Properties).includes('DatabaseSecret'),
 					'job task role must not reference the database secret'
 				)
-				// App Runner: only services tagged `Service=mf-delivery` (created by the job itself)
+				// The job never touches ECR directly — CodeBuild does the build + push
+				assert.ok(!JSON.stringify(actions).includes('ecr:'), 'job role must not call ECR directly')
 				const byActions = (action: string) =>
 					statements.find(s => JSON.stringify(s.Action).includes(action)) as
-						{ Condition: unknown } | undefined
-				assert.deepEqual(byActions('apprunner:CreateService')?.Condition, {
+						{ Resource?: unknown; Condition: unknown } | undefined
+				// ECS Express: only services tagged `Service=mf-delivery` (created by the job itself)
+				assert.deepEqual(byActions('ecs:CreateExpressGatewayService')?.Condition, {
 					StringEquals: { 'aws:RequestTag/Service': 'mf-delivery' },
 				})
-				assert.deepEqual(byActions('apprunner:StartDeployment')?.Condition, {
+				assert.deepEqual(byActions('ecs:DescribeExpressGatewayService')?.Condition, {
 					StringEquals: { 'aws:ResourceTag/Service': 'mf-delivery' },
 				})
-				assert.deepEqual(byActions('apprunner:DescribeService')?.Condition, {
-					StringEquals: { 'aws:ResourceTag/Service': 'mf-delivery' },
-				})
-				// PassRole is limited to the empty App Runner instance role, and only to App Runner
-				const passRole = statements.find(
-					s => JSON.stringify(s.Action) === JSON.stringify('iam:PassRole')
-				) as { Resource: unknown; Condition: unknown } | undefined
-				assert.ok(passRole, 'iam:PassRole statement')
-				assert.deepEqual(passRole.Condition, {
-					StringEquals: { 'iam:PassedToService': 'tasks.apprunner.amazonaws.com' },
-				})
+				// CodeBuild is resource-scoped to the single delivery project, never account-wide
+				const codeBuild = byActions('codebuild:StartBuild')
+				assert.ok(codeBuild, 'codebuild statement')
 				assert.ok(
-					JSON.stringify(passRole.Resource).includes('AppRunnerInstanceRole'),
-					'PassRole must target the App Runner instance role only'
+					!JSON.stringify(codeBuild.Resource).includes('"*"'),
+					'codebuild must be scoped to the delivery project'
 				)
+				// PassRole: the two Express roles to ECS, the CodeBuild role to CodeBuild — never '*'
+				const passRoles = statements.filter(
+					s => JSON.stringify(s.Action) === JSON.stringify('iam:PassRole')
+				) as { Resource: unknown; Condition: { StringEquals: Record<string, unknown> } }[]
+				assert.equal(passRoles.length, 2)
+				const passedServices = passRoles.flatMap(s => {
+					const value = s.Condition.StringEquals['iam:PassedToService']
+					return Array.isArray(value) ? value : [value]
+				})
+				assert.deepEqual(
+					new Set(passedServices),
+					new Set(['ecs-tasks.amazonaws.com', 'ecs.amazonaws.com', 'codebuild.amazonaws.com'])
+				)
+				for (const passRole of passRoles) {
+					assert.ok(
+						!JSON.stringify(passRole.Resource).includes('"*"'),
+						'PassRole must be scoped to specific roles'
+					)
+				}
 			})
 
-			it('gives the App Runner instance role no policies at all', () => {
-				const roles = Object.values(resources.findResources('AWS::IAM::Role'))
-				const instanceRole = roles.find(r =>
-					JSON.stringify(r.Properties).includes('tasks.apprunner.amazonaws.com')
-				) as { Properties: { Policies?: unknown; ManagedPolicyArns?: unknown } } | undefined
-				assert.ok(instanceRole, 'App Runner instance role')
-				assert.equal(instanceRole.Properties.Policies, undefined)
-				assert.equal(instanceRole.Properties.ManagedPolicyArns, undefined)
-				const policies = Object.values(resources.findResources('AWS::IAM::Policy'))
+			it('gives the ECS Express preview roles only their managed policies (no inline grants)', () => {
+				const roles = Object.values(resources.findResources('AWS::IAM::Role')) as {
+					Properties: {
+						RoleName?: string
+						AssumeRolePolicyDocument?: unknown
+						Policies?: unknown
+						ManagedPolicyArns?: unknown
+					}
+				}[]
+				const execRole = roles.find(r => r.Properties.RoleName === `mf-express-execution-${env}`)
+				const infraRole = roles.find(r => r.Properties.RoleName === `mf-express-infra-${env}`)
+				assert.ok(execRole, 'express execution role')
+				assert.ok(infraRole, 'express infrastructure role')
+				// Assumed by the right service principals
 				assert.ok(
-					!policies.some(p => JSON.stringify(p.Properties.Roles).includes('AppRunnerInstanceRole')),
-					'no inline policy attached to the App Runner instance role'
+					JSON.stringify(execRole.Properties.AssumeRolePolicyDocument).includes(
+						'ecs-tasks.amazonaws.com'
+					)
+				)
+				assert.ok(
+					JSON.stringify(infraRole.Properties.AssumeRolePolicyDocument).includes('ecs.amazonaws.com')
+				)
+				// Only the managed policies, no hand-written inline policies (the preview api needs no AWS access)
+				assert.equal(execRole.Properties.Policies, undefined)
+				assert.equal(infraRole.Properties.Policies, undefined)
+				assert.ok(
+					JSON.stringify(execRole.Properties.ManagedPolicyArns).includes(
+						'AmazonECSTaskExecutionRolePolicy'
+					)
+				)
+				assert.ok(
+					JSON.stringify(infraRole.Properties.ManagedPolicyArns).includes(
+						'AmazonECSInfrastructureRoleforExpressGatewayServices'
+					)
 				)
 			})
 

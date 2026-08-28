@@ -45,9 +45,10 @@ export type GitHubClient = {
 
 export type DeployClient = {
 	/**
-	 * Creates (or redeploys) an App Runner service deployed from the pushed repo; resolves to its
-	 * URL. An existing service of that name is only reused when it deploys the same repository.
-	 * Rejects when `signal` aborts (kill switch / budget) instead of polling on.
+	 * Builds the customer image and creates an ECS Express Mode service from it, deployed from the
+	 * pushed repo; resolves to the managed HTTPS URL. One service per job (`mf-<job8>-<slug>`), so
+	 * a redelivery never collides with another job's preview. Rejects when `signal` aborts (kill
+	 * switch / budget) instead of polling on.
 	 */
 	deployFromRepo: (input: {
 		serviceName: string
@@ -59,8 +60,8 @@ export type DeployClient = {
 
 /**
  * Identity provider the preview api verifies tokens against (`AUTH_ISSUER` / `AUTH_JWKS_URL` /
- * `AUTH_AUDIENCE` in the generated `apprunner.yaml`). The template api refuses to boot without
- * them, so without this the deploy step is not attempted.
+ * `AUTH_AUDIENCE`, passed as the Express container's environment). The template api refuses to
+ * boot without them, so without this the deploy step is not attempted.
  */
 export type PreviewAuth = {
 	issuer: string
@@ -97,9 +98,9 @@ export type DeliveryClients = {
 	prose?: ProseWriter
 	/** GitHub organisation that owns customer repos (default `mjukvaruhuset`) */
 	githubOrg?: string
-	/** IdP for the preview api; without it `apprunner.yaml` carries placeholders */
+	/** IdP for the preview api; without it the Express deploy step is not attempted */
 	previewAuth?: PreviewAuth
-	/** Log instead of calling GitHub / App Runner / S3 (`--dry-run`); events say so */
+	/** Log instead of calling GitHub / ECS Express / S3 (`--dry-run`); events say so */
 	dryRun?: boolean
 }
 

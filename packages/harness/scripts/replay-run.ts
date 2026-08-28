@@ -1,6 +1,6 @@
 /**
  * Replays a recorded cassette through the REAL `runJob`, entirely offline — no Anthropic, no
- * tokens, no GitHub/App Runner/S3 (delivery runs against in-memory fakes). The cassette's two
+ * tokens, no GitHub/ECS Express/S3 (delivery runs against in-memory fakes). The cassette's two
  * seams (planner + Agent SDK `query()`) are answered from the JSONL file; the rest is the real
  * orchestrator: plan → DAG → merges → the deterministic + replayed gates → delivery.
  *

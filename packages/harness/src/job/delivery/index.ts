@@ -1,30 +1,32 @@
 import {
-	createAppRunnerDeployClient,
-	createDryRunDeployClient,
-	createFakeDeployClient,
-} from './appRunner.ts'
-import {
 	createDryRunArtifactStore,
 	createFakeArtifactStore,
 	createS3ArtifactStore,
 } from './artifacts.ts'
+import {
+	createDryRunDeployClient,
+	createEcsExpressDeployClient,
+	createFakeDeployClient,
+} from './ecsExpress.ts'
 import {
 	createDryRunGitHubClient,
 	createFakeGitHubClient,
 	createOctokitGitHubClient,
 	defaultGitHubOrg,
 } from './github.ts'
+import { createCodeBuildImageBuilder } from './imageBuild.ts'
 import { createFakeProseWriter, createLiveProseWriter } from './prose.ts'
 
 import type { GitHubAppAuth } from './github.ts'
 import type { DeliveryClients, PreviewAuth } from './types.ts'
 
-export * from './appRunner.ts'
 export * from './artifacts.ts'
 export * from './bundle.ts'
 export * from './deliver.ts'
 export * from './docs.ts'
+export * from './ecsExpress.ts'
 export * from './github.ts'
+export * from './imageBuild.ts'
 export * from './prose.ts'
 export * from './types.ts'
 
@@ -56,9 +58,20 @@ export type LiveDeliveryOptions = {
 	/** GitHub App installation (app id + private key + installation id), resolved by apps/job */
 	githubApp?: GitHubAppAuth
 	githubOrg?: string
-	/** `APPRUNNER_CONNECTION_ARN` — without it the deploy step reports a reason and `deployUrl` null */
-	appRunnerConnectionArn?: string
-	appRunnerInstanceRoleArn?: string
+	/**
+	 * ECS Express deploy configuration (from apps/job env). Any missing → the deploy step reports a
+	 * reason and `deployUrl` null (never crashes the build):
+	 *   `ECR_REPOSITORY_URI`               the ECR repo built images are pushed to
+	 *   `CODEBUILD_PROJECT`                the CodeBuild project that builds + pushes the image
+	 *   `EXPRESS_EXECUTION_ROLE_ARN`       task-execution role (pull image, write logs)
+	 *   `EXPRESS_INFRASTRUCTURE_ROLE_ARN`  infrastructure role (managed ALB provisioning)
+	 *   `ECS_CLUSTER`                      cluster the Express service runs on (default `default`)
+	 */
+	ecrRepositoryUri?: string
+	codeBuildProject?: string
+	expressExecutionRoleArn?: string
+	expressInfrastructureRoleArn?: string
+	cluster?: string
 	/**
 	 * `PREVIEW_AUTH_ISSUER` (+ optional `PREVIEW_AUTH_JWKS_URL`, `PREVIEW_AUTH_AUDIENCE`) — the
 	 * IdP the preview api verifies tokens against; without it the deploy step is not attempted
@@ -68,10 +81,30 @@ export type LiveDeliveryOptions = {
 	artifactsBucket?: string
 	region?: string
 	workerModel?: string
-	/** Log instead of calling GitHub / App Runner / S3 */
+	/** Log instead of calling GitHub / ECS Express / S3 */
 	dryRun?: boolean
 	log?: (line: string) => void
 }
+
+/** The first missing ECS-Express setting (deploy fails closed with its name), or undefined */
+const missingExpressSetting = (options: {
+	ecrRepositoryUri?: string
+	codeBuildProject?: string
+	expressExecutionRoleArn?: string
+	expressInfrastructureRoleArn?: string
+	previewAuth?: PreviewAuth
+}) =>
+	!options.ecrRepositoryUri
+		? 'ECR_REPOSITORY_URI'
+		: !options.codeBuildProject
+			? 'CODEBUILD_PROJECT'
+			: !options.expressExecutionRoleArn
+				? 'EXPRESS_EXECUTION_ROLE_ARN'
+				: !options.expressInfrastructureRoleArn
+					? 'EXPRESS_INFRASTRUCTURE_ROLE_ARN'
+					: !options.previewAuth
+						? 'PREVIEW_AUTH_ISSUER'
+						: undefined
 
 const notConfigured = (what: string) => async () => {
 	throw new Error(`${what} is not configured (TODO-EXTERNAL)`)
@@ -85,8 +118,11 @@ const notConfigured = (what: string) => async () => {
 export const createLiveDeliveryClients = ({
 	githubApp,
 	githubOrg = process.env.GITHUB_ORG || defaultGitHubOrg,
-	appRunnerConnectionArn,
-	appRunnerInstanceRoleArn,
+	ecrRepositoryUri,
+	codeBuildProject,
+	expressExecutionRoleArn,
+	expressInfrastructureRoleArn,
+	cluster,
 	previewAuth,
 	artifactsBucket,
 	region = process.env.AWS_REGION || 'eu-north-1',
@@ -95,7 +131,7 @@ export const createLiveDeliveryClients = ({
 	log = line => console.log(JSON.stringify({ message: line })),
 }: LiveDeliveryOptions): DeliveryClients => {
 	if (dryRun) {
-		// Dry-run means "skip the external accounts we do not have yet" — GitHub and App Runner.
+		// Dry-run means "skip the external accounts we do not have yet" — GitHub and ECS Express.
 		// The S3 bundle is OUR artifacts bucket (the job task role already writes it) and needs no
 		// external prerequisite, so it is uploaded for real whenever a bucket is configured; only
 		// without one does it fall back to logging. The repo push / deploy stay faked.
@@ -121,14 +157,30 @@ export const createLiveDeliveryClients = ({
 					push: notConfigured('GITHUB_APP (id/key/installation)'),
 					addCollaborator: notConfigured('GITHUB_APP (id/key/installation)'),
 				},
-		deploy: !appRunnerConnectionArn
-			? { deployFromRepo: notConfigured('APPRUNNER_CONNECTION_ARN') }
-			: !previewAuth
-				? { deployFromRepo: notConfigured('PREVIEW_AUTH_ISSUER') }
-				: createAppRunnerDeployClient({
-						connectionArn: appRunnerConnectionArn,
-						instanceRoleArn: appRunnerInstanceRoleArn,
-					}),
+		deploy: (() => {
+			const missing = missingExpressSetting({
+				ecrRepositoryUri,
+				codeBuildProject,
+				expressExecutionRoleArn,
+				expressInfrastructureRoleArn,
+				previewAuth,
+			})
+			return missing
+				? { deployFromRepo: notConfigured(`ECS_EXPRESS (${missing})`) }
+				: createEcsExpressDeployClient({
+						imageBuilder: createCodeBuildImageBuilder({
+							project: codeBuildProject!,
+							ecrRepositoryUri: ecrRepositoryUri!,
+							region,
+						}),
+						executionRoleArn: expressExecutionRoleArn!,
+						infrastructureRoleArn: expressInfrastructureRoleArn!,
+						cluster,
+						previewAuth,
+						region,
+						logGroup: `/mf/${process.env.ENV || 'local'}/express`,
+					})
+		})(),
 		artifacts: artifactsBucket
 			? createS3ArtifactStore(artifactsBucket, region)
 			: {

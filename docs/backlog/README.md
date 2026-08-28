@@ -24,7 +24,7 @@ Rules for every stream (in addition to CLAUDE.md, templates/web/CLAUDE.md, `.cla
 | 1 | m4-gates | [m4-gates.md](m4-gates.md) | packages/harness, packages/models (job/gate schemas), apps/job |
 | 1 | m7-site | [m7-site.md](m7-site.md) | apps/site, apps/api `routes/bff/contact` only |
 | 1 | m9-ops | [m9-ops.md](m9-ops.md) | infra, .github, docs/RUNBOOK.md |
-| 2 | m5-delivery | [m5-delivery.md](m5-delivery.md) | packages/harness (delivery step), apps/api (deliverables), infra (App Runner/IAM) |
+| 2 | m5-delivery | [m5-delivery.md](m5-delivery.md) | packages/harness (delivery step), apps/api (deliverables), infra (ECS Express/CodeBuild/IAM) |
 | 2 | m6-orders | [m6-orders.md](m6-orders.md) | apps/api (orders, Stripe), apps/portal (order flow, job page, admin) |
 | 2 | m3-hardening | [m3-hardening.md](m3-hardening.md) | apps/job, apps/api (job reporting endpoint), infra |
 | 3 | m8-resident | [m8-resident.md](m8-resident.md) | packages/resident (new), infra templates |

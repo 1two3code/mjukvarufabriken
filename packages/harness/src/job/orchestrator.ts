@@ -226,7 +226,7 @@ export const runJob = async (
 	if (budget.aborted) return abortedOutcome(plan)
 	if (!gateRun.ok) return finish({ status: 'failed', plan, reason: gatesFailedReason(gates) })
 
-	// MARK: Delivery — docs → GitHub repo → App Runner (best effort) → bundle; repo + bundle are the contract
+	// MARK: Delivery — docs → GitHub repo → ECS Express (best effort) → bundle; repo + bundle are the contract
 	if (ports.deliver && job.delivery) {
 		let delivery
 		try {

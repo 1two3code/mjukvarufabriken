@@ -1,5 +1,7 @@
 import { CfnOutput, Duration, RemovalPolicy, Stack } from 'aws-cdk-lib'
+import { BuildSpec, LinuxBuildImage, Project, Source } from 'aws-cdk-lib/aws-codebuild'
 import { NatProvider, Peer, Port, SecurityGroup, SubnetType, Vpc } from 'aws-cdk-lib/aws-ec2'
+import { Repository, TagStatus } from 'aws-cdk-lib/aws-ecr'
 import {
 	Cluster,
 	ContainerDependencyCondition,
@@ -9,7 +11,7 @@ import {
 	LogDrivers,
 	OperatingSystemFamily,
 } from 'aws-cdk-lib/aws-ecs'
-import { PolicyStatement, Role, ServicePrincipal } from 'aws-cdk-lib/aws-iam'
+import { ManagedPolicy, PolicyStatement, Role, ServicePrincipal } from 'aws-cdk-lib/aws-iam'
 import { LogGroup, RetentionDays } from 'aws-cdk-lib/aws-logs'
 import {
 	Credentials,
@@ -63,8 +65,14 @@ export class ResourcesStack extends Stack {
 	readonly jobsCluster: Cluster
 	readonly jobTaskDefinition: FargateTaskDefinition
 	readonly jobSecurityGroup: SecurityGroup
-	/** Instance role of the App Runner services the job creates per delivery (M5) */
-	readonly appRunnerInstanceRole: Role
+	/** ECR repository the delivery pushes built customer images to (M5, ECS Express) */
+	readonly deliverablesRepository: Repository
+	/** CodeBuild project that builds + pushes the customer image from the S3 source zip (M5) */
+	readonly deliveryBuildProject: Project
+	/** Task-execution role of the ECS Express preview services the job creates per delivery (M5) */
+	readonly expressExecutionRole: Role
+	/** Infrastructure role ECS Express assumes to provision the managed ALB per delivery (M5) */
+	readonly expressInfrastructureRole: Role
 	/** Hosts the job container reaches without the egress proxy; WebStack appends the api host */
 	readonly jobNoProxyHosts: string[]
 	/** `/mf/<env>/jobs` — JSON lines from the job + proxy containers (see docs/RUNBOOK.md) */
@@ -232,23 +240,95 @@ export class ResourcesStack extends Stack {
 			},
 		})
 
-		// MARK: App Runner (M5). Services are created at runtime by the job, one per delivery, from
-		// the customer's GitHub repo — nothing App Runner-shaped lives in our stacks except the
-		// instance role the job passes to every service: a role with no policies (the customer api
-		// needs no AWS access in the preview), so `iam:PassRole` on it grants nothing extra.
-		this.appRunnerInstanceRole = new Role(this, 'AppRunnerInstanceRole', {
-			roleName: `mf-apprunner-instance-${environment.name}`,
-			assumedBy: new ServicePrincipal('tasks.apprunner.amazonaws.com'),
-			description: 'Instance role of customer preview services created by build jobs (M5)',
+		// MARK: ECS Express Mode delivery (M5). App Runner stopped taking new customers and is not in
+		// eu-north-1; its replacement, ECS Express Mode, takes a PREBUILT image (ECR URI) and returns
+		// a managed HTTPS URL. So delivery is two stages, both created here and driven at runtime by
+		// the job (one build + one service per delivery):
+		//   1. build — a CodeBuild project builds the api image from the delivery's S3 source zip
+		//      (no GitHub creds in CodeBuild) and pushes it to the ECR repo below.
+		//   2. deploy — CreateExpressGatewayService from that image, passing the execution +
+		//      infrastructure roles below. The customer api needs no AWS access in the preview, so the
+		//      execution role carries only the managed task-execution policy (pull image + write logs).
+
+		// ECR repository for built customer images. Untagged images (superseded builds) expire; the
+		// per-job tag is the service name, kept until the preview is torn down out-of-band.
+		this.deliverablesRepository = new Repository(this, 'DeliverablesRepository', {
+			repositoryName: `mf-deliverables-${environment.name}`,
+			removalPolicy,
+			emptyOnDelete: !isLive,
+			lifecycleRules: [{ tagStatus: TagStatus.UNTAGGED, maxImageAge: Duration.days(14) }],
+		})
+
+		// CloudWatch log group for the ECS Express preview containers. The name matches what apps/job
+		// derives from ENV (`/mf/<env>/express`); the execution role's managed policy grants the
+		// log-stream writes.
+		const expressLogGroup = new LogGroup(this, 'ExpressLogGroup', {
+			logGroupName: `/mf/${environment.name}/express`,
+			retention: RetentionDays.TWO_WEEKS,
+			removalPolicy,
+		})
+
+		// CodeBuild project: privileged (docker), S3 source (the delivery uploads the built repo as a
+		// zip), inline buildspec that builds apps/api/Dockerfile and pushes `$ECR_REPOSITORY_URI:$IMAGE_TAG`.
+		// CDK auto-creates its service role; grant it ECR push + read the source bucket (logs are auto).
+		this.deliveryBuildProject = new Project(this, 'DeliveryBuildProject', {
+			projectName: `mf-delivery-build-${environment.name}`,
+			source: Source.s3({ bucket: this.artifactsBucket, path: 'delivery-source/source.zip' }),
+			environment: { buildImage: LinuxBuildImage.STANDARD_7_0, privileged: true },
+			logging: { cloudWatch: { logGroup: jobLogGroup } },
+			buildSpec: BuildSpec.fromObject({
+				version: '0.2',
+				phases: {
+					pre_build: {
+						commands: [
+							'REGISTRY="${ECR_REPOSITORY_URI%/*}"',
+							'aws ecr get-login-password --region "$AWS_DEFAULT_REGION" | docker login --username AWS --password-stdin "$REGISTRY"',
+						],
+					},
+					build: {
+						commands: [
+							'docker build -t "$ECR_REPOSITORY_URI:$IMAGE_TAG" -f apps/api/Dockerfile .',
+						],
+					},
+					post_build: { commands: ['docker push "$ECR_REPOSITORY_URI:$IMAGE_TAG"'] },
+				},
+			}),
+		})
+		this.deliverablesRepository.grantPullPush(this.deliveryBuildProject)
+		this.artifactsBucket.grantRead(this.deliveryBuildProject)
+
+		// Task-execution role for the Express service: pull the ECR image, write container logs.
+		this.expressExecutionRole = new Role(this, 'ExpressExecutionRole', {
+			roleName: `mf-express-execution-${environment.name}`,
+			assumedBy: new ServicePrincipal('ecs-tasks.amazonaws.com'),
+			description: 'Task-execution role of customer ECS Express preview services (M5)',
+			managedPolicies: [
+				ManagedPolicy.fromAwsManagedPolicyName('service-role/AmazonECSTaskExecutionRolePolicy'),
+			],
+		})
+
+		// Infrastructure role ECS Express assumes to provision the managed ALB/target groups per
+		// service. The managed policy name is post-cutoff (verified against the AWS docs 2026-08-28) —
+		// synth only builds its ARN, so this is unverified until the first live deploy.
+		this.expressInfrastructureRole = new Role(this, 'ExpressInfrastructureRole', {
+			roleName: `mf-express-infra-${environment.name}`,
+			assumedBy: new ServicePrincipal('ecs.amazonaws.com'),
+			description: 'Infrastructure role for customer ECS Express preview services (M5)',
+			managedPolicies: [
+				ManagedPolicy.fromAwsManagedPolicyName(
+					'AmazonECSInfrastructureRoleforExpressGatewayServices'
+				),
+			],
 		})
 
 		// The job container: apps/job/Dockerfile (harness + golden template). `JOB_ID`, the per-job
 		// `JOB_TOKEN`, `API_URL` and the final `NO_PROXY` (this list + the api host, `JOB_NO_PROXY`
 		// on the api — the ALB lives in mf-<env>, which depends on this stack) are set per run by
 		// the api's ecs:RunTask override. Only the ECS credential/metadata endpoints, Secrets
-		// Manager, the artifacts bucket, App Runner (M5) and the api bypass the proxy (NO_PROXY,
-		// exact hosts — a wildcard `.amazonaws.com` would let any AWS-hosted endpoint skip the
-		// allowlist); everything else, including every other AWS service, must pass the allowlist.
+		// Manager, the artifacts bucket, ECS + CodeBuild (M5 delivery) and the api bypass the proxy
+		// (NO_PROXY, exact hosts — a wildcard `.amazonaws.com` would let any AWS-hosted endpoint skip
+		// the allowlist); everything else, including every other AWS service, must pass the allowlist.
+		// (The job never talks to ECR directly — CodeBuild builds and pushes the image.)
 		this.jobNoProxyHosts = [
 			'127.0.0.1',
 			'localhost',
@@ -257,7 +337,8 @@ export class ResourcesStack extends Stack {
 			`secretsmanager.${this.region}.amazonaws.com`,
 			`${this.artifactsBucket.bucketName}.s3.${this.region}.amazonaws.com`,
 			`${this.artifactsBucket.bucketName}.s3.amazonaws.com`,
-			`apprunner.${this.region}.amazonaws.com`,
+			`ecs.${this.region}.amazonaws.com`,
+			`codebuild.${this.region}.amazonaws.com`,
 		]
 		const job = this.jobTaskDefinition.addContainer('job', {
 			image: ContainerImage.fromAsset(repositoryRoot, { file: 'apps/job/Dockerfile' }),
@@ -267,7 +348,7 @@ export class ResourcesStack extends Stack {
 				ENV: environment.name,
 				ARTIFACTS_BUCKET: this.artifactsBucket.bucketName,
 				ANTHROPIC_API_KEY_SECRET_ARN: this.secrets['anthropic-api-key'].secretArn,
-				// M5 delivery: GitHub App installation tokens (repo push) + App Runner preview + bundle
+				// M5 delivery: GitHub App installation tokens (repo push) + ECS Express preview + bundle
 				GITHUB_APP_PRIVATE_KEY_SECRET_ARN: this.secrets['github-app-key'].secretArn,
 				...(environment.githubDelivery
 					? { GITHUB_APP_INSTALLATION_ID: String(environment.githubDelivery.installationId) }
@@ -276,10 +357,12 @@ export class ResourcesStack extends Stack {
 					? { GITHUB_APP_ID: environment.githubDelivery.appId }
 					: {}),
 				...(environment.jobs.deliveryDryRun ? { DELIVERY_DRY_RUN: '1' } : {}),
-				APPRUNNER_INSTANCE_ROLE_ARN: this.appRunnerInstanceRole.roleArn,
-				...(environment.appRunner
-					? { APPRUNNER_CONNECTION_ARN: environment.appRunner.connectionArn }
-					: {}),
+				// M5 ECS Express: build the image (CodeBuild → ECR) then CreateExpressGatewayService
+				ECR_REPOSITORY_URI: this.deliverablesRepository.repositoryUri,
+				CODEBUILD_PROJECT: this.deliveryBuildProject.projectName,
+				EXPRESS_EXECUTION_ROLE_ARN: this.expressExecutionRole.roleArn,
+				EXPRESS_INFRASTRUCTURE_ROLE_ARN: this.expressInfrastructureRole.roleArn,
+				ECS_CLUSTER: this.jobsCluster.clusterName,
 				// The preview api verifies tokens against our api (it publishes a JWKS); only known
 				// here with a custom domain — without it the deploy step is skipped (deployUrl null)
 				...(environment.auth.issuer ? { PREVIEW_AUTH_ISSUER: environment.auth.issuer } : {}),
@@ -303,16 +386,17 @@ export class ResourcesStack extends Stack {
 		//     start-up and strips it from the environment the sandbox (workers, npm scripts) sees;
 		//     it is still reachable by code running in the job process — accepted until the App exists.
 		//   s3:PutObject*/Abort* on the artifacts bucket       — upload deliverables (never read/list/delete)
-		//   apprunner:Create/Describe/List/StartDeployment    — M5: preview service from the pushed repo.
-		//     Create/Tag only with the `Service=mf-delivery` request tag, Describe/StartDeployment only
-		//     on services carrying it: the job can touch preview services, never anything else in
-		//     the account. A job CAN still create a preview from any repo the org-wide App Runner
-		//     connection sees (every customer repo) — a connection per org / GitHub App is TODO-EXTERNAL.
-		//   iam:PassRole on the (empty) App Runner instance role — required by CreateService
+		//   codebuild:StartBuild/BatchGetBuilds on the project — M5: build + push the customer image to ECR.
+		//     Resource-scoped to the one delivery project, so the job can start no other build.
+		//   ecs:CreateExpressGatewayService/DescribeExpressGatewayService — M5: preview service from that
+		//     image. Create only with the `Service=mf-delivery` request tag, Describe only on services
+		//     carrying it: the job can touch preview services, never anything else in the account.
+		//   iam:PassRole on the Express execution + infrastructure roles (to ECS) and the CodeBuild
+		//     service role (to CodeBuild) — required to create the service / run the build.
 		// The job row + events go through the api's `/internal/jobs/:id` endpoint with a per-job
 		// token (RunTask override), so there is no database grant and no 5432 rule any more
-		// (docs/M3-REVIEW.md #18). Never: Stripe keys, the auth signing key, ecs:* or logs:* (the
-		// execution role writes logs). Secrets reach the container as ARNs and are fetched at start-up.
+		// (docs/M3-REVIEW.md #18). Never: Stripe keys, the auth signing key, ecr:* directly (CodeBuild
+		// pushes) or logs:* (the execution role writes logs). Secrets reach the container as ARNs.
 		//
 		// KNOWN GAP (PLAN.md, "M3 hardening"): PutObject is bucket-wide, so a job can overwrite
 		// (not read) another job's deliverable — versioning keeps the previous copy. Goes away
@@ -320,39 +404,51 @@ export class ResourcesStack extends Stack {
 		this.secrets['anthropic-api-key'].grantRead(this.jobTaskDefinition.taskRole)
 		this.secrets['github-app-key'].grantRead(this.jobTaskDefinition.taskRole)
 		this.artifactsBucket.grantPut(this.jobTaskDefinition.taskRole)
-		// App Runner has no grant* helpers. ListServices is account-level; the rest is fenced by the
-		// `Service=mf-delivery` tag the job sets on every service it creates.
-		const previewTag = { 'aws:RequestTag/Service': 'mf-delivery' }
-		const previewResourceTag = { 'aws:ResourceTag/Service': 'mf-delivery' }
+		// CodeBuild: resource-scoped to the one delivery project (no tag fence needed).
 		this.jobTaskDefinition.taskRole.addToPrincipalPolicy(
 			new PolicyStatement({
-				sid: 'AppRunnerListServices',
-				actions: ['apprunner:ListServices'],
+				sid: 'CodeBuildDeliveryImage',
+				actions: ['codebuild:StartBuild', 'codebuild:BatchGetBuilds'],
+				resources: [this.deliveryBuildProject.projectArn],
+			})
+		)
+		// ECS Express has no grant* helpers. Create is fenced by the `Service=mf-delivery` request tag
+		// the job sets on every service; Describe by that tag on the resource.
+		this.jobTaskDefinition.taskRole.addToPrincipalPolicy(
+			new PolicyStatement({
+				sid: 'EcsExpressCreatePreviewServices',
+				actions: ['ecs:CreateExpressGatewayService'],
 				resources: ['*'],
+				conditions: { StringEquals: { 'aws:RequestTag/Service': 'mf-delivery' } },
 			})
 		)
 		this.jobTaskDefinition.taskRole.addToPrincipalPolicy(
 			new PolicyStatement({
-				sid: 'AppRunnerCreatePreviewServices',
-				actions: ['apprunner:CreateService', 'apprunner:TagResource'],
+				sid: 'EcsExpressDescribePreviewServices',
+				actions: ['ecs:DescribeExpressGatewayService'],
 				resources: ['*'],
-				conditions: { StringEquals: previewTag },
+				conditions: { StringEquals: { 'aws:ResourceTag/Service': 'mf-delivery' } },
 			})
 		)
+		// PassRole: the two Express roles to ECS, and the CodeBuild service role to CodeBuild.
 		this.jobTaskDefinition.taskRole.addToPrincipalPolicy(
 			new PolicyStatement({
-				sid: 'AppRunnerRedeployPreviewServices',
-				actions: ['apprunner:DescribeService', 'apprunner:StartDeployment'],
-				resources: ['*'],
-				conditions: { StringEquals: previewResourceTag },
-			})
-		)
-		this.jobTaskDefinition.taskRole.addToPrincipalPolicy(
-			new PolicyStatement({
-				sid: 'PassAppRunnerInstanceRole',
+				sid: 'PassExpressRoles',
 				actions: ['iam:PassRole'],
-				resources: [this.appRunnerInstanceRole.roleArn],
-				conditions: { StringEquals: { 'iam:PassedToService': 'tasks.apprunner.amazonaws.com' } },
+				resources: [this.expressExecutionRole.roleArn, this.expressInfrastructureRole.roleArn],
+				conditions: {
+					StringEquals: {
+						'iam:PassedToService': ['ecs-tasks.amazonaws.com', 'ecs.amazonaws.com'],
+					},
+				},
+			})
+		)
+		this.jobTaskDefinition.taskRole.addToPrincipalPolicy(
+			new PolicyStatement({
+				sid: 'PassCodeBuildRole',
+				actions: ['iam:PassRole'],
+				resources: [this.deliveryBuildProject.role!.roleArn],
+				conditions: { StringEquals: { 'iam:PassedToService': 'codebuild.amazonaws.com' } },
 			})
 		)
 
@@ -378,9 +474,21 @@ export class ResourcesStack extends Stack {
 			value: this.jobTaskDefinition.taskDefinitionArn,
 			exportName: 'ecs-job-task-definition-arn',
 		})
-		new CfnOutput(this, 'AppRunnerInstanceRoleArn', {
-			value: this.appRunnerInstanceRole.roleArn,
-			exportName: 'apprunner-instance-role-arn',
+		new CfnOutput(this, 'DeliverablesRepositoryUri', {
+			value: this.deliverablesRepository.repositoryUri,
+			exportName: 'ecr-deliverables-uri',
+		})
+		new CfnOutput(this, 'DeliveryBuildProjectName', {
+			value: this.deliveryBuildProject.projectName,
+			exportName: 'codebuild-delivery-project',
+		})
+		new CfnOutput(this, 'ExpressExecutionRoleArn', {
+			value: this.expressExecutionRole.roleArn,
+			exportName: 'express-execution-role-arn',
+		})
+		new CfnOutput(this, 'ExpressInfrastructureRoleArn', {
+			value: this.expressInfrastructureRole.roleArn,
+			exportName: 'express-infrastructure-role-arn',
 		})
 		new CfnOutput(this, 'JobSecurityGroupId', {
 			value: this.jobSecurityGroup.securityGroupId,

@@ -23,7 +23,7 @@ Only two seams are faked; everything else is the real code path:
 Real, for every run: `createLivePorts` → real `runTask`/`mergeTask`/`verify`, real
 `createWorktree`/`fetchTaskBranch`/`commitLeftovers`, the real deterministic gates (verify =
 lint + test, licence), the real budget/kill wiring, and delivery through
-`createFakeDeliveryClients` (an in-memory GitHub/App Runner/S3).
+`createFakeDeliveryClients` (an in-memory GitHub/ECS Express/S3).
 
 Almost every bug found on the first green live delivery (2026-08-27, job `5e894e2a`) was in this
 plumbing — git identity, `.git/index.lock` across the two uids, `setpriv` caps, npm-install after
@@ -42,7 +42,7 @@ need Anthropic. The e2e's negative cases pin those classes so a regression fails
 | tiny `maxTokens` → first breach aborts `failed` (`budget exceeded`) | the shared budget aborting on the first over-limit usage |
 | `WORKER_UID` set → a session is wrapped in `setpriv --reuid …` | the two-uid sandbox spawner (command wrapping asserted, no real uid switch) |
 | a gate fails closed → `uploadDebugBundle` writes `debug/repo.zip` + reports | the failed-build archive apps/job uploads for offline gate replay |
-| dry-run App Runner deploy → a `deployUrl` and repo + bundle still the contract | delivery never blocked by a faked deploy |
+| dry-run ECS Express deploy → a `deployUrl` and repo + bundle still the contract | delivery never blocked by a faked deploy |
 
 The e2e is part of the normal `npm test` run (it lives in the `@mf/harness` vitest project) and is
 kept fast on purpose (< ~60 s): `node_modules` is hard-linked into the seeded repo, and the tasks
@@ -51,7 +51,7 @@ are scoped to `apps/*` workspaces so their gates stay workspace-scoped.
 ## The live Fargate run is a pre-release smoke test only
 
 A live build takes ~50 min and ~2.5M tokens (~USD 6). Run it before a release to exercise the real
-Agent SDK, the real GitHub/App Runner/S3 and the sandbox uid split (`WORKER_UID`) — not as the
+Agent SDK, the real GitHub/ECS Express/S3 and the sandbox uid split (`WORKER_UID`) — not as the
 day-to-day loop. When a live build fails after the build phase, the job uploads a debug bundle
 (`git archive` of `main` + `gates.json`/`acceptance.json`) to `deliverables/<jobId>/debug/`, so the
 build can be pulled **once** and its gates re-run locally forever with `npm run gates:demo -- --repo <dir>`

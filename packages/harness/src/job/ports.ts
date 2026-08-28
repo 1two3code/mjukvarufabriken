@@ -14,7 +14,7 @@ export type LivePortsOptions = {
 	client: SpecEngineClient
 	planModel?: string
 	workerModel?: string
-	/** M5 delivery clients (GitHub, App Runner, S3); omitted → the job stops after the gates */
+	/** M5 delivery clients (GitHub, ECS Express, S3); omitted → the job stops after the gates */
 	delivery?: DeliveryClients
 }
 

@@ -1,0 +1,200 @@
+import {
+	CreateExpressGatewayServiceCommand,
+	DescribeExpressGatewayServiceCommand,
+} from '@aws-sdk/client-ecs'
+
+import { createEcsExpressDeployClient } from '#job/delivery/ecsExpress.ts'
+import { createFakeImageBuilder } from '#job/delivery/imageBuild.ts'
+import { previewServiceName } from '#job/delivery/deliver.ts'
+
+import type { EcsClientLike } from '#job/delivery/ecsExpressClient.ts'
+
+// MARK: Fixtures
+
+type Sent = { name: string; input: Record<string, unknown> }
+
+/** A service payload with (or without) a PUBLIC ingress endpoint */
+const service = (endpoint?: string, statusCode = 'ACTIVE') => ({
+	serviceArn: 'arn:svc',
+	status: { statusCode },
+	activeConfigurations: [
+		{ ingressPaths: endpoint ? [{ accessType: 'PUBLIC', endpoint }] : [] },
+	],
+})
+
+/**
+ * Records every command. `createEndpoint` is the endpoint on the Create response (undefined →
+ * not populated yet); `describeEndpoints` the sequence Describe answers with.
+ */
+const createStub = ({
+	createEndpoint,
+	describeEndpoints = ['svc.eu-north-1.on.aws'],
+	describeStatus = 'ACTIVE',
+}: {
+	createEndpoint?: string
+	describeEndpoints?: (string | undefined)[]
+	describeStatus?: string
+} = {}) => {
+	const sent: Sent[] = []
+	let describes = 0
+	const send = async (command: { constructor: unknown; input: Record<string, unknown> }) => {
+		sent.push({ name: (command.constructor as { name: string }).name, input: command.input })
+		if (command instanceof CreateExpressGatewayServiceCommand) {
+			return { service: service(createEndpoint) }
+		}
+		if (command instanceof DescribeExpressGatewayServiceCommand) {
+			const endpoint = describeEndpoints[Math.min(describes, describeEndpoints.length - 1)]
+			describes += 1
+			return { service: service(endpoint, describeStatus) }
+		}
+		throw new Error('unexpected command')
+	}
+	const client = { send } as unknown as EcsClientLike
+	return { client, sent }
+}
+
+const names = (sent: Sent[]) => sent.map(entry => entry.name)
+
+const deployClient = (client: EcsClientLike, overrides = {}) =>
+	createEcsExpressDeployClient({
+		imageBuilder: createFakeImageBuilder(),
+		executionRoleArn: 'arn:exec',
+		infrastructureRoleArn: 'arn:infra',
+		previewAuth: {
+			issuer: 'https://api.mjukvaruhuset.se',
+			jwksUrl: 'https://api.mjukvaruhuset.se/.well-known/jwks.json',
+			audience: 'preview',
+		},
+		logGroup: '/mf/dev/express',
+		client,
+		...overrides,
+	})
+
+// MARK: Tests
+
+describe('ECS Express deploy client', () => {
+	it('Builds the image, creates a tagged service and returns the PUBLIC endpoint URL', async () => {
+		// Arrange
+		const { client, sent } = createStub({ createEndpoint: 'svc.eu-north-1.on.aws' })
+		const imageBuilder = createFakeImageBuilder()
+		const deploy = deployClient(client, { imageBuilder })
+
+		// Act
+		const { url } = await deploy.deployFromRepo({
+			serviceName: 'mf-11111111-gym',
+			repositoryUrl: 'https://github.com/x/new',
+			branch: 'main',
+		})
+
+		// Assert — image built first (tag = service name), then a single Create, no Describe needed
+		expect(url).toBe('https://svc.eu-north-1.on.aws')
+		expect(imageBuilder.builds).toEqual(['mf-11111111-gym'])
+		expect(names(sent)).toEqual(['CreateExpressGatewayServiceCommand'])
+		expect(sent[0]!.input).toMatchObject({
+			serviceName: 'mf-11111111-gym',
+			tags: [{ key: 'Service', value: 'mf-delivery' }],
+			primaryContainer: {
+				image: expect.stringContaining(':mf-11111111-gym'),
+				containerPort: 80,
+				environment: expect.arrayContaining([
+					{ name: 'AUTH_ISSUER', value: 'https://api.mjukvaruhuset.se' },
+				]),
+			},
+		})
+	})
+
+	it('Polls DescribeExpressGatewayService until the endpoint is populated', async () => {
+		// Arrange — Create returns no endpoint yet; the second Describe has it
+		const { client, sent } = createStub({
+			createEndpoint: undefined,
+			describeEndpoints: [undefined, 'later.eu-north-1.on.aws'],
+		})
+		const sleep = vi.fn(async () => {})
+		const deploy = deployClient(client, { sleep })
+
+		// Act
+		const { url } = await deploy.deployFromRepo({
+			serviceName: 'mf-11111111-gym',
+			repositoryUrl: 'https://github.com/x/new',
+			branch: 'main',
+		})
+
+		// Assert
+		expect(url).toBe('https://later.eu-north-1.on.aws')
+		expect(names(sent)).toEqual([
+			'CreateExpressGatewayServiceCommand',
+			'DescribeExpressGatewayServiceCommand',
+			'DescribeExpressGatewayServiceCommand',
+		])
+		expect(sleep).toHaveBeenCalledTimes(1)
+	})
+
+	it('Fails the deploy when the image build fails — no service is created', async () => {
+		// Arrange
+		const { client, sent } = createStub()
+		const deploy = deployClient(client, { imageBuilder: createFakeImageBuilder(undefined, true) })
+
+		// Act + Assert
+		await expect(
+			deploy.deployFromRepo({
+				serviceName: 'mf-11111111-gym',
+				repositoryUrl: 'https://github.com/x/new',
+				branch: 'main',
+			})
+		).rejects.toThrow('fake: image build failed')
+		expect(sent).toEqual([])
+	})
+
+	it('Fails when the service drains before exposing an endpoint', async () => {
+		// Arrange
+		const { client } = createStub({
+			createEndpoint: undefined,
+			describeEndpoints: [undefined],
+			describeStatus: 'INACTIVE',
+		})
+		const deploy = deployClient(client, { sleep: async () => {} })
+
+		// Act + Assert
+		await expect(
+			deploy.deployFromRepo({
+				serviceName: 'mf-11111111-gym',
+				repositoryUrl: 'https://github.com/x/new',
+				branch: 'main',
+			})
+		).rejects.toThrow('is INACTIVE')
+	})
+
+	it('Stops polling as soon as the signal aborts', async () => {
+		// Arrange
+		const { client, sent } = createStub({ createEndpoint: undefined, describeEndpoints: [undefined] })
+		const controller = new AbortController()
+		const deploy = deployClient(client, { pollIntervalMs: 60_000 })
+
+		// Act
+		const pending = deploy.deployFromRepo({
+			serviceName: 'mf-11111111-gym',
+			repositoryUrl: 'https://github.com/x/new',
+			branch: 'main',
+			signal: controller.signal,
+		})
+		await vi.waitFor(() => expect(names(sent)).toContain('DescribeExpressGatewayServiceCommand'))
+		controller.abort()
+
+		// Assert
+		await expect(pending).rejects.toThrow('aborted')
+		expect(names(sent).filter(name => name === 'DescribeExpressGatewayServiceCommand')).toHaveLength(1)
+	})
+
+	it('Keeps the job-unique part of the service name (no collision between jobs)', () => {
+		// Arrange
+		const slug = 'a-very-long-application-name-from-the-spec-goal-11111111'
+
+		// Act
+		const a = previewServiceName('11111111-2222-3333-4444-555555555555', slug)
+		const b = previewServiceName('22222222-2222-3333-4444-555555555555', slug)
+
+		// Assert
+		expect(a.startsWith('mf-11111111-')).toBe(true)
+		expect(a).not.toBe(b)
+	})
+})

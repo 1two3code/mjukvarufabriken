@@ -1,4 +1,4 @@
-import { appRunnerServiceName } from '#job/delivery/appRunner.ts'
+import { expressServiceName } from '#job/delivery/ecsExpress.ts'
 import {
 	renderAcceptanceTable,
 	renderGateTable,
@@ -80,15 +80,15 @@ describe('delivery docs', () => {
 		expect(readme).not.toContain('# Template')
 	})
 
-	it('Derives slug, app name and App Runner service name', () => {
+	it('Derives slug, app name and ECS Express service name', () => {
 		expect(slugify('Gym Booking — Åre Fitness!')).toBe('gym-booking-are-fitness')
 		expect(slugify('***')).toBe('app')
 		expect(slugify('x'.repeat(80))).toHaveLength(60)
 		expect(appNameOf('a booking app for a gym. With payments.')).toBe('A booking app for a gym')
 		expect(appNameOf('')).toBe('Your application')
 		expect(appNameOf('y'.repeat(100))).toHaveLength(78)
-		expect(appRunnerServiceName('mf-gym-booking-11111111')).toBe('mf-gym-booking-11111111')
-		expect(appRunnerServiceName('--a.b')).toBe('a-b0')
-		expect(appRunnerServiceName('z'.repeat(50))).toHaveLength(40)
+		expect(expressServiceName('mf-gym-booking-11111111')).toBe('mf-gym-booking-11111111')
+		expect(expressServiceName('--a.b')).toBe('a-b')
+		expect(expressServiceName('z'.repeat(300))).toHaveLength(255)
 	})
 })

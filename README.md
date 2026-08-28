@@ -3,7 +3,7 @@
 A one-shot software factory: a customer describes what they want in the portal, a spec engine
 turns the chat into a frozen, priced specification, a build job on ECS Fargate plans the work,
 runs Claude Agent SDK workers in parallel git worktrees, gates the result (acceptance tests,
-independent review, acceptance check) and delivers a GitHub repository, an App Runner URL and a
+independent review, acceptance check) and delivers a GitHub repository, an ECS Express Mode URL and a
 deliverable bundle. Payment is Stripe Checkout (50 % deposit before the build, 50 % on delivery).
 After delivery a "resident" agent can keep working on the repo from inside the customer's own AWS
 account, metered per token.
@@ -24,7 +24,7 @@ is the summary.
 | M2 Spec engine | done | structured spec chat, clarification loop, S/M/L pricing, freeze (live-model behaviour verified via `spec:demo`) |
 | M3 Orchestrator + sandbox | mostly | Fargate job, budget/kill switch/egress allowlist, live events; the plan → DAG → workers → merge chain has run on dev but not yet to a green end-to-end delivery |
 | M4 QA gates | mostly | acceptance-tests, review and acceptance-check gates unit-verified, fail closed; M3 hardening (job reports through the api, no RDS secret in the job) built, live run pending |
-| M5 Delivery | done (dry-run) | handover docs, GitHub repo, App Runner deploy, S3 bundle — live delivery waits on the GitHub org and App Runner connection |
+| M5 Delivery | done (dry-run) | handover docs, GitHub repo, ECS Express deploy (image built via CodeBuild → ECR), S3 bundle — live delivery waits on the GitHub org |
 | M6 Portal + payment | mostly | magic-link auth, order flow with Stripe (fake provider verified, test keys pending), live progress, deliverables, admin view; GitHub sign-in built but not exercised against GitHub |
 | M7 Public site | mostly | landing/how it works/pricing/contact in sv+en, built by hand — the "built through the harness" case study is the M10 dogfood |
 | M8 Resident agent | mostly | `@mf/resident` + `infra/resident`, cap/pause/audit/metering with fakes; Stripe usage billing built, waits on a meter + one invoiced month |
@@ -112,7 +112,7 @@ resolve them from Secrets Manager at start-up — see `infra/README.md` for the 
 | `STRIPE_SECRET_KEY`, `STRIPE_WEBHOOK_SECRET` (`_SECRET_ARN`), `RESIDENT_USAGE_METER_EVENT`, `RESIDENT_USAGE_PRICE_ID` | api | Stripe Checkout + webhook; without a key the fake provider marks payments paid at once; resident usage meter |
 | `ARTIFACTS_BUCKET`, `JOBS_CLUSTER_ARN`, `JOB_TASK_DEFINITION_ARN`, `JOB_SUBNET_IDS`, `JOB_SECURITY_GROUP_ID`, `JOB_API_URL`, `JOB_NO_PROXY` | api | start Fargate jobs (`ecs:RunTask`), presign deliverables, where jobs report back |
 | `JOB_ID`, `JOB_TOKEN`, `API_URL`, `WORK_DIR`, `TEMPLATE_DIR`, `HTTP(S)_PROXY`, `NO_PROXY` | job | which job to run, per-job report token (Fargate), work dir, template path, egress proxy |
-| `GITHUB_TOKEN`, `GITHUB_ORG`, `APPRUNNER_CONNECTION_ARN`, `APPRUNNER_INSTANCE_ROLE_ARN`, `DELIVERY_DRY_RUN`, `PREVIEW_AUTH_*` | job (delivery) | create/push the customer repo, App Runner deploy; dry-run logs instead |
+| `GITHUB_TOKEN`, `GITHUB_ORG`, `ECR_REPOSITORY_URI`, `CODEBUILD_PROJECT`, `EXPRESS_EXECUTION_ROLE_ARN`, `EXPRESS_INFRASTRUCTURE_ROLE_ARN`, `ECS_CLUSTER`, `DELIVERY_DRY_RUN`, `PREVIEW_AUTH_*` | job (delivery) | create/push the customer repo, ECS Express deploy; dry-run logs instead |
 | `SEED_MAX_TOKENS`, `SEED_MAX_WORKERS`, `SEED_ORG_ID` | `db:seed` | budget/workers/org of the demo job |
 | `RESIDENT_INSTALLATIONS` (`_SECRET_ARN`) | api | installation id → bearer for `POST /internal/resident/usage` |
 | `GITHUB_REPOSITORY`, `FACTORY_API_URL`, `RESIDENT_INSTALLATION_ID`, `RESIDENT_BUCKET`, `RESIDENT_MONTHLY_TOKENS`, `RESIDENT_TASK_*`, `RESIDENT_POLL_INTERVAL_MS`, `RESIDENT_PAUSED`, `RESIDENT_PRICES_JSON`, `RESIDENT_DRY_RUN` | resident | the one repo, usage reporting, monthly cap, per-task limits, pause, prices (docs/RESIDENT.md) |

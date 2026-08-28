@@ -12,7 +12,7 @@ const defaultDeliverable: Deliverable = {
 	jobId: 'job-1',
 	repositoryUrl: 'https://github.com/mjukvaruhuset/gym-booking-job1',
 	transferPending: false,
-	deployUrl: 'https://mf-gym-booking-job1.eu-north-1.awsapprunner.com',
+	deployUrl: 'https://mf-gym-booking-job1.eu-north-1.on.aws',
 	siteUrl: null,
 	deliverableKey: 'deliverables/job-1/',
 	files: [

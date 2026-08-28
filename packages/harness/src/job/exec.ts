@@ -33,12 +33,12 @@ export type ExecOptions = {
 /**
  * Environment keys that must never reach the model-driven sandbox (worker shell, repo scripts):
  * database credentials, secret ARNs, the ECS task-role credential endpoint and other AWS config,
- * the App Runner connection/instance-role ARNs (M5), the GitHub token / App private key (GITHUB_APP_*) and the per-job api
- * reporting token (`JOB_TOKEN`, exchanged at start-up but still in the task environment — a
- * worker could otherwise forge job events).
+ * the ECS Express / CodeBuild / ECR delivery config (M5), the GitHub token / App private key
+ * (GITHUB_APP_*) and the per-job api reporting token (`JOB_TOKEN`, exchanged at start-up but still
+ * in the task environment — a worker could otherwise forge job events).
  */
 const secretEnvKey =
-	/^(DATABASE_|AWS_|ECS_|APPRUNNER_|GITHUB_TOKEN$|GITHUB_APP_|JOB_TOKEN$|ARTIFACTS_BUCKET$)|_SECRET_ARN$/
+	/^(DATABASE_|AWS_|ECS_|EXPRESS_|CODEBUILD_|ECR_|GITHUB_TOKEN$|GITHUB_APP_|JOB_TOKEN$|ARTIFACTS_BUCKET$)|_SECRET_ARN$/
 
 /**
  * Git configuration for everything the job runs, via `GIT_CONFIG_*` so it applies to every git

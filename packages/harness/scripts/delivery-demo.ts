@@ -1,13 +1,14 @@
 /**
- * Runs ONLY the M5 delivery step (handover docs → GitHub repo → App Runner → S3 bundle) on an
+ * Runs ONLY the M5 delivery step (handover docs → GitHub repo → ECS Express → S3 bundle) on an
  * already-built repo directory. With `--dry-run` every external call is logged instead of made
- * (no token, connection or bucket needed); without it the live clients read GITHUB_TOKEN,
- * APPRUNNER_CONNECTION_ARN, APPRUNNER_INSTANCE_ROLE_ARN and ARTIFACTS_BUCKET from the env.
+ * (no token, roles or bucket needed); without it the live clients read GITHUB_APP_*,
+ * ECR_REPOSITORY_URI, CODEBUILD_PROJECT, EXPRESS_EXECUTION_ROLE_ARN,
+ * EXPRESS_INFRASTRUCTURE_ROLE_ARN, ECS_CLUSTER and ARTIFACTS_BUCKET from the env.
  *
  *   npm run delivery:demo -- --repo <dir> --dry-run [--spec spec.json] [--gates gates.json]
  *       [--slug gym-booking] [--name "Gym booking"] [--github-login octocat] [--no-prose]
  *
- * NOTE: the docs step commits HANDOVER.md, TEST-REPORT.md, README.md and apprunner.yaml on
+ * NOTE: the docs step commits HANDOVER.md, TEST-REPORT.md and README.md on
  * the repo's current branch (main) — run it on a scratch clone, not your working copy. The
  * handover prose session needs ANTHROPIC_API_KEY; without it (or with --no-prose) the spec
  * goal is used. Exits 0 when the delivery contract (repo + bundle) held.
@@ -73,8 +74,11 @@ const clients = createLiveDeliveryClients({
 					installationId: Number(process.env.GITHUB_APP_INSTALLATION_ID),
 				}
 			: undefined,
-	appRunnerConnectionArn: process.env.APPRUNNER_CONNECTION_ARN,
-	appRunnerInstanceRoleArn: process.env.APPRUNNER_INSTANCE_ROLE_ARN,
+	ecrRepositoryUri: process.env.ECR_REPOSITORY_URI,
+	codeBuildProject: process.env.CODEBUILD_PROJECT,
+	expressExecutionRoleArn: process.env.EXPRESS_EXECUTION_ROLE_ARN,
+	expressInfrastructureRoleArn: process.env.EXPRESS_INFRASTRUCTURE_ROLE_ARN,
+	cluster: process.env.ECS_CLUSTER,
 	artifactsBucket: process.env.ARTIFACTS_BUCKET,
 	log: line => console.log(line),
 })

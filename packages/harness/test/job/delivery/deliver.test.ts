@@ -2,7 +2,7 @@ import { mkdir, mkdtemp, readFile, rm, writeFile } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 
-import { createFakeDeployClient } from '#job/delivery/appRunner.ts'
+import { createFakeDeployClient } from '#job/delivery/ecsExpress.ts'
 import { createFakeArtifactStore } from '#job/delivery/artifacts.ts'
 import { deliver } from '#job/delivery/deliver.ts'
 import { createFakeGitHubClient } from '#job/delivery/github.ts'
@@ -203,7 +203,6 @@ describe('deliver', () => {
 		expect(readme).not.toContain('# Template\n')
 		const testReport = await readFile(join(repoDir, 'TEST-REPORT.md'), 'utf8')
 		expect(testReport).toContain('| f0.c0 | Book a class | A member can book a class | met |')
-		expect(await readFile(join(repoDir, 'apprunner.yaml'), 'utf8')).toContain('runtime: nodejs22')
 
 		// GitHub
 		expect(github.repos).toEqual([
@@ -216,7 +215,7 @@ describe('deliver', () => {
 			{ org: 'mjukvaruhuset', name: 'gym-booking', login: 'octocat', permission: 'admin' },
 		])
 
-		// App Runner + site
+		// ECS Express + site
 		expect(deploy.deployments).toEqual([
 			{
 				serviceName: 'mf-11111111-gym-booking',
@@ -246,7 +245,7 @@ describe('deliver', () => {
 			jobId: '11111111-2222-3333-4444-555555555555',
 			repositoryUrl: 'https://github.com/mjukvaruhuset/gym-booking',
 			transferPending: false,
-			deployUrl: 'https://mf-11111111-gym-booking.eu-north-1.awsapprunner.com',
+			deployUrl: 'https://mf-11111111-gym-booking.eu-north-1.on.aws',
 			siteUrl: `https://mf-artifacts-test.s3.eu-north-1.amazonaws.com/${prefix}site/index.html`,
 			deliverableKey: prefix,
 			files: [
@@ -319,27 +318,6 @@ describe('deliver', () => {
 		expect(github.pushes).toEqual([])
 	})
 
-	it('Writes the preview IdP into apprunner.yaml when configured', async () => {
-		// Arrange
-		const { clients } = createClients({
-			previewAuth: {
-				issuer: 'https://api.mjukvaruhuset.se',
-				jwksUrl: 'https://api.mjukvaruhuset.se/.well-known/jwks.json',
-				audience: 'preview',
-			},
-		})
-
-		// Act
-		await deliver(createInput(repoDir), clients)
-
-		// Assert
-		const config = await readFile(join(repoDir, 'apprunner.yaml'), 'utf8')
-		expect(config).toContain('name: AUTH_ISSUER\n      value: "https://api.mjukvaruhuset.se"')
-		expect(config).toContain(
-			'name: AUTH_JWKS_URL\n      value: "https://api.mjukvaruhuset.se/.well-known/jwks.json"'
-		)
-	})
-
 	it('Never puts the GitHub token into the error of a failed push', async () => {
 		// Arrange — pushing to a clone URL that does not exist fails fast
 		const cloneUrl = 'https://github.com/mjukvaruhuset/does-not-exist.git'
@@ -369,18 +347,18 @@ describe('deliver', () => {
 		expect(outcome.ok).toBe(true)
 		expect(outcome.deliverable?.deployUrl).toBeNull()
 		expect(outcome.deliverable?.siteUrl).toMatch(/site\/index\.html$/)
-		expect(outcome.reason).toBe('app runner: fake: App Runner deploy failed')
+		expect(outcome.reason).toBe('ecs express: fake: ECS Express deploy failed')
 		expect(outcome.steps[2]).toEqual({
 			step: 'deploy',
 			ok: false,
 			url: outcome.deliverable?.siteUrl,
-			reason: 'app runner: fake: App Runner deploy failed',
+			reason: 'ecs express: fake: ECS Express deploy failed',
 		})
 		const notify = input.events.find(event => event.type === 'notify')
 		expect(notify?.payload).toEqual({
 			to: 'admins',
 			subject: 'Build job 11111111-2222-3333-4444-555555555555 delivered without a preview URL',
-			text: expect.stringContaining('App Runner deployment failed'),
+			text: expect.stringContaining('ECS Express deployment failed'),
 		})
 	})
 
@@ -480,20 +458,20 @@ describe('deliver', () => {
 				'[dry-run] github: create private repo mjukvaruhuset/gym-booking',
 				'[dry-run] github: push main → https://github.com/mjukvaruhuset/gym-booking.git',
 				'[dry-run] github: add octocat as admin on mjukvaruhuset/gym-booking',
-				'[dry-run] app runner: create service mf-11111111-gym-booking from https://github.com/mjukvaruhuset/gym-booking#main',
+				'[dry-run] ecs express: build image + create service mf-11111111-gym-booking from https://github.com/mjukvaruhuset/gym-booking#main',
 				expect.stringMatching(
 					/^\[dry-run\] s3: put s3:\/\/mf-artifacts-dry-run\/deliverables\/.*\/repo\.zip \(application\/zip, \d+ bytes\)$/
 				),
 			])
 		)
 		expect(outcome.deliverable?.deployUrl).toBe(
-			'https://mf-11111111-gym-booking.eu-north-1.awsapprunner.com'
+			'https://mf-11111111-gym-booking.eu-north-1.on.aws'
 		)
 	})
 
 	it('Dry run with a bucket uploads the S3 bundle for real (our bucket, no external account)', () => {
 		const clients = createLiveDeliveryClients({ dryRun: true, artifactsBucket: 'mf-artifacts-dev' })
-		// GitHub and App Runner stay faked; the artifact store is the real S3 client
+		// GitHub and ECS Express stay faked; the artifact store is the real S3 client
 		expect(clients.dryRun).toBe(true)
 		expect(clients.artifacts.kind).toBe('s3')
 		expect(clients.artifacts.bucket).toBe('mf-artifacts-dev')

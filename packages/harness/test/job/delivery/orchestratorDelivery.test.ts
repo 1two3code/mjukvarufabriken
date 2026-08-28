@@ -15,7 +15,7 @@ const deliverable: Deliverable = {
 	jobId: 'job-1',
 	repositoryUrl: 'https://github.com/mjukvaruhuset/gym',
 	transferPending: false,
-	deployUrl: 'https://x.awsapprunner.com',
+	deployUrl: 'https://x.eu-north-1.on.aws',
 	siteUrl: null,
 	deliverableKey: 'deliverables/job-1/',
 	files: [],

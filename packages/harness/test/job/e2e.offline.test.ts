@@ -3,7 +3,7 @@ import { tmpdir } from 'node:os'
 import { basename, dirname, join } from 'node:path'
 import { fileURLToPath } from 'node:url'
 
-import { createDryRunDeployClient } from '#job/delivery/appRunner.ts'
+import { createDryRunDeployClient } from '#job/delivery/ecsExpress.ts'
 import { debugKeyOf, uploadDebugBundle } from '#job/delivery/bundle.ts'
 import { createFakeDeliveryClients } from '#job/delivery/index.ts'
 import { exec, sandboxUser } from '#job/exec.ts'
@@ -677,7 +677,7 @@ describe('offline build-job e2e — sandbox uid', () => {
 
 describe('offline build-job e2e — delivery variants', () => {
 	it('delivers with the dry-run deploy client: a deployUrl is produced, repo + bundle are the contract', async () => {
-		// Pins: a faked (dry-run) App Runner deploy still yields a deployUrl and never blocks delivery
+		// Pins: a faked (dry-run) ECS Express deploy still yields a deployUrl and never blocks delivery
 		const { root, repoDir, seedCommit } = await seedRepo()
 		try {
 			const logs: string[] = []
@@ -694,9 +694,9 @@ describe('offline build-job e2e — delivery variants', () => {
 			const outcome = await runJob(job, { ports, hooks })
 
 			expect(outcome.status, outcome.reason).toBe('delivered')
-			// The dry-run App Runner client produced a deploy URL
-			expect(outcome.deliverable?.deployUrl).toMatch(/awsapprunner\.com$/)
-			expect(logs.some(line => line.includes('[dry-run] app runner'))).toBe(true)
+			// The dry-run ECS Express client produced a deploy URL
+			expect(outcome.deliverable?.deployUrl).toMatch(/\.on\.aws$/)
+			expect(logs.some(line => line.includes('[dry-run] ecs express'))).toBe(true)
 			const deployStep = events
 				.filter(event => event.type === 'delivery')
 				.map(event => event.payload as { step: string; ok: boolean })

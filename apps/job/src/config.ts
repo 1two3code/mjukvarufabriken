@@ -30,14 +30,21 @@ export type JobConfig = {
 		/** GitHub App installation (app id + private key + installation id); undefined until all three resolve */
 		githubApp?: { appId: string; privateKey: string; installationId: number }
 		githubOrg?: string
-		/** `APPRUNNER_CONNECTION_ARN` — the App Runner GitHub connection (TODO-EXTERNAL) */
-		appRunnerConnectionArn?: string
-		appRunnerInstanceRoleArn?: string
+		/** `ECR_REPOSITORY_URI` — ECR repo the built customer image is pushed to (ECS Express deploy) */
+		ecrRepositoryUri?: string
+		/** `CODEBUILD_PROJECT` — CodeBuild project that builds + pushes the image */
+		codeBuildProject?: string
+		/** `EXPRESS_EXECUTION_ROLE_ARN` — task-execution role for the Express service */
+		expressExecutionRoleArn?: string
+		/** `EXPRESS_INFRASTRUCTURE_ROLE_ARN` — infrastructure role for the Express service */
+		expressInfrastructureRoleArn?: string
+		/** `ECS_CLUSTER` — cluster the Express service runs on (default `default`) */
+		cluster?: string
 		/** `PREVIEW_AUTH_ISSUER` (+ `_JWKS_URL`, `_AUDIENCE`) — IdP of the preview api; no deploy without it */
 		previewAuth?: { issuer: string; jwksUrl: string; audience: string }
 		/** `ARTIFACTS_BUCKET` — bundle + SPA build destination */
 		artifactsBucket?: string
-		/** `DELIVERY_DRY_RUN=1`: log the GitHub / App Runner / S3 calls instead of making them */
+		/** `DELIVERY_DRY_RUN=1`: log the GitHub / ECS Express / S3 calls instead of making them */
 		dryRun: boolean
 	}
 }
@@ -149,8 +156,11 @@ export const loadConfig = async (argv: string[]): Promise<JobConfig> => {
 		delivery: {
 			githubApp: await resolveGithubApp(),
 			githubOrg: process.env.GITHUB_ORG || undefined,
-			appRunnerConnectionArn: process.env.APPRUNNER_CONNECTION_ARN || undefined,
-			appRunnerInstanceRoleArn: process.env.APPRUNNER_INSTANCE_ROLE_ARN || undefined,
+			ecrRepositoryUri: process.env.ECR_REPOSITORY_URI || undefined,
+			codeBuildProject: process.env.CODEBUILD_PROJECT || undefined,
+			expressExecutionRoleArn: process.env.EXPRESS_EXECUTION_ROLE_ARN || undefined,
+			expressInfrastructureRoleArn: process.env.EXPRESS_INFRASTRUCTURE_ROLE_ARN || undefined,
+			cluster: process.env.ECS_CLUSTER || undefined,
 			previewAuth: previewAuthFromEnv(),
 			artifactsBucket: process.env.ARTIFACTS_BUCKET || undefined,
 			dryRun: ['1', 'true'].includes(process.env.DELIVERY_DRY_RUN ?? ''),

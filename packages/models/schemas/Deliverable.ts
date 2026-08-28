@@ -27,7 +27,7 @@ export type DeliverableFile = z.infer<typeof DeliverableFileSchema>
 // MARK: Deliverable
 /**
  * What a finished job hands over (M5). The repo push and the bundle are the contract; the
- * App Runner deployment is best effort — `deployUrl` is null when it failed (a `notify` event
+ * ECS Express deployment is best effort — `deployUrl` is null when it failed (a `notify` event
  * tells the admins). Stored as the payload of the final `delivery` event (`step: 'bundle'`).
  */
 export const DeliverableSchema = z.object({
