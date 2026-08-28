@@ -72,6 +72,28 @@ one claimed a reminder never fires at offset 0 (the code uses an **inclusive** b
   auditing what the review session actually did. Areas: `packages/harness/src/job/gates/review*`,
   `gateSessions.ts`.
 
+## Stream 8 — delivery runtime robustness (HIGH — family-hub #2 delivered but 503, 2026-08-28)
+The delivery pushed the repo (`github.com/mjukvaruhuset/family-hub`) + built the image + stood up the
+Express URL, but the container **crashlooped (exit 1) → 503**. Three real gaps, all evidenced:
+1. **Env-contract mismatch (root cause).** The Express deploy injects only the *template's* auth env
+   (`AUTH_ISSUER/JWKS_URL/AUDIENCE`), but generated apps evolve their own required env — family-hub's
+   `secrets` plugin requires `AUTH_JWT_SECRET` + `VAPID_PUBLIC_KEY/PRIVATE_KEY/SUBJECT` (own JWT +
+   web-push) and throws on boot. Delivery can't hardcode the template contract. Fix: the app declares
+   its required runtime env (a manifest / `.env.example` the harness emits), and delivery
+   **generates/injects** them (VAPID via `web-push` generateVAPIDKeys, a random JWT secret, …) — or
+   constrain generated apps to a fixed env contract. The **acceptance gate should boot the built
+   container** (it passed in-process yet missed the real-deploy crash).
+2. **Express create idempotency false-failure.** `CreateExpressGatewayServiceCommand`
+   (`ecsExpress.ts`) sends no clientToken; an SDK retry after a successful create throws "Creation of
+   service was not idempotent", so delivery reports `deploy: failed` + `deployUrl: null` **even though
+   the service is live**. Pass a deterministic clientToken, or on that error describe + return the
+   existing service.
+3. **No container logs.** delivery-demo didn't wire the Express `awsLogsConfiguration`, so the boot
+   crash was invisible — root-caused only from the stopped task's exit code. Always wire
+   `/mf/<env>/express` + a per-service stream prefix (verify the job path does too).
+Areas: `packages/harness/src/job/delivery/ecsExpress.ts`, delivery config, harness worker (env
+manifest), acceptance gate (boot the container).
+
 ## Not in this wave (bigger, separate)
 - **Org account vending** ([org-accounts.md](org-accounts.md)) — its own focused build.
 - **M11 customer dev/qa/live + resident LLM** ([environments.md](environments.md)) — needs the org
