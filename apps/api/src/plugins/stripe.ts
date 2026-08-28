@@ -156,6 +156,14 @@ export type StripeProviderOptions = {
 	meterEvent: string
 }
 
+/**
+ * Stripe requires an eligible product tax code on every line item to offer Klarna/BNPL —
+ * checkout.sessions.create rejects with "the product tax code is missing" otherwise. "General
+ * - Electronically Supplied Services" is a safe, eligible default for our delivered software;
+ * refine with tax advice if we ever adopt Stripe Tax.
+ */
+const PRODUCT_TAX_CODE = 'txcd_10000000'
+
 export const createStripeProvider = (
 	stripe: Stripe,
 	options: StripeProviderOptions
@@ -171,7 +179,7 @@ export const createStripeProvider = (
 					price_data: {
 						currency: 'sek',
 						unit_amount: input.amountSek * 100,
-						product_data: { name: `${input.orderName} — ${lineItemLabel[input.kind]}` },
+						product_data: { name: `${input.orderName} — ${lineItemLabel[input.kind]}`, tax_code: PRODUCT_TAX_CODE },
 					},
 				},
 				{
@@ -179,7 +187,7 @@ export const createStripeProvider = (
 					price_data: {
 						currency: 'sek',
 						unit_amount: input.vatSek * 100,
-						product_data: { name: 'Moms 25 % / VAT 25 %' },
+						product_data: { name: 'Moms 25 % / VAT 25 %', tax_code: PRODUCT_TAX_CODE },
 					},
 				},
 			],

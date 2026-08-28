@@ -272,6 +272,8 @@ describe('Stripe plugin (paymentProvider)', () => {
 			expect(body.get('line_items[0][price_data][currency]')).toBe('sek')
 			expect(body.get('line_items[1][price_data][unit_amount]')).toBe('187500')
 			expect(body.get('line_items[1][price_data][product_data][name]')).toContain('Moms 25 %')
+			expect(body.get('line_items[0][price_data][product_data][tax_code]')).toBe('txcd_10000000')
+			expect(body.get('line_items[1][price_data][product_data][tax_code]')).toBe('txcd_10000000')
 			expect(body.get('client_reference_id')).toBe('payment-1')
 			expect(body.get('metadata[orderId]')).toBe('order-1')
 			expect(body.get('invoice_creation[enabled]')).toBe('true')
