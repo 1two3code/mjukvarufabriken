@@ -316,7 +316,9 @@ export class ResourcesStack extends Stack {
 			description: 'Infrastructure role for customer ECS Express preview services (M5)',
 			managedPolicies: [
 				ManagedPolicy.fromAwsManagedPolicyName(
-					'AmazonECSInfrastructureRoleforExpressGatewayServices'
+					// Service-role-scoped, capital "For" (verified against IAM 2026-08-28; the ECS docs
+					// print it as ".../AmazonECSInfrastructureRoleforExpressGatewayServices", which 404s)
+					'service-role/AmazonECSInfrastructureRoleForExpressGatewayServices'
 				),
 			],
 		})
