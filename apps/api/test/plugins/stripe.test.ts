@@ -268,6 +268,7 @@ describe('Stripe plugin (paymentProvider)', () => {
 			expect(mock.spy.called(1)).toBe(true)
 			const body = new URLSearchParams(await mock.spy.requests[0]!.text())
 			expect(body.get('mode')).toBe('payment')
+			expect(body.get('billing_address_collection')).toBe('required')
 			expect(body.get('line_items[0][price_data][unit_amount]')).toBe('750000')
 			expect(body.get('line_items[0][price_data][currency]')).toBe('sek')
 			expect(body.get('line_items[1][price_data][unit_amount]')).toBe('187500')

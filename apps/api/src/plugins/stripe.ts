@@ -172,6 +172,7 @@ export const createStripeProvider = (
 	createCheckoutSession: async input => {
 		const session = await stripe.checkout.sessions.create({
 			mode: 'payment',
+			billing_address_collection: 'required',
 			currency: 'sek',
 			line_items: [
 				{
