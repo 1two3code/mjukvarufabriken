@@ -18,7 +18,7 @@ Everything that needs someone else's approval lives in TODO-EXTERNAL.md and is N
 ## You must provide before build starts (hours, not weeks)
 - [x] AWS account, IAM user `hasse` in root `.env` (verified via STS 2026-08-26) — billing alert: confirm
 - [x] Anthropic API key in root `.env` as `ANTHROPIC_API_KEY` (2026-08-26)
-- [ ] GitHub org `mjukvaruhuset` + token with repo/admin scope
+- [ ] GitHub delivery access (revised 2026-08-28): reuse the existing GitHub **App** (the sign-in one) — add repo permissions (Contents: write, Administration: write) + install it where delivered repos live; the App mints short-lived installation tokens (no separate PAT). Provide App ID + Installation ID + the `.pem` key. The `mjukvaruhuset` org is still wanted as the repo home (install the App there); personal-account install works to start
 - [ ] Stripe account (test-mode keys are enough to build)
 - [x] Domain: mjukvaruhuset.se registered via Route 53 Domains (exp. 2027-08-26), hosted zone + NS delegation in place — verified 2026-08-26
 - [x] Answers to open questions at the bottom of this file (2026-08-26, folded into Decisions)
