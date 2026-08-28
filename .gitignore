@@ -46,3 +46,6 @@ apps/portal/.env*local
 
 # The golden template is tracked in full (including its example env files)
 !templates/web/**
+
+# Secrets — GitHub App private keys, certs (never commit)
+*.pem
