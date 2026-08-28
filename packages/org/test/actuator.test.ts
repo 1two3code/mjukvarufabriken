@@ -68,6 +68,15 @@ describe('createAwsActuator', () => {
 		expect(result.outcome).toBe('skipped')
 	})
 
+	it('SAFETY: teardown of an unhandled service FAILS (throws), never silently skips', async () => {
+		// No ecs handler is wired: a compute/secrets resource with no delete path must not be
+		// reported as a success — the engine records the throw as `failed`, surfacing it.
+		const actuator = createAwsActuator({ clients: {} })
+		await expect(
+			actuator.teardown({ arn: 'arn:aws:ecs:x:1:service/y', service: 'ecs', tags: {} })
+		).rejects.toThrow(/no teardown handler for service 'ecs'/)
+	})
+
 	it('Maps an already-gone error to already-gone, not a throw', async () => {
 		const ecr = {
 			send: async () => {

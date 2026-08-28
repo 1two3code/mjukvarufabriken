@@ -1,6 +1,6 @@
 import { createAuditLog } from '#/audit.ts'
-import { SERVICE_TAG } from '#/constants.ts'
-import { DeprovisionModeSchema } from '#/schemas.ts'
+import { CUSTOMER_TAG_KEY, SERVICE_TAG } from '#/constants.ts'
+import { DeprovisionModeSchema, SlugSchema } from '#/schemas.ts'
 import { abortError } from '#/signal.ts'
 
 import type { ActionResult, ResourceActuator } from '#/actuator.ts'
@@ -10,6 +10,12 @@ import type { AuditEntry, DeliveryResource, DeprovisionMode, Outcome } from '#/s
 
 /** What to deprovision: a tag-scoped fence (always ANDed with `Service=mf-delivery`) plus a label. */
 export type DeprovisionTarget = {
+	/**
+	 * Per-customer scope. REQUIRED for a real (dryRun:false) suspend/teardown — discovery is then
+	 * fenced to BOTH `Service=mf-delivery` AND `Customer=<slug>`, so a destructive run can never span
+	 * customers or the whole platform. A real suspend/teardown without it THROWS (see {@link deprovision}).
+	 */
+	customerSlug?: string
 	/** Extra tag filters passed to discovery, e.g. `{ 'mf:customer': 'acme' }`. */
 	tags?: Record<string, string>
 	/** Free-text label for the audit trail (a customer slug, an order id). */
@@ -34,6 +40,8 @@ export type OutcomeTally = Record<Outcome, number>
 export type DeprovisionResult = {
 	mode: DeprovisionMode
 	dryRun: boolean
+	/** The per-customer scope the run was fenced to, when one was supplied. */
+	customerSlug?: string
 	label?: string
 	/** Everything discovery returned. */
 	discovered: number
@@ -78,6 +86,10 @@ const orderer = (order: string[]) => {
  * Suspend / resume / teardown the tagged resources for a target.
  *
  * - **Dry-run by default** — records a `planned` audit entry per resource and touches nothing.
+ * - **Customer-scoped** — a real (dryRun:false) suspend/teardown REQUIRES `target.customerSlug` and
+ *   is fenced to `Customer=<slug>` as well as `Service=mf-delivery`. A real suspend/teardown with no
+ *   customer scope THROWS: there is no such thing as a platform-wide destructive run here. Discovery
+ *   fails CLOSED — an unscoped-but-permitted call (dry-run, or resume) simply finds nothing extra.
  * - **Tag-fenced** — only resources carrying `Service=mf-delivery` are acted on; anything else
  *   discovery returned is dropped and counted in `skippedByFence`.
  * - **Ordered** — compute is stopped before storage (cost-stop first); resume reverses it.
@@ -95,7 +107,22 @@ export const deprovision = async (
 	const audit = options.audit ?? createAuditLog({ now: options.now })
 	const order = options.order ?? (parsedMode === 'resume' ? resumeOrder : suspendTeardownOrder)
 
-	const discovered = await options.discover({ tags: target.tags })
+	// SAFETY: a real suspend/teardown is destructive and MUST be fenced to one customer. Refuse an
+	// empty-target run outright rather than let it discover — and then act on — the whole platform.
+	const destructive = parsedMode === 'suspend' || parsedMode === 'teardown'
+	const customerSlug =
+		target.customerSlug === undefined ? undefined : SlugSchema.parse(target.customerSlug)
+	if (!dryRun && destructive && !customerSlug) {
+		throw new Error(
+			`deprovision: a customerSlug is required for a real ${parsedMode} — refusing a ` +
+				`platform-wide (empty-target) destructive run`
+		)
+	}
+
+	const customerTag: Record<string, string> = customerSlug
+		? { [CUSTOMER_TAG_KEY]: customerSlug }
+		: {}
+	const discovered = await options.discover({ tags: { ...customerTag, ...target.tags } })
 	const fenced = discovered.filter(resource => resource.tags[SERVICE_TAG.key] === SERVICE_TAG.value)
 	const skippedByFence = discovered.length - fenced.length
 	const ordered = [...fenced].sort(orderer(order))
@@ -125,6 +152,7 @@ export const deprovision = async (
 	return {
 		mode: parsedMode,
 		dryRun,
+		...(customerSlug !== undefined && { customerSlug }),
 		label: target.label,
 		discovered: discovered.length,
 		fenced: fenced.length,

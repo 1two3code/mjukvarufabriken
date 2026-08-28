@@ -105,6 +105,36 @@ describe('vendAccount', () => {
 		expect(names()).not.toContain('CreateAccountCommand')
 	})
 
+	it('SAFETY: does NOT reuse a SUSPENDED account for the slug — vends a fresh one', async () => {
+		const { client, names } = orgStub({
+			// Same name/email, but the account is on its way out — reusing it would resurrect the
+			// customer onto dying infrastructure.
+			accounts: [{ Id: '222222222222', Name: 'mf-customer-acme', Status: 'SUSPENDED' }],
+		})
+
+		const result = await vendAccount(
+			{ customerSlug: 'acme' },
+			{ client, sleep: fastSleep, pollIntervalMs: 1 }
+		)
+
+		expect(result).toEqual({ accountId: NEW_ID, reused: false, requestId: 'car-req-1' })
+		expect(names()).toContain('CreateAccountCommand')
+	})
+
+	it('SAFETY: does NOT reuse a PENDING_CLOSURE account for the slug — vends a fresh one', async () => {
+		const { client, names } = orgStub({
+			accounts: [{ Id: '222222222222', Name: 'mf-customer-acme', Status: 'PENDING_CLOSURE' }],
+		})
+
+		const result = await vendAccount(
+			{ customerSlug: 'acme' },
+			{ client, sleep: fastSleep, pollIntervalMs: 1 }
+		)
+
+		expect(result.reused).toBe(false)
+		expect(names()).toContain('CreateAccountCommand')
+	})
+
 	it('Surfaces the AWS failure reason when creation FAILS', async () => {
 		const { client } = orgStub({
 			states: [{ State: 'FAILED', FailureReason: 'EMAIL_ALREADY_EXISTS' }],

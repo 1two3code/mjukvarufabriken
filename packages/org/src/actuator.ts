@@ -169,9 +169,16 @@ const ecrHandler = (client: EcrClientLike): ServiceHandler => ({
 
 /**
  * A production actuator that dispatches by ARN service segment to a handler registry. Handlers for
- * S3 and ECR ship here; ECS/others are injected via `handlers`. Any (service, mode) without a
- * handler is a recorded `skipped`, and an already-gone error from any handler becomes `already-gone`
- * rather than a failure — so the whole run is idempotent and half-deleted-tolerant.
+ * S3 and ECR ship here; ECS/others are injected via `handlers`. An already-gone error from any
+ * handler becomes `already-gone` rather than a failure — so the whole run is idempotent and
+ * half-deleted-tolerant.
+ *
+ * Missing-handler policy is mode-dependent:
+ * - suspend/resume of an unhandled service is a genuine no-op (e.g. S3/ECR have nothing to pause),
+ *   so it is a recorded `skipped`.
+ * - teardown of an unhandled service THROWS (surfaced as `failed` by the engine). A teardown must
+ *   never report success while a resource type with no delete path — compute, secrets — is left
+ *   standing behind it; silently `skipped` would hide exactly that.
  */
 export const createAwsActuator = (options: AwsActuatorOptions): ResourceActuator => {
 	const { clients, handlers = {}, alreadyGone = isAlreadyGone } = options
@@ -185,7 +192,15 @@ export const createAwsActuator = (options: AwsActuatorOptions): ResourceActuator
 		(mode: keyof ResourceActuator) =>
 		async (resource: DeliveryResource): Promise<ActionResult> => {
 			const handler = registry[resource.service]?.[mode]
-			if (!handler) return skipped(`no ${mode} handler for service '${resource.service}'`)
+			if (!handler) {
+				if (mode === 'teardown') {
+					throw new Error(
+						`no teardown handler for service '${resource.service}' — refusing to report success ` +
+							`while ${resource.arn} may remain (compute/secrets left standing)`
+					)
+				}
+				return skipped(`no ${mode} handler for service '${resource.service}'`)
+			}
 			try {
 				return await handler(resource)
 			} catch (error) {

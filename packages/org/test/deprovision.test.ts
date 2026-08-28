@@ -46,7 +46,7 @@ describe('deprovision', () => {
 			{ arn: S3, service: 's3' },
 		])
 
-		const result = await deprovision({}, 'suspend', {
+		const result = await deprovision({ customerSlug: 'acme' }, 'suspend', {
 			discover: () => world.discover(),
 			actuator: world.actuator,
 			dryRun: false,
@@ -81,7 +81,7 @@ describe('deprovision', () => {
 			{ arn: S3, service: 's3' },
 		])
 
-		const result = await deprovision({ label: 'acme' }, 'teardown', {
+		const result = await deprovision({ customerSlug: 'acme', label: 'acme' }, 'teardown', {
 			discover: () => world.discover(),
 			actuator: world.actuator,
 			dryRun: false,
@@ -104,7 +104,7 @@ describe('deprovision', () => {
 			{ arn: ECS, service: 'ecs' },
 		])
 
-		const result = await deprovision({}, 'teardown', {
+		const result = await deprovision({ customerSlug: 'acme' }, 'teardown', {
 			discover: () => world.discover(),
 			actuator: world.actuator,
 			dryRun: false,
@@ -121,11 +121,11 @@ describe('deprovision', () => {
 			dryRun: false,
 		}
 
-		const first = await deprovision({}, 'teardown', options)
+		const first = await deprovision({ customerSlug: 'acme' }, 'teardown', options)
 		expect(first.summary.deleted).toBe(1)
 
 		// Second run: the resource is gone but the tag lingers (half-deleted) — reported, not failed.
-		const second = await deprovision({}, 'teardown', options)
+		const second = await deprovision({ customerSlug: 'acme' }, 'teardown', options)
 		expect(second.summary.deleted).toBe(0)
 		expect(second.summary['already-gone']).toBe(1)
 		expect(second.entries[0].outcome).toBe('already-gone')
@@ -139,7 +139,7 @@ describe('deprovision', () => {
 			tags: {},
 		}
 
-		const result = await deprovision({}, 'teardown', {
+		const result = await deprovision({ customerSlug: 'acme' }, 'teardown', {
 			discover: discoverOf([{ arn: ECS, service: 'ecs', tags: TAG }, foreign]),
 			actuator: world.actuator,
 			dryRun: false,
@@ -161,7 +161,7 @@ describe('deprovision', () => {
 			teardown: async () => ({ outcome: 'deleted' }),
 		}
 
-		const result = await deprovision({}, 'suspend', {
+		const result = await deprovision({ customerSlug: 'acme' }, 'suspend', {
 			discover: discoverOf([
 				{ arn: ECS, service: 'ecs', tags: TAG },
 				{ arn: S3, service: 's3', tags: TAG },
@@ -180,7 +180,7 @@ describe('deprovision', () => {
 	it('Aborts before touching anything when the signal is aborted', async () => {
 		const world = createFakeWorld([{ arn: ECS, service: 'ecs' }])
 		await expect(
-			deprovision({}, 'teardown', {
+			deprovision({ customerSlug: 'acme' }, 'teardown', {
 				discover: () => world.discover(),
 				actuator: world.actuator,
 				dryRun: false,
@@ -188,5 +188,64 @@ describe('deprovision', () => {
 			})
 		).rejects.toThrow(/aborted/)
 		expect(world.stateOf(ECS)).toBe('active')
+	})
+
+	it('SAFETY: refuses a real teardown with no customer scope (empty target throws, nothing discovered)', async () => {
+		const world = createFakeWorld([{ arn: ECS, service: 'ecs' }])
+		let discoverCalls = 0
+
+		await expect(
+			deprovision({}, 'teardown', {
+				discover: () => {
+					discoverCalls += 1
+					return world.discover()
+				},
+				actuator: world.actuator,
+				dryRun: false,
+			})
+		).rejects.toThrow(/customerSlug is required/)
+
+		// Fails CLOSED: it throws before discovery even runs, and touches nothing.
+		expect(discoverCalls).toBe(0)
+		expect(world.stateOf(ECS)).toBe('active')
+	})
+
+	it('SAFETY: refuses a real suspend with no customer scope', async () => {
+		const world = createFakeWorld([{ arn: ECS, service: 'ecs' }])
+		await expect(
+			deprovision({}, 'suspend', {
+				discover: () => world.discover(),
+				actuator: world.actuator,
+				dryRun: false,
+			})
+		).rejects.toThrow(/customerSlug is required/)
+		expect(world.stateOf(ECS)).toBe('active')
+	})
+
+	it('Fences discovery on Customer=<slug> as well as Service=mf-delivery for a real run', async () => {
+		let seenTags: Record<string, string> | undefined
+		const discover: Discover = async filter => {
+			seenTags = filter.tags
+			return [{ arn: ECS, service: 'ecs', tags: TAG }]
+		}
+
+		const result = await deprovision({ customerSlug: 'acme' }, 'teardown', {
+			discover,
+			actuator: createFakeWorld([{ arn: ECS, service: 'ecs' }]).actuator,
+			dryRun: false,
+		})
+
+		expect(seenTags).toMatchObject({ Customer: 'acme' })
+		expect(result.customerSlug).toBe('acme')
+	})
+
+	it('Still allows an unscoped DRY-RUN rehearsal (no throw)', async () => {
+		const world = createFakeWorld([{ arn: ECS, service: 'ecs' }])
+		const result = await deprovision({}, 'teardown', {
+			discover: () => world.discover(),
+			actuator: world.actuator,
+		})
+		expect(result.dryRun).toBe(true)
+		expect(result.summary.planned).toBe(1)
 	})
 })

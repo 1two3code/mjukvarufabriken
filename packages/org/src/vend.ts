@@ -83,7 +83,13 @@ export const vendAccount = async (
 	return { accountId: AccountIdSchema.parse(accountId), reused: false, requestId }
 }
 
-/** Paginated `ListAccounts`, matching an ACTIVE/SUSPENDED account by name or email (case-insensitive name). */
+/**
+ * Paginated `ListAccounts`, matching only an `ACTIVE` account by name or email (case-insensitive
+ * name). SUSPENDED and PENDING_CLOSURE accounts are deliberately NOT reused: a suspended account is
+ * mid-teardown / on its way out, so reusing it would resurrect a customer onto dying infrastructure.
+ * When no ACTIVE match exists a fresh account is vended instead (root-email uniqueness still guards
+ * against a true duplicate).
+ */
 const findAccountByNameOrEmail = async (
 	client: OrganizationsClientLike,
 	name: string,
@@ -95,7 +101,7 @@ const findAccountByNameOrEmail = async (
 		const page = await client.send(new ListAccountsCommand({ NextToken: token }))
 		const match = (page.Accounts ?? []).find(
 			account =>
-				account.Status !== 'PENDING_CLOSURE' &&
+				account.Status === 'ACTIVE' &&
 				(account.Name?.toLowerCase() === wantedName || account.Email === email)
 		)
 		if (match) return match
