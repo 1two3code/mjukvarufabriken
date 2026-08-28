@@ -9,6 +9,7 @@ const mockPlugin: FastifyPluginAsync = async app => {
 		configured: true,
 		runJob: vi.fn().mockResolvedValue(mockTaskArn),
 		stopTask: vi.fn().mockResolvedValue(undefined),
+		describeTasks: vi.fn().mockResolvedValue(new Map()),
 	}
 
 	app.decorate('ecs', mock)
