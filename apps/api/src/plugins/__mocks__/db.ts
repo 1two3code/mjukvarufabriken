@@ -54,6 +54,7 @@ const mockPlugin: FastifyPluginAsync = async app => {
 		available: true,
 		backend: 'memory',
 		orders: memory.orders,
+		deployedServices: memory.deployedServices,
 		users: memory.users,
 		auth: memory.auth,
 		resident: memory.resident,

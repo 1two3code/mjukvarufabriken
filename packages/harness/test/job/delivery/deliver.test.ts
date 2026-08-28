@@ -249,6 +249,15 @@ describe('deliver', () => {
 			repositoryUrl: 'https://github.com/mjukvaruhuset/gym-booking',
 			transferPending: false,
 			deployUrl: 'https://mf-11111111-gym-booking.eu-north-1.on.aws',
+			deployedService: {
+				serviceName: 'mf-11111111-gym-booking',
+				serviceArn:
+					'arn:aws:ecs:eu-north-1:000000000000:service/default/mf-11111111-gym-booking',
+				customerTag: 'gym-booking',
+				image:
+					'000000000000.dkr.ecr.eu-north-1.amazonaws.com/mf-deliverables:mf-11111111-gym-booking',
+				config: expect.objectContaining({ serviceName: 'mf-11111111-gym-booking' }),
+			},
 			siteUrl: `https://mf-artifacts-test.s3.eu-north-1.amazonaws.com/${prefix}site/index.html`,
 			deliverableKey: prefix,
 			files: [

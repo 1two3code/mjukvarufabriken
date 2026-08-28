@@ -578,4 +578,72 @@ describe('memory repositories', () => {
 			}
 		})
 	})
+
+	describe('deployedServices', () => {
+		const seed = (overrides = {}) => ({
+			orderId: 'o1',
+			jobId: 'j1',
+			serviceName: 'mf-11111111-app',
+			serviceArn: 'arn:aws:ecs:eu-north-1:000000000000:service/default/mf-11111111-app',
+			customerTag: 'app-11111111',
+			image: 'ecr/mf-deliverables:mf-11111111-app',
+			config: { serviceName: 'mf-11111111-app' },
+			...overrides,
+		})
+
+		it('Records a service and lists it for the order', async () => {
+			const recorded = await repos.deployedServices.record(seed())
+			expect(recorded.id).toBeTruthy()
+			expect(recorded.serviceName).toBe('mf-11111111-app')
+			const list = await repos.deployedServices.listForOrder('o1')
+			expect(list).toHaveLength(1)
+			expect(list[0]!.customerTag).toBe('app-11111111')
+		})
+
+		it('Upserts onto the live row of the same (order, serviceName) rather than duplicating', async () => {
+			const first = await repos.deployedServices.record(seed())
+			const second = await repos.deployedServices.record(
+				seed({ serviceArn: 'arn:new', image: 'ecr/mf-deliverables:v2' })
+			)
+			expect(second.id).toBe(first.id)
+			const list = await repos.deployedServices.listForOrder('o1')
+			expect(list).toHaveLength(1)
+			expect(list[0]!.serviceArn).toBe('arn:new')
+			expect(list[0]!.image).toBe('ecr/mf-deliverables:v2')
+		})
+
+		it('Keeps a distinct row per service name — teardown can find ALL of a rebuilt order', async () => {
+			await repos.deployedServices.record(seed({ serviceName: 'mf-1-app', customerTag: 'app-1' }))
+			await repos.deployedServices.record(seed({ serviceName: 'mf-2-app', customerTag: 'app-2' }))
+			const list = await repos.deployedServices.listForOrder('o1')
+			expect(list.map(row => row.customerTag).sort()).toEqual(['app-1', 'app-2'])
+		})
+
+		it('Nulls the arn on suspend (compute gone) and keeps the record + config for resume', async () => {
+			await repos.deployedServices.record(seed())
+			const count = await repos.deployedServices.markSuspended('o1')
+			expect(count).toBe(1)
+			const [row] = await repos.deployedServices.listForOrder('o1')
+			expect(row!.serviceArn).toBeUndefined()
+			expect(row!.config).toEqual({ serviceName: 'mf-11111111-app' })
+		})
+
+		it('Writes back a new arn after a resume re-creates the service', async () => {
+			const recorded = await repos.deployedServices.record(seed())
+			await repos.deployedServices.markSuspended('o1')
+			const updated = await repos.deployedServices.setArn(recorded.id, 'arn:resumed')
+			expect(updated?.serviceArn).toBe('arn:resumed')
+		})
+
+		it('Soft-deletes every live row on teardown, and re-recording after is a fresh row', async () => {
+			const first = await repos.deployedServices.record(seed())
+			const torn = await repos.deployedServices.markTornDown('o1')
+			expect(torn).toBe(1)
+			expect(await repos.deployedServices.listForOrder('o1')).toHaveLength(0)
+			// A later redelivery of the same name is not matched by the (live-only) upsert — fresh row
+			const again = await repos.deployedServices.record(seed())
+			expect(again.id).not.toBe(first.id)
+			expect(await repos.deployedServices.listForOrder('o1')).toHaveLength(1)
+		})
+	})
 })

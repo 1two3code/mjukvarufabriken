@@ -352,6 +352,49 @@ describe('Job Service', () => {
 			})
 		})
 
+		it('Records the deployed service per order when a bundle event reports a deployUrl', async () => {
+			const deliverable = createMockDeliverable({
+				deployUrl: 'https://mf-job1-gym.eu-north-1.on.aws',
+				deployedService: {
+					serviceName: 'mf-job1-gym',
+					serviceArn: 'arn:aws:ecs:eu-north-1:0:service/default/mf-job1-gym',
+					customerTag: 'gym-job1',
+					image: 'ecr/mf-deliverables:mf-job1-gym',
+					config: { serviceName: 'mf-job1-gym' },
+				},
+			})
+
+			await app.jobService.reportEvents(job(), [
+				{ type: 'delivery', payload: { step: 'bundle', ok: true, deliverable } },
+			])
+
+			const recorded = await app.db.deployedServices.listForOrder('order-1')
+			expect(recorded).toHaveLength(1)
+			expect(recorded[0]).toMatchObject({
+				orderId: 'order-1',
+				serviceName: 'mf-job1-gym',
+				customerTag: 'gym-job1',
+				image: 'ecr/mf-deliverables:mf-job1-gym',
+			})
+		})
+
+		it('Records nothing when the deploy failed (deployUrl null) even if a service is reported', async () => {
+			const deliverable = createMockDeliverable({
+				deployUrl: null,
+				deployedService: {
+					serviceName: 'mf-job1-gym',
+					customerTag: 'gym-job1',
+					config: { serviceName: 'mf-job1-gym' },
+				},
+			})
+
+			await app.jobService.reportEvents(job(), [
+				{ type: 'delivery', payload: { step: 'bundle', ok: true, deliverable } },
+			])
+
+			expect(await app.db.deployedServices.listForOrder('order-1')).toHaveLength(0)
+		})
+
 		it('Skips a malformed notify payload and survives a mail failure', async () => {
 			vi.spyOn(app.email, 'send').mockRejectedValue(new Error('ses down'))
 

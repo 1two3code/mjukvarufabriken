@@ -10,6 +10,7 @@ import { readFileSync } from 'node:fs'
 import postgres from 'postgres'
 
 import { createAuthRepository } from './auth.ts'
+import { createDeployedServicesRepository } from './deployedServices.ts'
 import { createJobsRepository } from './jobs.ts'
 import { createOrdersRepository } from './orders.ts'
 import { createResidentRepository } from './resident.ts'
@@ -20,6 +21,7 @@ import type { Sql } from 'postgres'
 import type { Repositories } from './repositories.ts'
 
 export * from './auth.ts'
+export * from './deployedServices.ts'
 export * from './jobs.ts'
 export * from './memory.ts'
 export * from './migrate.ts'
@@ -130,6 +132,7 @@ export const connectionStringFromSecret = (secret: DatabaseSecret) => {
 export const createPostgresRepositories = (db: Db): Repositories => ({
 	jobs: createJobsRepository(db),
 	orders: createOrdersRepository(db),
+	deployedServices: createDeployedServicesRepository(db),
 	users: createUsersRepository(db),
 	auth: createAuthRepository(db),
 	resident: createResidentRepository(db),

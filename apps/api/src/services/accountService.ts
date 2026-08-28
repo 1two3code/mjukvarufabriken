@@ -5,8 +5,9 @@ import { customerSlugForOrg } from '#/lib/customerSlug.ts'
 import { EntityInvalid, EntityNotFound } from '#/lib/entityError.ts'
 
 import type { FastifyInstance, FastifyPluginAsync } from 'fastify'
-import type { LifecycleAction, LifecycleState, Order, Org } from '@mf/models'
-import type { DeprovisionResult } from '@mf/org'
+import type { DeployedService, LifecycleAction, LifecycleState, Order, Org } from '@mf/models'
+import type { DeprovisionMode, DeprovisionResult, OutcomeTally } from '@mf/org'
+import type { RedeployResult } from '#/lib/expressRedeploy.ts'
 
 /** Outcome of the onboarding account-vend step. */
 export type ProvisionResult = {
@@ -67,6 +68,50 @@ declare module 'fastify' {
 	}
 }
 
+const emptyTally = (): OutcomeTally => ({
+	planned: 0,
+	suspended: 0,
+	resumed: 0,
+	deleted: 0,
+	skipped: 0,
+	'already-gone': 0,
+	failed: 0,
+})
+
+/**
+ * The distinct `Customer=<slug>` fence tags to act on for an order: every recorded service's tag
+ * (a rebuilt order accumulates a job-unique fence per build) plus the order's own slug as a
+ * fallback for a delivery that predates per-service recording. This is what makes a teardown find
+ * ALL of a rebuilt order's live services, not just the newest.
+ */
+const fenceTagsFor = (recorded: DeployedService[], order: Order): string[] => {
+	const tags = new Set(recorded.map(service => service.customerTag))
+	if (order.customerSlug) tags.add(order.customerSlug)
+	return [...tags]
+}
+
+/** Folds several per-fence deprovision runs into one result (counts summed, entries concatenated). */
+const aggregateDeprovision = (results: DeprovisionResult[]): DeprovisionResult => {
+	const first = results[0]!
+	if (results.length === 1) return first
+	const summary = emptyTally()
+	for (const result of results) {
+		for (const key of Object.keys(summary) as (keyof OutcomeTally)[]) {
+			summary[key] += result.summary[key]
+		}
+	}
+	return {
+		mode: first.mode,
+		dryRun: first.dryRun,
+		label: first.label,
+		discovered: results.reduce((sum, result) => sum + result.discovered, 0),
+		fenced: results.reduce((sum, result) => sum + result.fenced, 0),
+		skippedByFence: results.reduce((sum, result) => sum + result.skippedByFence, 0),
+		entries: results.flatMap(result => result.entries),
+		summary,
+	}
+}
+
 const plugin: FastifyPluginAsync = async app => {
 	const { db, org, secrets } = app
 
@@ -104,50 +149,109 @@ const plugin: FastifyPluginAsync = async app => {
 		const dryRun = !(options?.confirm ?? false)
 		const label = options?.label ?? order.name
 
-		// Only a delivered order carries a fence slug; without one there is no compute to act on, so
-		// deprovision is skipped and only the DB lifecycle transition (on confirm) applies.
-		//
-		// FOLLOW-UPS (documented, not built here):
-		//  - `resume` on ECS Express is a no-op: Express has no scale-to-zero, so a suspend DELETES the
-		//    service and a resume is a fresh redelivery the harness owns (see `ecsExpressHandler` in
-		//    plugins/org.ts, which reports `resume` as `skipped`). Resuming a suspended order therefore
-		//    flips the DB state back to `active` without re-standing-up compute — the redelivery is
-		//    still owed. Wiring resume→redelivery is the follow-up.
-		//  - The order stores only the LATEST `customerSlug`. A redelivery mints a new job-unique fence
-		//    (`<app>-<job8>`), so a prior delivery's still-running service (fenced under the OLD slug)
-		//    is orphaned — the lifecycle action only ever deprovisions the newest one. Tracking prior
-		//    fence slugs (or reconciling orphans by `Service=mf-delivery` + org) is the follow-up.
-		const deprovision = order.customerSlug
-			? await org.deprovision(
-					{ customerSlug: order.customerSlug, label },
-					lifecycleActionMode[action],
-					{ dryRun }
-				)
-			: undefined
+		// Every service this order ever delivered. A rebuild mints a new job-unique fence per build,
+		// so an order accumulates services across builds; teardown/suspend act on ALL of them and
+		// `resume` re-stands-up ALL of them from their recorded image/config (ECS Express has no
+		// scale-to-zero, so a suspend deleted the compute — a resume must replay, not rediscover).
+		const recorded = await db.deployedServices.listForOrder(orderId)
+		const mode = lifecycleActionMode[action]
+
+		const deprovision =
+			mode === 'resume'
+				? await resumeServices(recorded, order, dryRun)
+				: await deprovisionAll(recorded, order, mode, label, dryRun)
 
 		if (dryRun) {
 			return { action, dryRun: true, order, from, to, applied: false, deprovision }
 		}
 
-		// @mf/org `deprovision` NEVER throws on a per-resource action failure: it records
-		// `outcome: 'failed'` on that entry, tallies it in `summary.failed`, and returns normally. So a
-		// missing thrown error is NOT proof the AWS resources are gone — inspect the tally before
-		// advancing the DB lifecycle. If any resource failed we must not record the target state (least
-		// of all `torn_down`, which would strand live resources under a "gone" order). Leave the order
-		// where it is — a teardown from `suspended` stays `suspended`, so the grace sweep retries it —
-		// and surface the failure (the returned `deprovision.summary.failed` carries the count).
+		// @mf/org `deprovision` (and the redeploy) NEVER throw on a per-resource action failure: they
+		// record `outcome: 'failed'`, tally it in `summary.failed`, and return normally. So a missing
+		// thrown error is NOT proof the resources are gone/back — inspect the tally before advancing
+		// the DB lifecycle. If any resource failed we must not record the target state (least of all
+		// `torn_down`, which would strand live resources under a "gone" order). Leave the order where
+		// it is — a teardown from `suspended` stays `suspended`, so the grace sweep retries it — and
+		// surface the failure (the returned `deprovision.summary.failed` carries the count).
 		if (deprovision && deprovision.summary.failed > 0) {
 			app.log.warn(
 				{ orderId, action, from, to, failed: deprovision.summary.failed },
-				'Deprovision reported resource failures — lifecycle NOT advanced'
+				'Deprovision/redeploy reported resource failures — lifecycle NOT advanced'
 			)
 			return { action, dryRun: false, order, from, to, applied: false, deprovision }
 		}
+
+		// Persist the record side-effects of a confirmed, successful action before the state flips.
+		await applyRecordEffects(orderId, mode, deprovision)
 
 		const updated = await db.orders.setLifecycle(orderId, [from], to)
 		const applied = Boolean(updated) && from !== to
 		app.log.info({ orderId, action, from, to, applied }, 'Lifecycle action applied')
 		return { action, dryRun: false, order: updated ?? order, from, to, applied, deprovision }
+	}
+
+	/** Suspend / teardown: deprovision EVERY recorded fence tag for the order, results folded into one. */
+	const deprovisionAll = async (
+		recorded: DeployedService[],
+		order: Order,
+		mode: Exclude<DeprovisionMode, 'resume'>,
+		label: string,
+		dryRun: boolean
+	): Promise<DeprovisionResult | undefined> => {
+		const tags = fenceTagsFor(recorded, order)
+		if (tags.length === 0) return undefined
+		const results = await Promise.all(
+			tags.map(tag => org.deprovision({ customerSlug: tag, label }, mode, { dryRun }))
+		)
+		return aggregateDeprovision(results)
+	}
+
+	/** Resume: replay each recorded service's create config to re-stand-up the deleted Express service. */
+	const resumeServices = async (
+		recorded: DeployedService[],
+		order: Order,
+		dryRun: boolean
+	): Promise<DeprovisionResult | undefined> => {
+		// Nothing recorded to replay — a delivery that predates per-service recording has no config to
+		// re-stand-up from, so the state flip is all this action can do (log it, don't fake a resume).
+		if (recorded.length === 0) {
+			if (order.customerSlug) {
+				app.log.warn(
+					{ orderId: order.id },
+					'Resume: no recorded services to re-stand-up (delivery predates recording)'
+				)
+			}
+			return undefined
+		}
+		return org.redeploy(
+			recorded.map(service => ({
+				id: service.id,
+				serviceName: service.serviceName,
+				config: service.config,
+			})),
+			{ dryRun }
+		)
+	}
+
+	/**
+	 * A confirmed action's bookkeeping on the deployed-services records: suspend nulls the arns
+	 * (compute gone), teardown soft-deletes them, resume writes back the new arns from the replay.
+	 */
+	const applyRecordEffects = async (
+		orderId: string,
+		mode: DeprovisionMode,
+		deprovision: DeprovisionResult | undefined
+	) => {
+		if (mode === 'suspend') {
+			await db.deployedServices.markSuspended(orderId)
+		} else if (mode === 'teardown') {
+			await db.deployedServices.markTornDown(orderId)
+		} else if (mode === 'resume' && deprovision && 'items' in deprovision) {
+			for (const item of (deprovision as RedeployResult).items) {
+				if (item.outcome === 'resumed' && item.serviceArn) {
+					await db.deployedServices.setArn(item.id, item.serviceArn)
+				}
+			}
+		}
 	}
 
 	app.decorate('accountService', { provisionCustomerAccount, runLifecycleAction })

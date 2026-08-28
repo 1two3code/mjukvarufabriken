@@ -4,6 +4,8 @@
  * by its tests). Services depend on these types only.
  */
 import type {
+	DeployedService,
+	DeployedServiceConfig,
 	Job,
 	JobEvent,
 	LifecycleState,
@@ -310,9 +312,48 @@ export type RateLimitsRepository = {
 	pruneExpired: () => Promise<number>
 }
 
+// MARK: Deployed services (wave 10, delivery-lifecycle-followups)
+
+/** A service delivery reports it stood up, to be recorded against the order. */
+export type NewDeployedService = {
+	orderId: string
+	jobId?: string
+	serviceName: string
+	serviceArn?: string | null
+	customerTag: string
+	image?: string | null
+	config?: DeployedServiceConfig | null
+}
+
+/**
+ * Every ECS Express service a delivery stood up, tracked per order so a teardown finds ALL of a
+ * rebuilt order's live services (not just the newest fence) and `resume` can replay the recorded
+ * image/config to re-create a suspended (deleted) service. See migration 0016.
+ */
+export type DeployedServicesRepository = {
+	/**
+	 * Records the service for the order. Idempotent on `(orderId, serviceName)` among live rows:
+	 * a redelivery of the same service updates its arn/image/config in place rather than
+	 * duplicating, and re-records a previously torn-down name as a fresh live row.
+	 */
+	record: (service: NewDeployedService) => Promise<DeployedService>
+	/** The order's live (not torn-down) services, oldest first. */
+	listForOrder: (orderId: string) => Promise<DeployedService[]>
+	/** Updates a service's arn (its new one after a resume re-create, or null after a suspend). */
+	setArn: (id: string, serviceArn: string | null) => Promise<DeployedService | undefined>
+	/**
+	 * A suspend deletes the Express service — null every live row's arn for the order to reflect
+	 * that its compute is gone (the record + config stay for resume). Returns the rows updated.
+	 */
+	markSuspended: (orderId: string) => Promise<number>
+	/** A teardown permanently removes the services — soft-delete every live row. Returns the count. */
+	markTornDown: (orderId: string) => Promise<number>
+}
+
 export type Repositories = {
 	jobs: JobsRepository
 	orders: OrdersRepository
+	deployedServices: DeployedServicesRepository
 	users: UsersRepository
 	auth: AuthRepository
 	resident: ResidentRepository

@@ -10,6 +10,7 @@ import { isActiveJobStatus, isOrderSpecFrozen, toSpecStatus } from '@mf/models'
 import { rateLimitRetentionMs } from './rateLimits.ts'
 
 import type {
+	DeployedService,
 	Job,
 	JobEvent,
 	Order,
@@ -78,6 +79,8 @@ export const createMemoryRepositories = (): MemoryRepositories => {
 	/** `${jobId}:${seq}` → the event stored for that number (idempotent container events) */
 	const numberedEvents = new Map<string, JobEvent>()
 	const orders = new Map<string, OrderEntry>()
+	/** Every recorded deployed service, keyed by its own id (live rows have `deletedAt` undefined) */
+	const deployedServices = new Map<string, DeployedService>()
 	const payments = new Map<string, Payment>()
 	const paymentEvents = new Set<string>()
 	const users = new Map<string, User>()
@@ -511,6 +514,60 @@ export const createMemoryRepositories = (): MemoryRepositories => {
 			},
 			forgetPaymentEvent: async eventId => {
 				paymentEvents.delete(eventId)
+			},
+		},
+
+		deployedServices: {
+			record: async service => {
+				const existing = [...deployedServices.values()].find(
+					row =>
+						row.orderId === service.orderId &&
+						row.serviceName === service.serviceName &&
+						row.deletedAt === undefined
+				)
+				const created: DeployedService = {
+					id: existing?.id ?? crypto.randomUUID(),
+					orderId: service.orderId,
+					jobId: service.jobId,
+					serviceName: service.serviceName,
+					serviceArn: service.serviceArn ?? undefined,
+					customerTag: service.customerTag,
+					image: service.image ?? undefined,
+					config: service.config ?? undefined,
+					createdAt: existing?.createdAt ?? now(),
+				}
+				deployedServices.set(created.id, created)
+				return clone(created)
+			},
+			listForOrder: async orderId =>
+				[...deployedServices.values()]
+					.filter(row => row.orderId === orderId && row.deletedAt === undefined)
+					.sort((a, b) => a.createdAt.localeCompare(b.createdAt))
+					.map(clone),
+			setArn: async (id, serviceArn) => {
+				const row = deployedServices.get(id)
+				if (!row || row.deletedAt !== undefined) return undefined
+				const next: DeployedService = { ...row, serviceArn: serviceArn ?? undefined }
+				deployedServices.set(id, next)
+				return clone(next)
+			},
+			markSuspended: async orderId => {
+				let updated = 0
+				for (const [id, row] of deployedServices) {
+					if (row.orderId !== orderId || row.deletedAt !== undefined) continue
+					deployedServices.set(id, { ...row, serviceArn: undefined })
+					updated += 1
+				}
+				return updated
+			},
+			markTornDown: async orderId => {
+				let updated = 0
+				for (const [id, row] of deployedServices) {
+					if (row.orderId !== orderId || row.deletedAt !== undefined) continue
+					deployedServices.set(id, { ...row, deletedAt: now() })
+					updated += 1
+				}
+				return updated
 			},
 		},
 

@@ -1,6 +1,7 @@
 export * from './schemas/Auth.api.ts'
 export * from './schemas/Deliverable.api.ts'
 export * from './schemas/Deliverable.ts'
+export * from './schemas/DeployedService.ts'
 export * from './schemas/Error.ts'
 export * from './schemas/Item.api.ts'
 export * from './schemas/Item.guards.ts'

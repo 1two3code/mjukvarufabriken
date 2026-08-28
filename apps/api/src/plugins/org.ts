@@ -12,7 +12,10 @@ import {
 	vendAccount,
 } from '@mf/org'
 
+import { redeployExpressServices } from '#/lib/expressRedeploy.ts'
+
 import type { FastifyPluginAsync } from 'fastify'
+import type { EcsClientLike, RedeployInput, RedeployResult } from '#/lib/expressRedeploy.ts'
 import type {
 	ActionResult,
 	DeprovisionMode,
@@ -53,6 +56,17 @@ declare module 'fastify' {
 				mode: DeprovisionMode,
 				options?: { dryRun?: boolean }
 			) => Promise<DeprovisionResult>
+			/**
+			 * Re-stand-up each recorded Express service from its stored create config (wave 10,
+			 * delivery-lifecycle-followups). ECS Express has no scale-to-zero, so a suspend DELETED
+			 * the service — a resume cannot be a tag-discovery deprovision (there is nothing left to
+			 * find), it must REPLAY the recorded image/config. DRY-RUN unless `dryRun: false`. Returns
+			 * a deprovision-shaped result plus the per-service items (with the new arns to persist).
+			 */
+			redeploy: (
+				services: RedeployInput[],
+				options?: { dryRun?: boolean }
+			) => Promise<RedeployResult>
 		}
 	}
 }
@@ -100,6 +114,13 @@ const plugin: FastifyPluginAsync = async app => {
 					discover: emptyDiscover,
 					actuator: {} as ResourceActuator, // never reached: nothing is discovered
 					dryRun: options?.dryRun ?? true,
+				}),
+			// Unconfigured: a redeploy runs dry (planned only) and never touches AWS — the client is
+			// never called because dryRun is forced true.
+			redeploy: services =>
+				redeployExpressServices(services, {
+					client: {} as EcsClientLike,
+					dryRun: true,
 				}),
 		})
 		return
@@ -152,6 +173,8 @@ const plugin: FastifyPluginAsync = async app => {
 				dryRun: options?.dryRun ?? true,
 				audit: undefined,
 			}),
+		redeploy: (services, options) =>
+			redeployExpressServices(services, { client: ecs, dryRun: options?.dryRun ?? true }),
 	})
 }
 

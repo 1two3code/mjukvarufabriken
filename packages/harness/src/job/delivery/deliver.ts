@@ -175,6 +175,7 @@ export const deliver = async (
 
 	// MARK: deploy (best effort)
 	let deployUrl: string | null = null
+	let deployedService: Deliverable['deployedService']
 	let deployReason: string | undefined
 	// Detect the built app's OWN required runtime env and resolve a value for each (generated app
 	// secrets + auth contract, a fresh self-issued secret, or a flagged placeholder). The SAME set
@@ -199,17 +200,19 @@ export const deliver = async (
 		try {
 			// Per-job CodeBuild source: this job's repo zip in S3, so the image build is of THIS repo
 			const source = await uploadSource(jobId, repoDir, artifacts, signal)
-			deployUrl = (
-				await deploy.deployFromRepo({
-					serviceName: previewServiceName(jobId, target.slug),
-					repositoryUrl,
-					branch: 'main',
-					source,
-					// The full required set for the live container, so it runs and does not crashloop
-					env: manifest.env,
-					signal,
-				})
-			).url
+			const deployed = await deploy.deployFromRepo({
+				serviceName: previewServiceName(jobId, target.slug),
+				repositoryUrl,
+				branch: 'main',
+				source,
+				// The full required set for the live container, so it runs and does not crashloop
+				env: manifest.env,
+				signal,
+			})
+			deployUrl = deployed.url
+			// The service the deploy stood up, so the api records it per order (teardown targets ALL
+			// of a rebuilt order's services; resume replays the recorded image/config to re-create it)
+			deployedService = deployed.service
 		} catch (error) {
 			deployReason = `ecs express: ${(error as Error).message}`
 		}
@@ -253,6 +256,8 @@ export const deliver = async (
 			repositoryUrl,
 			transferPending: transferPending !== undefined,
 			deployUrl,
+			// Only carried when a service was actually stood up (deployUrl non-null)
+			...(deployUrl !== null && deployedService && { deployedService }),
 			siteUrl,
 			deliverableKey: deliverableKeyOf(jobId),
 			files,

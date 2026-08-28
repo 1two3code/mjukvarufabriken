@@ -108,6 +108,34 @@ describe('ECS Express deploy client', () => {
 		})
 	})
 
+	it('Returns the deployed service (name/arn/image + replayable config) for per-order recording', async () => {
+		// Arrange
+		const { client } = createStub({ createEndpoint: 'svc.eu-north-1.on.aws' })
+		const deploy = deployClient(client, { imageBuilder: createFakeImageBuilder() })
+
+		// Act
+		const { service } = await deploy.deployFromRepo({
+			serviceName: 'mf-11111111-gym',
+			repositoryUrl: 'https://github.com/x/new',
+			branch: 'main',
+			source: { bucket: 'mf-artifacts-test', key: 'deliverables/11111111/source.zip' },
+		})
+
+		// Assert — enough for the api to record it and for a resume to replay the create input
+		expect(service).toMatchObject({
+			serviceName: 'mf-11111111-gym',
+			serviceArn: 'arn:svc',
+			customerTag: 'gym',
+			image: expect.stringContaining(':mf-11111111-gym'),
+		})
+		// The config is the create input, minus the transient clientToken (resume mints its own)
+		expect(service?.config).toMatchObject({
+			serviceName: 'mf-11111111-gym',
+			primaryContainer: { containerPort: 80 },
+		})
+		expect(service?.config).not.toHaveProperty('clientToken')
+	})
+
 	it('Does not double the scheme when AWS returns an endpoint that already has https://', async () => {
 		const { client } = createStub({ createEndpoint: 'https://mf-abc.ecs.eu-north-1.on.aws' })
 		const deploy = deployClient(client, { imageBuilder: createFakeImageBuilder() })

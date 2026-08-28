@@ -1,6 +1,7 @@
 import { EntityInvalid, EntityNotFound } from '#/lib/entityError.ts'
 
 import type { FastifyInstance } from 'fastify'
+import type { DeployedServiceConfig } from '@mf/models'
 
 describe('Account Service', () => {
 	let app: FastifyInstance
@@ -187,6 +188,95 @@ describe('Account Service', () => {
 			await expect(app.accountService.runLifecycleAction('order-nope', 'suspend')).rejects.toThrow(
 				EntityNotFound
 			)
+		})
+
+		// MARK: wave-10 delivery-lifecycle-followups
+
+		const seedService = async (
+			orderId: string,
+			serviceName: string,
+			customerTag: string,
+			extra: { serviceArn?: string | null; config?: DeployedServiceConfig | null } = {}
+		) =>
+			app.db.deployedServices.record({
+				orderId,
+				jobId: 'job-1',
+				serviceName,
+				customerTag,
+				serviceArn:
+					extra.serviceArn === undefined
+						? `arn:aws:ecs:eu-north-1:0:service/default/${serviceName}`
+						: extra.serviceArn,
+				image: `ecr/mf-deliverables:${serviceName}`,
+				config: extra.config === undefined ? { serviceName } : extra.config,
+			})
+
+		it('Teardown deprovisions EVERY recorded fence, not just the newest, and soft-deletes the records', async () => {
+			// A rebuilt order: two prior deliveries under distinct job-unique fences, plus the newest
+			// slug on the order row.
+			const { order } = await seedDeliveredOrder('app-newest-33333333')
+			await seedService(order.id, 'mf-11111111-app', 'app-11111111')
+			await seedService(order.id, 'mf-22222222-app', 'app-22222222')
+
+			const result = await app.accountService.runLifecycleAction(order.id, 'teardown', {
+				confirm: true,
+			})
+
+			// One deprovision per distinct fence tag (the two recorded + the order slug), all torn down
+			expect(app.org.deprovision).toHaveBeenCalledTimes(3)
+			const tags = vi.mocked(app.org.deprovision).mock.calls.map(call => call[0].customerSlug)
+			expect(tags.sort()).toEqual(['app-11111111', 'app-22222222', 'app-newest-33333333'])
+			expect(result.applied).toBe(true)
+			expect(result.to).toBe('torn_down')
+			// The records are soft-deleted so a torn-down order lists no live services
+			expect(await app.db.deployedServices.listForOrder(order.id)).toHaveLength(0)
+		})
+
+		it('Resume re-stands-up the recorded services (redeploy) and writes back the new arns', async () => {
+			const { order } = await seedDeliveredOrder('app-11111111')
+			// Suspended: the service was deleted (arn nulled), the record + config retained
+			await seedService(order.id, 'mf-11111111-app', 'app-11111111', { serviceArn: null })
+			await app.db.orders.setLifecycle(order.id, ['active'], 'suspended')
+
+			const result = await app.accountService.runLifecycleAction(order.id, 'resume', {
+				confirm: true,
+			})
+
+			// It replays via redeploy (NOT a tag-discovery deprovision — the service is gone)
+			expect(app.org.redeploy).toHaveBeenCalledTimes(1)
+			expect(vi.mocked(app.org.redeploy).mock.calls[0]![0]).toEqual([
+				{ id: expect.any(String), serviceName: 'mf-11111111-app', config: { serviceName: 'mf-11111111-app' } },
+			])
+			expect(result.to).toBe('active')
+			expect((await app.db.orders.getOrder(order.id))?.lifecycle).toBe('active')
+			// The re-created service's new arn is persisted onto the record
+			const [row] = await app.db.deployedServices.listForOrder(order.id)
+			expect(row!.serviceArn).toBe(
+				'arn:aws:ecs:eu-north-1:000000000000:service/default/mf-11111111-app'
+			)
+		})
+
+		it('Suspend nulls the recorded services arns (compute deleted, config retained for resume)', async () => {
+			const { order } = await seedDeliveredOrder('app-11111111')
+			await seedService(order.id, 'mf-11111111-app', 'app-11111111')
+
+			await app.accountService.runLifecycleAction(order.id, 'suspend', { confirm: true })
+
+			const [row] = await app.db.deployedServices.listForOrder(order.id)
+			expect(row!.serviceArn).toBeUndefined()
+			expect(row!.config).toEqual({ serviceName: 'mf-11111111-app' })
+		})
+
+		it('Resume is dry-run by default — nothing is re-stood-up and the state is unchanged', async () => {
+			const { order } = await seedDeliveredOrder('app-11111111')
+			await seedService(order.id, 'mf-11111111-app', 'app-11111111', { serviceArn: null })
+			await app.db.orders.setLifecycle(order.id, ['active'], 'suspended')
+
+			const result = await app.accountService.runLifecycleAction(order.id, 'resume')
+
+			expect(result.dryRun).toBe(true)
+			expect(app.org.redeploy).toHaveBeenCalledWith(expect.anything(), { dryRun: true })
+			expect((await app.db.orders.getOrder(order.id))?.lifecycle).toBe('suspended')
 		})
 	})
 })

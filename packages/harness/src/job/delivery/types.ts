@@ -2,6 +2,7 @@ import type {
 	AcceptanceReport,
 	Deliverable,
 	DeliveryEventPayload,
+	DeployedServiceReport,
 	GateReport,
 	NewJobEvent,
 	Plan,
@@ -64,7 +65,15 @@ export type DeployClient = {
 		 */
 		env?: Record<string, string>
 		signal?: AbortSignal
-	}) => Promise<{ url: string }>
+	}) => Promise<{
+		url: string
+		/**
+		 * The service that was stood up — its name/arn/image and the create config `resume` replays
+		 * — so the api can record it per order (teardown targets EVERY recorded service, resume
+		 * re-creates a suspended one). Omitted by the dry-run client (nothing was actually created).
+		 */
+		service?: DeployedServiceReport
+	}>
 }
 
 /**
