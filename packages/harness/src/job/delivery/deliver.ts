@@ -1,4 +1,5 @@
 import { deliverableKeyOf, uploadBundle, uploadSite, uploadSource } from './bundle.ts'
+import { curateWorkflows } from './curate.ts'
 import { writeDocs } from './docs.ts'
 import { defaultGitHubOrg } from './github.ts'
 import { acceptanceReportOf } from './types.ts'
@@ -130,6 +131,17 @@ export const deliver = async (
 			repositoryUrl,
 			verifyOutput: verify?.summary,
 		})
+		// Strip OUR CI/deploy workflows (OIDC into our account) and ship a customer-appropriate
+		// lint+test CI instead — committed with the docs so it lands in the push and in repo.zip.
+		const curated = await curateWorkflows(repoDir)
+		if (curated.removed.length) {
+			await emit({
+				type: 'log',
+				payload: {
+					message: `curated .github/workflows: removed ${curated.removed.join(', ')}; wrote ${curated.wrote}`,
+				},
+			}).catch(() => {})
+		}
 		await commitDocs(repoDir, signal)
 		await step({ step: 'docs', ok: true })
 	} catch (error) {
