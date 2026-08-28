@@ -25,12 +25,14 @@ jobs:
             package-lock.json
             infra/package-lock.json
             infra/resident/package-lock.json
+            infra/org/package-lock.json
 
       - name: Install
         run: |
           npm ci
           npm ci --prefix infra
           npm ci --prefix infra/resident
+          npm ci --prefix infra/org
 
       - name: Lint
         run: npm run lint
@@ -45,6 +47,7 @@ jobs:
           npm audit --audit-level=high
           npm audit --audit-level=high --prefix infra
           npm audit --audit-level=high --prefix infra/resident
+          npm audit --audit-level=high --prefix infra/org
 
       # Coverage thresholds (lines ≥ 60 %) are enforced by vitest.config.ts; the run fails below
       # the bar. Docker image builds (apps/job, apps/api) are deliberately NOT part of CI — the
@@ -77,6 +80,15 @@ jobs:
         run: |
           npm run lint
           npx cdk synth --quiet --context repository=example/repo --context installationId=inst-ci
+          npm test
+
+      # The management-account org-governance CDK app (Customers OU + guardrail SCP): its own
+      # lockfile, type check, offline synth (no AWS calls — root id is config), template assertions
+      - name: Org infra lint, synth, tests
+        working-directory: infra/org
+        run: |
+          npm run lint
+          npx cdk synth --quiet
           npm test
 
       - uses: actions/upload-artifact@v4

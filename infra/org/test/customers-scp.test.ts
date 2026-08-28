@@ -26,13 +26,16 @@ describe('buildCustomersScp', () => {
 		// Deny is expressed as NotAction (deny everything *except* the global services), never Action
 		assert.equal(region.Action, undefined)
 		const notAction = [region.NotAction].flat()
-		// ACM (certs) and Budgets are the reason us-east-1 is allowed; they and other global
-		// services must stay exempt or the lock would brick them
-		for (const svc of ['acm:*', 'budgets:*', 'iam:*', 'organizations:*', 'sts:*', 'cloudfront:*'])
+		// Only genuinely global/partition-wide services stay exempt — the lock would brick them
+		for (const svc of ['budgets:*', 'iam:*', 'organizations:*', 'sts:*', 'cloudfront:*', 'route53:*'])
 			assert.ok(notAction.includes(svc), `region lock must exempt ${svc}`)
-		// Regional services are NOT exempt — they are what the lock is for
+		// Regional services are NOT exempt — they are what the lock is for. ACM and KMS are
+		// regional: ACM-for-CloudFront lives in us-east-1, which is already an allowed region, so
+		// neither needs a global exemption.
 		assert.ok(!notAction.includes('ec2:*'))
 		assert.ok(!notAction.includes('ecs:*'))
+		assert.ok(!notAction.includes('acm:*'))
+		assert.ok(!notAction.includes('kms:*'))
 	})
 
 	it('honours a custom region allow-list', () => {

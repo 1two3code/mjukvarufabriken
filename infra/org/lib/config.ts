@@ -41,6 +41,10 @@ export const loadConfig = (app: App): OrgConfig => {
 		rootId: contextString(app, 'rootId') || process.env.ORG_ROOT_ID || DEFAULT_ROOT_ID,
 		allowedRegions: regions?.length ? regions : DEFAULT_ALLOWED_REGIONS,
 		account,
-		region: account ? (process.env.CDK_DEFAULT_REGION ?? 'eu-north-1') : undefined,
+		// AWS::Organizations resources deploy only through the us-east-1 endpoint, so the stack is
+		// pinned there regardless of CDK_DEFAULT_REGION. This is the deploy region for the org
+		// governance stack itself — unrelated to `allowedRegions`, which is what the SCP lets
+		// vended customer accounts operate in.
+		region: account ? 'us-east-1' : undefined,
 	}
 }
