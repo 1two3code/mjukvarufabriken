@@ -284,6 +284,13 @@ export type ShareOptions = {
 	 * too (a task clone, where the worker commits).
 	 */
 	gitDir?: 'private' | 'shared'
+	/**
+	 * Group to chgrp the tree to. Defaults to the group already on `dir` (the shared `work`
+	 * group, via `/work`'s setgid). Pass it explicitly when re-sharing a `.git` that
+	 * `protectGitDir` reset to the job's own group — inferring from `.git` would re-apply that
+	 * group and leave the worker unable to create `.git/index.lock`.
+	 */
+	gid?: number
 }
 
 /**
@@ -298,9 +305,12 @@ export type ShareOptions = {
  * touches nothing but that directory entry. Symlinks are skipped (chmod would follow them).
  * A no-op without a sandbox user.
  */
-export const shareWithWorker = async (dir: string, { gitDir = 'private' }: ShareOptions = {}) => {
+export const shareWithWorker = async (
+	dir: string,
+	{ gitDir = 'private', gid: gidOverride }: ShareOptions = {}
+) => {
 	if (!sandboxUser()) return
-	const { gid } = await stat(dir)
+	const gid = gidOverride ?? (await stat(dir)).gid
 	const gitPath = join(dir, '.git')
 	const prune = gitDir === 'private' ? ['-path', gitPath, '-prune', '-o'] : []
 	const select = ['(', '-type', 'd', '-o', '-type', 'f', '-links', '1', ')']
@@ -859,7 +869,11 @@ const commitLeftovers = async (dir: string, task: Task, signal: AbortSignal) => 
 	// tree: passing the repo root re-ran three full-tree `find` passes over node_modules on every
 	// leftover-commit — thousands of now-worker-owned entries the job can no longer chgrp/chmod, so
 	// the sweep EPERM-failed silently while paying the full traversal cost.
-	await shareWithWorker(join(dir, '.git'), { gitDir: 'shared' })
+	// `.git` was privatized to the job's own group by `protectGitDir`; re-share it under the
+	// worktree's shared `work` group (from `dir`), NOT `.git`'s current group — inferring the
+	// latter re-applies the job group and leaves the worker unable to create `.git/index.lock`.
+	const { gid: workGid } = await stat(dir)
+	await shareWithWorker(join(dir, '.git'), { gitDir: 'shared', gid: workGid })
 	const add = await exec('git', ['add', '-A'], options)
 	const commit = await exec(
 		'git',
