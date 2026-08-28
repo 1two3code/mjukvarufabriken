@@ -61,6 +61,7 @@ const unavailableRepositories = (error: () => Error): Repositories => {
 	return {
 		jobs: repository([
 			'insert',
+			'listStuck',
 			'get',
 			'getByReportToken',
 			'list',

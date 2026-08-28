@@ -341,6 +341,10 @@ export type ReviewOutput = z.infer<typeof ReviewOutputSchema>
 
 export const reviewOutputJsonSchema = z.toJSONSchema(ReviewOutputSchema) as Record<string, unknown>
 
+// A finding's id is its LOCATION (file:line) on purpose: waivers waive a location and the gate
+// message prints it. Two distinct findings at the same file:line therefore share an id (the refute
+// tally would apply one verdict to both) — a rare edge case, left as a known limitation so the
+// waiver/display semantics stay location-based.
 export const findingId = (finding: Omit<ReviewFinding, 'id'>) => `${finding.file}:${finding.line}`
 
 export const reviewSystemPrompt = (spec: Spec, range: string) =>

@@ -48,8 +48,7 @@ const failDeadJob = async (
 }
 
 /**
- * One liveness pass: lists active jobs whose Fargate task was launched over `jobSweepMinTaskAgeMs`
- * ago, `ecs:DescribeTasks` for them in one shot, and fails every job whose task ECS reports
+ * One liveness pass: lists active jobs created over `jobSweepMinTaskAgeMs` ago (enough for their Fargate task to start), `ecs:DescribeTasks` for them in one shot, and fails every job whose task ECS reports
  * `STOPPED` or no longer knows. A job whose task is still `RUNNING`/`PENDING` is left untouched.
  * Idempotent (a failed job is no longer active, so a later pass skips it) and a no-op when ECS is
  * unconfigured — then no task was ever launched. Returns the counts (for logs and tests).

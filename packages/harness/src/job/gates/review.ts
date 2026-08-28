@@ -31,7 +31,9 @@ export const resolveSkeptics = (
 	env: NodeJS.ProcessEnv = process.env
 ): number => {
 	if (override !== undefined) return Math.max(0, Math.trunc(override))
-	const fromEnv = Number(env[skepticsEnvVar])
+	const raw = env[skepticsEnvVar]?.trim()
+	if (!raw) return defaultSkeptics
+	const fromEnv = Number(raw)
 	return Number.isInteger(fromEnv) && fromEnv >= 0 ? fromEnv : defaultSkeptics
 }
 
