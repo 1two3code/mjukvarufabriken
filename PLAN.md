@@ -5,6 +5,11 @@ Brand: **Mjukvaruhuset** (mjukvaruhuset.se, decided 2026-08-26; repo folder name
 Goal: a customer submits a spec, the factory builds it, delivers repo + running URL, customer pays.
 Everything that needs someone else's approval lives in TODO-EXTERNAL.md and is NOT on this road.
 
+## Standing reminders (read before touching M10, dev email, or GitHub sign-in)
+- **M10 dogfood apps #2 and #3 need Hasse's real specs before any job runs.** These are paid Fargate runs (~USD 6.5+ / 44 min each, per the M3 live runs) — do not invent throwaway app ideas and launch them. App #1 (rebuild the site through the harness) is already decided and fine to run. App #2 is reserved for a real-life case Hasse calls "Netlab arcade" — not yet specified as of 2026-08-27, ask him for it rather than guessing. App #3 is unpicked. If M10 is reached before both specs exist, leave the box unticked with a note that it's blocked on user-supplied specs and move to other open items.
+- **Dev email is silent by design, not broken.** `emailTransport` is `log` until AWS SES production access clears the sandbox (TODO-EXTERNAL) — magic links land in the API log, not an inbox. Don't debug this as a bug; it's the known workaround.
+- **"Sign in with GitHub" has no button yet.** Code is done, but it's inert until the GitHub OAuth App exists and its client id/secret are provided (TODO-EXTERNAL). Same story for GitHub delivery access above — needs the App ID/Installation ID/`.pem` before repo delivery works.
+
 ## Decisions (made 2026-08-26, change here if you disagree)
 - Cloud: AWS (CDK for IaC, eu-north-1 Stockholm)
 - Agent runtime: Claude Agent SDK (TypeScript), build jobs in Docker on ECS Fargate
@@ -89,6 +94,18 @@ Everything that needs someone else's approval lives in TODO-EXTERNAL.md and is N
 - [ ] Dogfood: 3 internal apps built end-to-end from spec, results logged in TOKENS.md
   - 2026-08-27 (wave 3, efficiency): worker loop tuned without live calls — task gate scoped by the task's actual diff, size-based turn caps (S 60 / M 100 / L 150) with a second session as safety valve and cap hits recorded on the task events, gate-at-most-twice prompt, trimmed conventions, prompt-caching kill switch stripped (caching itself to be confirmed via `cache_read_input_tokens` on the dogfood run), `WORKER_EFFORT` knob; analysis + expected savings in docs/EFFICIENCY.md. The savings are estimates: the first dogfood job must re-measure turns / budget-tokens per turn / gate runs per task against the 2026-08-26 baseline (S demo: 42 + 119 turns, 190k + 1.25M) before any number is trusted.
 - [ ] Pilot-ready: contract drafts in `legal/` (unreviewed until TODO-EXTERNAL clears)
+
+### M11 — Environments (dev/qa/live) — captured 2026-08-28, NOT started, design incomplete
+Hasse's idea, written down before it's forgotten. Do not start building against this section until the open questions below are answered — it introduces a new trust boundary (an LLM with live write access to a running server) that M1–M10's gated pipeline doesn't have, and needs a real design pass first. Detailed design scratchpad + phasing + the "whose AWS account" fork: [docs/backlog/environments.md](docs/backlog/environments.md) (co-authored across sessions 2026-08-28; this M11 list is the canonical milestone, the brief is the working notes).
+- [ ] Give mjukvaruhuset itself a real dev/qa/live pipeline, not just dev/live. `infra/lib/config.ts` only has `EnvironmentName = 'dev' | 'live'` today and only `dev` is deployed — add a `qa` env (own stack set, own domain like `qa.mjukvaruhuset.se`) and a promotion step in `.github/workflows/deploy.yml` between them.
+- [ ] Bring the same dev/qa/live split to **customer delivery** (today M5 delivers one environment only). Rollout in iterations:
+  - **Iteration 1 — 2 environments (qa + live).** `qa` is a live-reloading dev server the customer can connect to, paired with an LLM that has access to that running server/codebase and can make aesthetic changes on the fly (copy, styling, layout — not logic). `live` is what M5 already builds today.
+  - **Iteration 2 — 3 environments (dev + qa + live).** `dev` becomes the LLM-live-edit playground from iteration 1; `qa` turns into a stable pre-prod mirror of `live` for final checks before promoting; `qa` and `live` are near-identical most of the time by design.
+- Open questions to resolve before design/implementation starts:
+  - How does an edit get promoted `dev → qa → live`? A git branch + PR the LLM opens, a direct commit, something else? Does a human (customer or us) have to approve a promotion?
+  - What stops the "aesthetic changes on the go" LLM from touching business logic, auth, or data — a restricted toolset/path allowlist, a scoped system prompt, both? This is a materially looser trust boundary than the gated M3/M4 build pipeline and the M8 resident agent (which goes through PR + review); it needs its own gate story, not an implicit "it'll behave."
+  - Is the `dev`/`qa` server always-on per customer (infra cost × every customer) or spun up on demand and idled? Who pays for it — bundled in v1 pricing, or an upgrade/resident-agent-adjacent tier?
+  - Does this reuse `@mf/resident`'s sandboxing/audit-log machinery (M8), or is it a new, separate agent mode?
 
 ## Open questions (answer inline)
 1. Company/brand name on site while AB is pending — "Mjukvaruhuset" as trade name OK?
