@@ -11,6 +11,7 @@ import ecsPlugin from '#/plugins/ecs.ts'
 import emailPlugin from '#/plugins/email.ts'
 import errorHandlingPlugin from '#/plugins/errorHandling.ts'
 import githubOAuthPlugin from '#/plugins/githubOAuth.ts'
+import jobSweeperPlugin from '#/plugins/jobSweeper.ts'
 import prunerPlugin from '#/plugins/pruner.ts'
 import s3Plugin from '#/plugins/s3.ts'
 import secretsPlugin from '#/plugins/secrets.ts'
@@ -63,6 +64,7 @@ export async function createServer({ logLevel }: Options = {}): Promise<FastifyI
 		.register(stripePlugin)
 		.register(githubOAuthPlugin)
 		.register(prunerPlugin)
+		.register(jobSweeperPlugin)
 
 		// Services
 		.register(itemService)

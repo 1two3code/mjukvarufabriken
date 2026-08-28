@@ -284,6 +284,19 @@ export const createMemoryRepositories = (): MemoryRepositories => {
 						.filter(job => filter.orgId === undefined || job.orgId === filter.orgId)
 						.map(clone)
 				).slice(0, 200),
+			listStuck: async olderThan =>
+				byCreatedDesc(
+					[...jobs.values()]
+						.filter(
+							job =>
+								isActiveJobStatus(job.status) &&
+								job.taskArn !== undefined &&
+								new Date(job.createdAt) < olderThan
+						)
+						.map(clone)
+				)
+					.reverse()
+					.slice(0, 200),
 			update: async (id, update) => {
 				const job = jobs.get(id)
 				if (!job) return undefined

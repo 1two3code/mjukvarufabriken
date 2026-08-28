@@ -1,3 +1,5 @@
+import { activeJobStatus } from '@mf/models'
+
 import type {
 	GateReport,
 	Job,
@@ -155,6 +157,24 @@ export const listJobs = async (
 	return rows.map(toJob)
 }
 
+/**
+ * Active jobs (`queued`/`planning`/`building`/`verifying`) that were handed a Fargate task
+ * (`task_arn is not null`) and are older than `olderThan` — the candidates the api's liveness
+ * sweep re-checks against `ecs:DescribeTasks`. The age floor keeps a freshly-launched task,
+ * which has not had time to boot and claim its token, out of the sweep. Oldest first.
+ */
+export const listStuckJobs = async (db: Db, olderThan: Date): Promise<Job[]> => {
+	const { sql } = db
+	const rows = await sql<JobRow[]>`
+		select * from jobs
+		where status in ${sql(activeJobStatus as readonly string[] as string[])}
+			and task_arn is not null
+			and created_at < ${olderThan}
+		order by created_at asc
+		limit 200`
+	return rows.map(toJob)
+}
+
 export const updateJob = async (
 	db: Db,
 	id: string,
@@ -247,6 +267,7 @@ export const createJobsRepository = (db: Db): JobsRepository => ({
 	get: id => getJob(db, id),
 	getByReportToken: tokenHash => getJobByReportToken(db, tokenHash),
 	list: filter => listJobs(db, filter),
+	listStuck: olderThan => listStuckJobs(db, olderThan),
 	update: (id, update) => updateJob(db, id, update),
 	appendEvent: (jobId, event) => appendEvent(db, jobId, event),
 	appendEventOnce: (jobId, seq, event) => appendEventOnce(db, jobId, seq, event),

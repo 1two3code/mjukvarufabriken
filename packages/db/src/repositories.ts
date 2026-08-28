@@ -26,6 +26,11 @@ export type JobsRepository = {
 	/** The job whose report token hashes to `tokenHash` (build-container auth); never by id */
 	getByReportToken: (tokenHash: string) => Promise<Job | undefined>
 	list: (filter?: { orderId?: string; orgId?: string }) => Promise<Job[]>
+	/**
+	 * Active jobs with a launched Fargate task, older than `olderThan` — the api's liveness
+	 * sweep re-checks these against `ecs:DescribeTasks` and fails the ones whose task is gone
+	 */
+	listStuck: (olderThan: Date) => Promise<Job[]>
 	/** Returns `undefined` for an unknown id — or when a status write hits a killed job */
 	update: (id: string, update: JobUpdate) => Promise<Job | undefined>
 	appendEvent: (jobId: string, event: NewJobEvent) => Promise<JobEvent>

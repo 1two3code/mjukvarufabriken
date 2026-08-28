@@ -125,6 +125,26 @@ describe('memory repositories', () => {
 			first!.spec.goal = 'mutated'
 			expect((await repos.jobs.get(first!.id))?.spec.goal).toBe('g')
 		})
+
+		it('listStuck returns only active jobs with a task, older than the cutoff', async () => {
+			const future = new Date(Date.now() + 60_000)
+
+			const withTask = await repos.jobs.insert({ orderId: 'o1', orgId: 'a', spec, budget })
+			await repos.jobs.update(withTask.id, { taskArn: 'arn:task/1' })
+
+			// No task launched yet — not a sweep candidate
+			await repos.jobs.insert({ orderId: 'o2', orgId: 'a', spec, budget })
+
+			// Task launched but already finished — no longer active
+			const done = await repos.jobs.insert({ orderId: 'o3', orgId: 'a', spec, budget })
+			await repos.jobs.update(done.id, { taskArn: 'arn:task/3', status: 'delivered' })
+
+			const stuck = await repos.jobs.listStuck(future)
+			expect(stuck.map(job => job.id)).toEqual([withTask.id])
+
+			// Age floor: a cutoff before every row excludes them all
+			expect(await repos.jobs.listStuck(new Date(0))).toHaveLength(0)
+		})
 	})
 
 	describe('orders', () => {

@@ -1,4 +1,4 @@
-import { jobContainerName } from '#/plugins/ecs.ts'
+import { describeTasksChunk, jobContainerName } from '#/plugins/ecs.ts'
 
 // Clearly mocked: no real AWS calls are made in this suite.
 const sendMock = vi.hoisted(() => vi.fn())
@@ -14,6 +14,12 @@ vi.mock('@aws-sdk/client-ecs', () => ({
 		}
 	},
 	StopTaskCommand: class {
+		input: unknown
+		constructor(input: unknown) {
+			this.input = input
+		}
+	},
+	DescribeTasksCommand: class {
 		input: unknown
 		constructor(input: unknown) {
 			this.input = input
@@ -132,5 +138,64 @@ describe('ECS plugin (ecs)', () => {
 			task: 'arn:task/1',
 			reason: 'killed by admin',
 		})
+	})
+
+	it('describeTasks maps task states by ARN and carries the stopped reason', async () => {
+		// Arrange
+		const app = await createApp(true)
+		sendMock.mockResolvedValue({
+			tasks: [
+				{ taskArn: 'arn:task/1', lastStatus: 'RUNNING' },
+				{ taskArn: 'arn:task/2', lastStatus: 'STOPPED', stoppedReason: 'exit 1' },
+				// A task with no lastStatus is skipped rather than mapped as alive
+				{ taskArn: 'arn:task/x' },
+			],
+			failures: [{ arn: 'arn:task/3', reason: 'MISSING' }],
+		})
+
+		// Act
+		const states = await app.ecs.describeTasks(['arn:task/1', 'arn:task/2', 'arn:task/3'])
+
+		// Assert: the describe hit the right cluster and only known tasks are mapped
+		expect(sendMock.mock.calls[0]![0].input).toEqual({
+			cluster,
+			tasks: ['arn:task/1', 'arn:task/2', 'arn:task/3'],
+		})
+		expect(states.get('arn:task/1')).toEqual({ lastStatus: 'RUNNING', stoppedReason: undefined })
+		expect(states.get('arn:task/2')).toEqual({ lastStatus: 'STOPPED', stoppedReason: 'exit 1' })
+		expect(states.has('arn:task/x')).toBe(false)
+		// A MISSING task (aged out of ECS) is simply absent — the sweep reads that as dead
+		expect(states.has('arn:task/3')).toBe(false)
+	})
+
+	it('describeTasks chunks ARNs to the DescribeTasks per-call limit', async () => {
+		// Arrange
+		const app = await createApp(true)
+		const arns = Array.from({ length: describeTasksChunk + 5 }, (_, i) => `arn:task/${i}`)
+		sendMock.mockResolvedValue({
+			tasks: arns.map(taskArn => ({ taskArn, lastStatus: 'RUNNING' })),
+			failures: [],
+		})
+
+		// Act
+		const states = await app.ecs.describeTasks(arns)
+
+		// Assert: two DescribeTasks calls, split 100 + 5, and every ARN mapped to a state
+		expect(sendMock).toHaveBeenCalledTimes(2)
+		expect(sendMock.mock.calls[0]![0].input.tasks).toHaveLength(describeTasksChunk)
+		expect(sendMock.mock.calls[1]![0].input.tasks).toHaveLength(5)
+		expect(states.size).toBe(describeTasksChunk + 5)
+	})
+
+	it('describeTasks on the unconfigured plugin returns an empty map without calling AWS', async () => {
+		// Arrange
+		const app = await createApp(false)
+
+		// Act
+		const states = await app.ecs.describeTasks(['arn:task/1'])
+
+		// Assert
+		expect(states.size).toBe(0)
+		expect(sendMock).not.toHaveBeenCalled()
 	})
 })

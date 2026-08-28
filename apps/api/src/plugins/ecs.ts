@@ -1,5 +1,5 @@
 import fp from 'fastify-plugin'
-import { ECSClient, RunTaskCommand, StopTaskCommand } from '@aws-sdk/client-ecs'
+import { DescribeTasksCommand, ECSClient, RunTaskCommand, StopTaskCommand } from '@aws-sdk/client-ecs'
 
 import type { FastifyPluginAsync } from 'fastify'
 
@@ -23,8 +23,32 @@ declare module 'fastify' {
 			 */
 			runJob: (jobId: string, reportToken: string) => Promise<string | undefined>
 			stopTask: (taskArn: string, reason: string) => Promise<void>
+			/**
+			 * `ecs:DescribeTasks` for the given task ARNs, keyed by ARN. A task ECS no longer
+			 * knows about (stopped tasks age out of DescribeTasks after ~1h) is simply absent
+			 * from the map — the liveness sweep reads that, and a `STOPPED` `lastStatus`, as a
+			 * dead task. ARNs are chunked to the 100-per-call DescribeTasks limit.
+			 */
+			describeTasks: (taskArns: string[]) => Promise<Map<string, TaskState>>
 		}
 	}
+}
+
+/** The slice of an ECS task the liveness sweep reads */
+export type TaskState = {
+	/** `PROVISIONING` | `PENDING` | `RUNNING` | `DEPROVISIONING` | `STOPPING` | `STOPPED` | … */
+	lastStatus: string
+	/** ECS's reason a task stopped, when it stopped (e.g. `Essential container in task exited`) */
+	stoppedReason?: string
+}
+
+/** DescribeTasks accepts at most 100 tasks per call */
+export const describeTasksChunk = 100
+
+const chunk = <T>(items: T[], size: number): T[][] => {
+	const chunks: T[][] = []
+	for (let i = 0; i < items.length; i += size) chunks.push(items.slice(i, i + size))
+	return chunks
 }
 
 /** Container name in the job task definition (see infra/lib/resources-stack.ts) */
@@ -49,6 +73,7 @@ const plugin: FastifyPluginAsync = async app => {
 			configured: false,
 			runJob: async () => undefined,
 			stopTask: async () => {},
+			describeTasks: async () => new Map(),
 		})
 		return
 	}
@@ -100,6 +125,23 @@ const plugin: FastifyPluginAsync = async app => {
 		},
 		stopTask: async (taskArn, reason) => {
 			await client.send(new StopTaskCommand({ cluster: jobsClusterArn, task: taskArn, reason }))
+		},
+		describeTasks: async taskArns => {
+			const states = new Map<string, TaskState>()
+			for (const tasks of chunk(taskArns, describeTasksChunk)) {
+				if (!tasks.length) continue
+				const result = await client.send(
+					new DescribeTasksCommand({ cluster: jobsClusterArn, tasks })
+				)
+				for (const task of result.tasks ?? []) {
+					if (!task.taskArn || !task.lastStatus) continue
+					states.set(task.taskArn, {
+						lastStatus: task.lastStatus,
+						stoppedReason: task.stoppedReason,
+					})
+				}
+			}
+			return states
 		},
 	})
 }
