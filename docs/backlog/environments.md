@@ -18,12 +18,29 @@ Phased: first **qa + live**, then full **dev / qa / live**.
   with a **resident LLM wired into that running server**. The customer chats with the LLM; it makes
   changes (aesthetic first, then broader), the running app updates live (hot reload), they see it
   immediately. The customer may simply call this "dev" and spend most of their time here.
+  - **Resident LLM as a requirements journal (Hasse 2026-08-28).** The resident does more than
+    live frontend tweaks: as it works with the customer it **notices and asks the questions that go
+    beyond "just frontend"** — data model, backend/API, integrations, auth/roles, business rules,
+    infra, scale, edge cases — and **writes down the answers**. It maintains a structured
+    *iteration brief* (open questions + decisions + context) for this specific customer/project, and
+    **delivers that brief back to mjukvaruhuset as the input to the next full factory iteration**.
+    This bridges the two loops: the fast in-dev live-edit loop and the next one-shot(ish) factory
+    build. It also turns the customer's ad-hoc requests into captured requirements the factory can
+    build against — so v0.1 → v0.2 is a real spec, not a re-guess. Ties to the spec engine
+    (`@mf/harness` planner) consuming the brief, and to per-customer project memory.
 - **qa** — a release-candidate mirror of live. Changes promoted from dev land here; the QA gates
   (M4) run against it before it can go to live. "qa and live are the same most of the time."
 - **live** — production, the URL the customer's users hit. Promotion is dev → qa → live.
 
 So the product loop becomes: **build once (factory) → iterate forever in dev with the resident LLM
 → promote qa → promote live.** The recurring-revenue engine, not the one-shot build.
+
+**Evidence (2026-08-28):** the first real delivery — family-hub #2 (`mjukvaruhuset/family-hub`,
+live at the dev Express URL) — is a working **v0.1, not a finished product**: it needs many more
+iterations before it's anywhere close to done (Hasse's words). That is exactly the case for this
+milestone: the one-shot factory produces a correct *starting point*; the value — and the recurring
+revenue — is the **iterate-forever loop** (hosted dev + resident LLM) that takes v0.1 → shippable.
+The one-shot build is the on-ramp, not the destination.
 
 ## How it builds on what exists
 - The **ECS Express service** the delivery now creates is the first environment (the customer's
