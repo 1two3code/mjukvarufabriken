@@ -1,5 +1,5 @@
 import { randomBytes } from 'node:crypto'
-import { readFile, readdir } from 'node:fs/promises'
+import { readdir, readFile } from 'node:fs/promises'
 import { join } from 'node:path'
 
 import { generateAppSecrets } from './appSecrets.ts'
@@ -27,39 +27,55 @@ import type { PreviewAuth } from './types.ts'
  * Tolerates a type annotation (`: readonly string[]`) and picks out only env-var-shaped names.
  */
 export const parseRequiredEnv = (source: string): string[] => {
-	const match = source.match(/\brequired\b\s*(?::[^=]+)?=\s*\[([\s\S]*?)\]/)
+	// Strip comments first so a `]` inside an inline comment (`'FOO', // see bar[0]`) cannot end the
+	// non-greedy array capture early and truncate the list. Block comments then line comments.
+	const stripped = source.replace(/\/\*[\s\S]*?\*\//g, '').replace(/\/\/[^\n]*/g, '')
+	const match = stripped.match(/\brequired\b\s*(?::[^=]+)?=\s*\[([\s\S]*?)\]/)
 	if (!match) return []
-	const names = [...match[1]!.matchAll(/['"`]([A-Za-z_][A-Za-z0-9_]*)['"`]/g)].map(entry => entry[1]!)
+	const names = [...match[1]!.matchAll(/['"`]([A-Za-z_][A-Za-z0-9_]*)['"`]/g)].map(
+		entry => entry[1]!
+	)
 	return [...new Set(names)]
 }
 
-/** Plugin files that may declare the required env, relative to an app's `src/` */
+/** Plugin files that may declare the required env, relative to a package's `src/` */
 const pluginFiles = ['plugins/secrets.ts', 'plugins/config.ts', 'secrets.ts', 'config.ts']
 
 /**
- * The union of every required env var declared across the built repo's apps — reads each app's
- * secrets/config plugin (`apps/<app>/src/plugins/secrets.ts`, …) and parses its `required` array.
- * A repo with no such plugin (a static site) yields `[]` and the caller injects only the
- * always-on app secrets.
+ * The `src/`-owning package roots whose secrets/config plugin may declare the required env: every
+ * app under `apps/`, AND the repo root itself. The root is included so a generated app in a
+ * non-`apps/` layout — a root-level `src/index.ts` that `serverEntryOf` now boots — has its env
+ * detected too, aligning detection with the generalized boot target. A repo with neither yields no
+ * roots' worth of plugins and the caller injects only the always-on app secrets.
+ */
+const packageRoots = async (repoDir: string): Promise<string[]> => {
+	const roots = [repoDir]
+	try {
+		const apps = (await readdir(join(repoDir, 'apps'), { withFileTypes: true }))
+			.filter(entry => entry.isDirectory())
+			.map(entry => join(repoDir, 'apps', entry.name))
+		roots.push(...apps)
+	} catch {
+		// no apps/ dir — root layout only
+	}
+	return roots
+}
+
+/**
+ * The union of every required env var declared across the built repo — reads each package root's
+ * secrets/config plugin (`apps/<app>/src/plugins/secrets.ts`, or a root-level `src/plugins/secrets.ts`
+ * for a non-`apps/` layout, …) and parses its `required` array. A repo with no such plugin (a
+ * static site) yields `[]` and the caller injects only the always-on app secrets.
  */
 export const detectRequiredEnv = async (repoDir: string): Promise<string[]> => {
-	const appsDir = join(repoDir, 'apps')
-	let apps: string[]
-	try {
-		apps = (await readdir(appsDir, { withFileTypes: true }))
-			.filter(entry => entry.isDirectory())
-			.map(entry => entry.name)
-	} catch {
-		return []
-	}
 	const names = new Set<string>()
-	for (const app of apps) {
+	for (const root of await packageRoots(repoDir)) {
 		for (const file of pluginFiles) {
 			try {
-				const source = await readFile(join(appsDir, app, 'src', file), 'utf8')
+				const source = await readFile(join(root, 'src', file), 'utf8')
 				for (const name of parseRequiredEnv(source)) names.add(name)
 			} catch {
-				// plugin not present in this app — skip
+				// plugin not present here — skip
 			}
 		}
 	}
@@ -71,18 +87,37 @@ export const detectRequiredEnv = async (repoDir: string): Promise<string[]> => {
 /**
  * Providers whose secret we must NOT synthesise: a random value satisfies the presence check and
  * boots the app, but it is not the real shared credential, so the app would misbehave live. These
- * get a flagged placeholder + a TODO instead — the operator supplies the true value.
+ * get a flagged placeholder + a TODO instead — the operator supplies the true value. Kept as a
+ * defensive first cut even though the allowlist below is now authoritative (so e.g. a hypothetical
+ * `GOOGLE_SIGNING_SECRET` — a provider credential that happens to contain a self-issued token — is
+ * still treated as external, not minted).
  */
-const externalProvider = /^(STRIPE|GITHUB|GH|ANTHROPIC|OPENAI|AWS|TWILIO|SENDGRID|MAILGUN|POSTMARK|SLACK|GOOGLE|GCP|META|SENTRY|MAPBOX|CLOUDFLARE|DATADOG)_/
+const externalProvider =
+	/^(STRIPE|GITHUB|GH|ANTHROPIC|OPENAI|AWS|TWILIO|SENDGRID|MAILGUN|POSTMARK|SLACK|GOOGLE|GCP|META|SENTRY|MAPBOX|CLOUDFLARE|DATADOG)_/
+
+/**
+ * Underscore-delimited tokens that name a *self-issued* signing / session secret we can mint fresh
+ * and have be fully valid: session / cookie / CSRF / JWT / signing / token secrets. Bare `SECRET_KEY`
+ * (the canonical app signing key) is handled separately below.
+ */
+const selfIssuedToken = /(?:^|_)(SESSION|COOKIE|CSRF|JWT|SIGNING|TOKEN)(?:_|$)/
 
 /**
  * A required var whose value is a *self-issued* secret we can mint fresh and have it be fully valid
- * (a session / cookie / CSRF / token signing secret) — as opposed to a shared credential of some
- * external provider. Excludes the external providers above so e.g. `STRIPE_WEBHOOK_SECRET` is a
- * placeholder, not a random string that would silently fail signature checks.
+ * (a session / cookie / CSRF / JWT / signing-token secret) — as opposed to a shared credential of
+ * some external provider. The default is INVERTED: an unknown secret-shaped var (`*_SECRET` /
+ * `*SECRET_KEY`) is NOT minted — it would get a silent random value that boots the app but fails
+ * live (e.g. `PLAID_CLIENT_SECRET`, `STRIPE_WEBHOOK_SECRET`). Only a var matching the known
+ * self-issued allowlist is minted; everything else falls through to a flagged placeholder + TODO.
  */
-export const isSelfIssuedSecret = (name: string): boolean =>
-	!externalProvider.test(name) && (/_SECRET$/.test(name) || name === 'SECRET_KEY')
+export const isSelfIssuedSecret = (name: string): boolean => {
+	// Must be secret-shaped at all (`*_SECRET` or `*SECRET_KEY`) to be a candidate.
+	if (!/(_SECRET|SECRET_KEY)$/.test(name)) return false
+	// A recognised external provider's credential is never minted (defensive; allowlist is primary).
+	if (externalProvider.test(name)) return false
+	// Only a KNOWN self-issued name is minted — any other secret is an unknown shared credential.
+	return name === 'SECRET_KEY' || selfIssuedToken.test(name)
+}
 
 /** Flagged placeholder value for a required var we cannot synthesise; recognisable in logs + env */
 export const PLACEHOLDER_PREFIX = 'TODO_SET_BY_OPERATOR_'
@@ -145,7 +180,3 @@ export const buildEnvManifest = async (
 	}
 	return { required, env, placeholders, todos }
 }
-
-/** The manifest env as an ECS container `environment` list (`{ name, value }`), stable order. */
-export const envList = (env: Record<string, string>): { name: string; value: string }[] =>
-	Object.entries(env).map(([name, value]) => ({ name, value }))

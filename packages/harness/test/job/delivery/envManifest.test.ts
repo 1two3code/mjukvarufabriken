@@ -34,7 +34,9 @@ const writeSecretsPlugin = async (repoDir: string, app: string, names: string[])
 
 describe('parseRequiredEnv', () => {
 	it('Parses the template one-element array', () => {
-		expect(parseRequiredEnv(`const required = ['AUTH_AUDIENCE'] as const`)).toEqual(['AUTH_AUDIENCE'])
+		expect(parseRequiredEnv(`const required = ['AUTH_AUDIENCE'] as const`)).toEqual([
+			'AUTH_AUDIENCE',
+		])
 	})
 
 	it('Parses a multi-line array with a type annotation and dedupes', () => {
@@ -46,11 +48,26 @@ describe('parseRequiredEnv', () => {
 				'AUTH_AUDIENCE',
 			] as const
 		`
-		expect(parseRequiredEnv(source)).toEqual(['AUTH_AUDIENCE', 'AUTH_JWT_SECRET', 'VAPID_PUBLIC_KEY'])
+		expect(parseRequiredEnv(source)).toEqual([
+			'AUTH_AUDIENCE',
+			'AUTH_JWT_SECRET',
+			'VAPID_PUBLIC_KEY',
+		])
 	})
 
 	it('Returns [] when there is no required array', () => {
 		expect(parseRequiredEnv('export const plugin = async () => {}')).toEqual([])
+	})
+
+	it('Does not truncate on a `]` inside an inline comment', () => {
+		const source = `
+			const required = [
+				'AUTH_AUDIENCE', // first of many[0], keep going
+				'SESSION_SECRET',
+				/* block ] comment */ 'CSRF_SECRET',
+			] as const
+		`
+		expect(parseRequiredEnv(source)).toEqual(['AUTH_AUDIENCE', 'SESSION_SECRET', 'CSRF_SECRET'])
 	})
 })
 
@@ -71,11 +88,23 @@ describe('detectRequiredEnv', () => {
 	it('Unions the required env across multiple apps', async () => {
 		await writeSecretsPlugin(repoDir, 'api', ['AUTH_AUDIENCE'])
 		await writeSecretsPlugin(repoDir, 'worker', ['QUEUE_SIGNING_SECRET'])
-		expect((await detectRequiredEnv(repoDir)).sort()).toEqual(['AUTH_AUDIENCE', 'QUEUE_SIGNING_SECRET'])
+		expect((await detectRequiredEnv(repoDir)).sort()).toEqual([
+			'AUTH_AUDIENCE',
+			'QUEUE_SIGNING_SECRET',
+		])
 	})
 
 	it('Returns [] for a static repo with no plugins', async () => {
 		expect(await detectRequiredEnv(repoDir)).toEqual([])
+	})
+
+	it('Detects env in a non-apps/ layout (root-level src, as serverEntryOf now boots)', async () => {
+		await mkdir(join(repoDir, 'src', 'plugins'), { recursive: true })
+		await writeFile(
+			join(repoDir, 'src', 'plugins', 'secrets.ts'),
+			`const required = ['AUTH_AUDIENCE', 'SESSION_SECRET'] as const\nexport default required\n`
+		)
+		expect((await detectRequiredEnv(repoDir)).sort()).toEqual(['AUTH_AUDIENCE', 'SESSION_SECRET'])
 	})
 })
 
@@ -91,6 +120,13 @@ describe('isSelfIssuedSecret', () => {
 	it("An external provider's secret is NOT (a random value would boot but silently fail live)", () => {
 		expect(isSelfIssuedSecret('STRIPE_WEBHOOK_SECRET')).toBe(false)
 		expect(isSelfIssuedSecret('GITHUB_OAUTH_CLIENT_SECRET')).toBe(false)
+	})
+
+	it('An UNKNOWN secret-shaped var is NOT minted (inverted default → placeholder, never silent random)', () => {
+		// Not on any external-provider list, but also not a known self-issued name → not minted.
+		expect(isSelfIssuedSecret('PLAID_CLIENT_SECRET')).toBe(false)
+		expect(isSelfIssuedSecret('ACME_API_SECRET')).toBe(false)
+		expect(isSelfIssuedSecret('WEBHOOK_SECRET_KEY')).toBe(false)
 	})
 
 	it('A non-secret var is not generatable this way', () => {
@@ -117,7 +153,12 @@ describe('buildEnvManifest', () => {
 		})
 		// generated app secrets are always on (the app uses them at runtime beyond the boot check)
 		expect(Object.keys(manifest.env)).toEqual(
-			expect.arrayContaining(['AUTH_JWT_SECRET', 'VAPID_PUBLIC_KEY', 'VAPID_PRIVATE_KEY', 'VAPID_SUBJECT'])
+			expect.arrayContaining([
+				'AUTH_JWT_SECRET',
+				'VAPID_PUBLIC_KEY',
+				'VAPID_PRIVATE_KEY',
+				'VAPID_SUBJECT',
+			])
 		)
 		expect(manifest.placeholders).toEqual([])
 		expect(manifest.todos).toEqual([])
@@ -144,6 +185,16 @@ describe('buildEnvManifest', () => {
 		expect(manifest.placeholders).toEqual(['STRIPE_SECRET_KEY'])
 		expect(manifest.todos).toHaveLength(1)
 		expect(manifest.todos[0]).toContain('STRIPE_SECRET_KEY')
+	})
+
+	it('An unknown provider secret (PLAID_CLIENT_SECRET) → flagged placeholder + TODO, never a silent random', async () => {
+		await writeSecretsPlugin(repoDir, 'api', ['PLAID_CLIENT_SECRET'])
+		const manifest = await buildEnvManifest(repoDir, previewAuth)
+		expect(manifest.env.PLAID_CLIENT_SECRET).toBe(placeholderValue('PLAID_CLIENT_SECRET'))
+		expect(isPlaceholderValue(manifest.env.PLAID_CLIENT_SECRET!)).toBe(true)
+		expect(manifest.placeholders).toEqual(['PLAID_CLIENT_SECRET'])
+		expect(manifest.todos).toHaveLength(1)
+		expect(manifest.todos[0]).toContain('PLAID_CLIENT_SECRET')
 	})
 
 	it('AUTH_AUDIENCE required but no previewAuth → placeholder, not a silent omission', async () => {
