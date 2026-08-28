@@ -54,6 +54,78 @@ export const totalTokens = (usage: TokenUsage) =>
 			(usage.cacheReadInputTokens ?? 0) * cacheReadWeight
 	)
 
+// MARK: Cost
+
+/**
+ * Anthropic list price of a model, USD per **million** tokens, one rate per bucket. Output bills
+ * at its own (higher) rate; cache reads at 0.1× input; 5-minute cache writes at 1.25× input — the
+ * same ratios for every model.
+ */
+export type ModelPrice = {
+	/** USD / MTok, uncached input */
+	input: number
+	/** USD / MTok, output — Anthropic bills output ~5× input */
+	output: number
+	/** USD / MTok, cache-read input (0.1× input) */
+	cacheRead: number
+	/** USD / MTok, cache-write input (1.25× input, 5-minute TTL) */
+	cacheWrite: number
+}
+
+/**
+ * Per-model list prices, keyed by model-id prefix (longest match wins). These drive **billing**
+ * (`cost`), never the budget cap (`totalTokens`).
+ *
+ * Source: Anthropic pricing — https://www.anthropic.com/pricing and the Claude Developer Platform
+ * pricing page (captured 2026-08-28). Cache-read = 0.1× input, cache-write (5-min) = 1.25× input.
+ *
+ * TODO-EXTERNAL: Hasse to confirm the exact per-model USD/MTok rates against the Anthropic console
+ * before these figures drive real customer invoices (see TODO-EXTERNAL.md).
+ */
+export const modelPrices: Record<string, ModelPrice> = {
+	'claude-opus': { input: 15, output: 75, cacheRead: 1.5, cacheWrite: 18.75 },
+	'claude-sonnet': { input: 3, output: 15, cacheRead: 0.3, cacheWrite: 3.75 },
+	'claude-haiku': { input: 1, output: 5, cacheRead: 0.1, cacheWrite: 1.25 },
+	'claude-3-5-haiku': { input: 0.8, output: 4, cacheRead: 0.08, cacheWrite: 1 },
+}
+
+/** Unknown model ids price at the Sonnet tier, so a new model name never bills at zero */
+export const fallbackModelPrice: ModelPrice = modelPrices['claude-sonnet']!
+
+/** The price of a model id: the longest matching prefix in `prices`, else the Sonnet fallback */
+export const priceForModel = (
+	model: string,
+	prices: Record<string, ModelPrice> = modelPrices
+): ModelPrice => {
+	const match = Object.keys(prices)
+		.filter(prefix => model.startsWith(prefix))
+		.sort((a, b) => b.length - a.length)[0]
+	return match ? prices[match]! : fallbackModelPrice
+}
+
+const perMillionTokens = 1_000_000
+
+/**
+ * Actual USD **cost** of a usage sample at a model's list prices — the billing basis, distinct
+ * from `totalTokens` (the budget-cap metric, kept unchanged). Every bucket bills at its own rate:
+ * output ~5× input, cache reads 0.1×, cache writes 1.25×. Resident metering multiplies this by the
+ * markup to bill; the cap still counts weighted `totalTokens` only.
+ */
+export const cost = (
+	usage: TokenUsage,
+	model: string,
+	prices: Record<string, ModelPrice> = modelPrices
+): number => {
+	const price = priceForModel(model, prices)
+	return (
+		(usage.inputTokens * price.input +
+			usage.outputTokens * price.output +
+			(usage.cacheReadInputTokens ?? 0) * price.cacheRead +
+			(usage.cacheCreationInputTokens ?? 0) * price.cacheWrite) /
+		perMillionTokens
+	)
+}
+
 export type TaskOutcome = {
 	ok: boolean
 	tokens: number
