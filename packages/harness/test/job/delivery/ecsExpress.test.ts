@@ -276,13 +276,13 @@ describe('ECS Express deploy client', () => {
 			source: { bucket: 'mf-artifacts-test', key: 'deliverables/11111111/source.zip' },
 		})
 
-		// Assert — Create failed, Describe (by name) recovered the URL
+		// Assert — Create failed, Describe (by the constructed service ARN) recovered the URL
 		expect(url).toBe('https://svc.eu-north-1.on.aws')
 		expect(names(sent)).toEqual([
 			'CreateExpressGatewayServiceCommand',
 			'DescribeExpressGatewayServiceCommand',
 		])
-		expect(sent[1]!.input).toMatchObject({ serviceArn: 'mf-11111111-gym' })
+		expect(sent[1]!.input).toMatchObject({ serviceArn: expect.stringContaining('service/default/mf-11111111-gym') })
 	})
 
 	it('Rethrows a create error that is not an already-exists / idempotency error', async () => {

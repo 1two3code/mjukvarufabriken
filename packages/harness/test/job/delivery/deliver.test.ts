@@ -401,16 +401,17 @@ describe('deliver', () => {
 		const outcome = await deliver(input, clients)
 
 		// Assert — the boot ran with the repo + the auth contract env, and the deploy went ahead
-		expect(boot.calls).toEqual([
-			{
-				repoDir,
-				env: {
-					AUTH_ISSUER: previewAuth.issuer,
-					AUTH_JWKS_URL: previewAuth.jwksUrl,
-					AUTH_AUDIENCE: previewAuth.audience,
-				},
-			},
-		])
+		expect(boot.calls).toHaveLength(1)
+		expect(boot.calls[0]!.repoDir).toBe(repoDir)
+		expect(boot.calls[0]!.env).toMatchObject({
+			AUTH_ISSUER: previewAuth.issuer,
+			AUTH_JWKS_URL: previewAuth.jwksUrl,
+			AUTH_AUDIENCE: previewAuth.audience,
+		})
+		// generated app secrets so an app requiring them boots in the smoke check
+		expect(Object.keys(boot.calls[0]!.env ?? {})).toEqual(
+			expect.arrayContaining(['AUTH_JWT_SECRET', 'VAPID_PUBLIC_KEY', 'VAPID_PRIVATE_KEY', 'VAPID_SUBJECT'])
+		)
 		expect(deploy.deployments).toHaveLength(1)
 		expect(outcome.steps[2]).toMatchObject({ step: 'deploy', ok: true })
 	})

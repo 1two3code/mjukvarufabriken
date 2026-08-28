@@ -93,7 +93,7 @@ export const bootArtifact = ({
 		const child: ChildProcess = spawnFn(launched.command, launched.args, {
 			cwd,
 			// The boot env is applied last so the app's required runtime env wins over the sandbox base
-			env: { ...sandboxEnv(), PORT: '8080', HOST: '0.0.0.0', ...env },
+			env: { ...sandboxEnv(), PORT: '8080', ADDRESS: '0.0.0.0', HOST: '0.0.0.0', ...env },
 			stdio: ['ignore', 'pipe', 'pipe'],
 			detached: true,
 		})

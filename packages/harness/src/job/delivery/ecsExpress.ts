@@ -24,6 +24,8 @@ export const expressServiceName = (name: string) =>
 		.slice(0, 255) || 'mf-app'
 
 /** The api's auth env (the same `previewAuth` the App Runner client wrote into `apprunner.yaml`) */
+import { appSecretsEnv } from './appSecrets.ts'
+
 const previewAuthEnv = (auth?: PreviewAuth) =>
 	auth
 		? [
@@ -126,6 +128,10 @@ export const createEcsExpressDeployClient = ({
 }: EcsExpressOptions): DeployClient => {
 	// `serviceIdentifier` is the ARN when we have it (after Create) and the deterministic name
 	// otherwise (the idempotency fallback, where Create threw before handing back an ARN)
+	const account = executionRoleArn.split(':')[4] ?? ''
+	// Build the full service ARN (the API describes by ARN, not by bare name) for the idempotency
+	// fallback below.
+	const serviceArnOf = (svc: string) => `arn:aws:ecs:${region ?? ''}:${account}:service/${cluster}/${svc}`
 	const describe = async (serviceIdentifier: string) =>
 		(await client.send(new DescribeExpressGatewayServiceCommand({ serviceArn: serviceIdentifier })))
 			.service
@@ -166,7 +172,7 @@ export const createEcsExpressDeployClient = ({
 			return (await client.send(new CreateExpressGatewayServiceCommand(createInput))).service
 		} catch (error) {
 			if (!isAlreadyCreated(error)) throw error
-			const existing = await describe(name).catch(() => undefined)
+			const existing = await describe(serviceArnOf(name)).catch(() => undefined)
 			if (existing?.serviceArn) return existing
 			throw error
 		}
@@ -192,7 +198,7 @@ export const createEcsExpressDeployClient = ({
 				primaryContainer: {
 					image: imageUri,
 					containerPort,
-					environment: previewAuthEnv(previewAuth),
+					environment: [...previewAuthEnv(previewAuth), ...appSecretsEnv()],
 					// Always wire the log group so a boot crash lands in CloudWatch, not just an exit code
 					awsLogsConfiguration: { logGroup, logStreamPrefix: name },
 				},

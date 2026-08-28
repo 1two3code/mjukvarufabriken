@@ -10,8 +10,9 @@ import { join } from 'node:path'
  * `templates/web`, which ships OUR `deploy.yml` / `deploy-environment.yml` (OIDC into the
  * Mjukvaruhuset account) plus a CI that also runs `cdk synth`. Handing those to a customer would
  * (a) leak our deploy topology and (b) fail for them (no role, no bootstrap). Delivery strips the
- * whole `.github/workflows` directory and writes this single clean workflow in its place — which
- * also means the GitHub App no longer needs the `workflows` permission to push the repo.
+ * whole `.github/workflows` directory and writes this single clean workflow in its place, so our
+ * OIDC deploy topology never ships. (Pushing this CI is itself a workflow, so the GitHub App keeps
+ * its `workflows` permission — but it now only pushes a lint+test CI, not our deploy.)
  */
 export const customerCiWorkflow = `name: CI
 

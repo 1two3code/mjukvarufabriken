@@ -1,4 +1,5 @@
 import { deliverableKeyOf, uploadBundle, uploadSite, uploadSource } from './bundle.ts'
+import { generateAppSecrets } from './appSecrets.ts'
 import { curateWorkflows } from './curate.ts'
 import { writeDocs } from './docs.ts'
 import { defaultGitHubOrg } from './github.ts'
@@ -12,19 +13,22 @@ import type { TokenUsage } from '#job/types.ts'
 import type { DeliveryClients, DeliveryInput, DeliveryOutcome, PreviewAuth } from './types.ts'
 
 /**
- * The runtime env the boot smoke injects. Today only the template's auth contract (the same
- * `previewAuth` the deploy passes to the container). Generated apps evolve their own required
- * env (own JWT secret, web-push VAPID keys, …); injecting those needs an app-declared env
- * manifest — a follow-up (TODO-EXTERNAL), tracked in wave7 stream 8.
+ * The runtime env the boot smoke injects: the template auth contract (the `previewAuth` the deploy
+ * passes) PLUS generated app secrets (JWT + web-push VAPID) so an app that requires its own secrets
+ * actually boots in the check instead of false-failing. The live deploy generates its own set
+ * independently (the values need not match — the app only needs them present). A per-app declared
+ * env manifest (arbitrary required vars beyond these) remains a follow-up, tracked in wave7 stream 8.
  */
-export const bootEnvOf = (previewAuth?: PreviewAuth): Record<string, string> =>
-	previewAuth
+export const bootEnvOf = (previewAuth?: PreviewAuth): Record<string, string> => ({
+	...generateAppSecrets(),
+	...(previewAuth
 		? {
 				AUTH_ISSUER: previewAuth.issuer,
 				AUTH_JWKS_URL: previewAuth.jwksUrl,
 				AUTH_AUDIENCE: previewAuth.audience,
 			}
-		: {}
+		: {}),
+})
 
 /** Throws on a failed add/commit: the pushed repo and repo.zip must carry the docs */
 const commitDocs = async (repoDir: string, signal: AbortSignal) => {

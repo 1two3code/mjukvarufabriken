@@ -117,7 +117,7 @@ npm run build
 
 - \`infra/\` is a CDK app (S3 + CloudFront for the SPA, ECS Fargate for the api): \`npm i --prefix infra && cd infra && npx cdk deploy --all\`. This is the real, owned deployment of your application.
 - The preview URL in the portal is a throwaway Amazon ECS Express Mode service Mjukvaruhuset creates from a container image built from this repo — it is a convenience preview, not your production deployment. Use \`infra/\` above for that.
-- CI: \`.github/workflows/ci.yml\` runs lint, tests, build and synth on every push.
+- CI: \`.github/workflows/ci.yml\` runs lint, tests and build on every push/PR to \`main\`.
 
 ## Acceptance tests
 
