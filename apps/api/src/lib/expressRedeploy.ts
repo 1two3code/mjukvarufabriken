@@ -43,7 +43,7 @@ const emptyTally = (): OutcomeTally => ({
 
 /** ECS answers a create for a service that is already up with one of these — treat it as resumed. */
 const isAlreadyCreated = (error: unknown) =>
-	/not idempotent|already exists|already created|not found/i.test((error as Error).message ?? '')
+	/not idempotent|already exists|already created/i.test((error as Error).message ?? '')
 
 /**
  * A deterministic idempotency token from the service name (mirrors the delivery client): an SDK
