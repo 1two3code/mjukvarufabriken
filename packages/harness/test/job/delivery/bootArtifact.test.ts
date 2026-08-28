@@ -164,6 +164,47 @@ describe('boot target + clients', () => {
 		expect(target?.args).toEqual([serverEntry])
 	})
 
+	it('Resolves the entry named by the package.json start script (a renamed api)', async () => {
+		// A generated app that renamed its api to apps/server and points `start` at it
+		await mkdir(join(root, 'apps/server/src'), { recursive: true })
+		await writeFile(join(root, 'apps/server/src/index.ts'), 'console.log("Server listening")\n')
+		await writeFile(
+			join(root, 'package.json'),
+			JSON.stringify({ scripts: { start: 'node --env-file=.env apps/server/src/index.ts' } })
+		)
+		const target = await resolveBootTarget(root)
+		expect(target?.args).toEqual(['apps/server/src/index.ts'])
+		expect(target?.command).toBe(process.execPath)
+	})
+
+	it('Falls back to scanning apps/*/src/index.ts when there is no usable start script', async () => {
+		// No package.json start entry that exists → scan finds the non-api app's server entry
+		await mkdir(join(root, 'apps/web/src'), { recursive: true })
+		await writeFile(join(root, 'apps/web/src/index.ts'), 'console.log("Server listening")\n')
+		const target = await resolveBootTarget(root)
+		expect(target?.args).toEqual(['apps/web/src/index.ts'])
+	})
+
+	it('Prefers the app named api when several apps have a server entry', async () => {
+		await mkdir(join(root, 'apps/web/src'), { recursive: true })
+		await mkdir(join(root, 'apps/api/src'), { recursive: true })
+		await writeFile(join(root, 'apps/web/src/index.ts'), 'x\n')
+		await writeFile(join(root, 'apps/api/src/index.ts'), 'x\n')
+		const target = await resolveBootTarget(root)
+		expect(target?.args).toEqual(['apps/api/src/index.ts'])
+	})
+
+	it('Ignores a start script whose entry does not exist on disk (npm indirection)', async () => {
+		await mkdir(join(root, 'apps/api/src'), { recursive: true })
+		await writeFile(join(root, 'apps/api/src/index.ts'), 'x\n')
+		await writeFile(
+			join(root, 'package.json'),
+			JSON.stringify({ scripts: { start: 'npm run -w @mf/api start' } })
+		)
+		const target = await resolveBootTarget(root)
+		expect(target?.args).toEqual(['apps/api/src/index.ts'])
+	})
+
 	it('Resolves no target for a static delivery (no server entry) → the boot check passes', async () => {
 		expect(await resolveBootTarget(root)).toBeUndefined()
 		const boot = createNodeBootCheck()

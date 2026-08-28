@@ -146,6 +146,58 @@ describe('ECS Express deploy client', () => {
 		expect(sleep).toHaveBeenCalledTimes(1)
 	})
 
+	it('Injects the app-required env (manifest) into the container, auth contract included', async () => {
+		// Arrange
+		const { client, sent } = createStub({ createEndpoint: 'svc.eu-north-1.on.aws' })
+		const deploy = deployClient(client, { imageBuilder: createFakeImageBuilder() })
+
+		// Act — delivery passes the full required set (generated secrets + a placeholder)
+		await deploy.deployFromRepo({
+			serviceName: 'mf-11111111-gym',
+			repositoryUrl: 'https://github.com/x/new',
+			branch: 'main',
+			source: { bucket: 'mf-artifacts-test', key: 'deliverables/11111111/source.zip' },
+			env: {
+				AUTH_JWT_SECRET: 'generated-jwt',
+				APP_SIGNING_SECRET: 'generated-signing',
+				STRIPE_SECRET_KEY: 'TODO_SET_BY_OPERATOR_STRIPE_SECRET_KEY',
+			},
+		})
+
+		// Assert — every manifest var reached the container, plus the auth contract, no dupes
+		const environment = (
+			sent[0]!.input.primaryContainer as { environment: { name: string; value: string }[] }
+		).environment
+		expect(environment).toEqual(
+			expect.arrayContaining([
+				{ name: 'AUTH_ISSUER', value: 'https://api.mjukvaruhuset.se' },
+				{ name: 'AUTH_JWT_SECRET', value: 'generated-jwt' },
+				{ name: 'APP_SIGNING_SECRET', value: 'generated-signing' },
+				{ name: 'STRIPE_SECRET_KEY', value: 'TODO_SET_BY_OPERATOR_STRIPE_SECRET_KEY' },
+			])
+		)
+		const names_ = environment.map(entry => entry.name)
+		expect(new Set(names_).size).toBe(names_.length)
+	})
+
+	it('Falls back to the generated app secrets when no env is passed (older callers)', async () => {
+		const { client, sent } = createStub({ createEndpoint: 'svc.eu-north-1.on.aws' })
+		const deploy = deployClient(client, { imageBuilder: createFakeImageBuilder() })
+		await deploy.deployFromRepo({
+			serviceName: 'mf-11111111-gym',
+			repositoryUrl: 'https://github.com/x/new',
+			branch: 'main',
+			source: { bucket: 'mf-artifacts-test', key: 'deliverables/11111111/source.zip' },
+		})
+		const environment = (
+			sent[0]!.input.primaryContainer as { environment: { name: string; value: string }[] }
+		).environment
+		const names_ = environment.map(entry => entry.name)
+		expect(names_).toEqual(
+			expect.arrayContaining(['AUTH_ISSUER', 'AUTH_JWT_SECRET', 'VAPID_PUBLIC_KEY', 'VAPID_SUBJECT'])
+		)
+	})
+
 	it('Fails the deploy when the image build fails — no service is created', async () => {
 		// Arrange
 		const { client, sent } = createStub()

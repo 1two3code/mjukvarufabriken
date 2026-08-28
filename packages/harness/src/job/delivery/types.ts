@@ -56,6 +56,13 @@ export type DeployClient = {
 		branch: string
 		/** S3 location of this job's repo zip — CodeBuild builds the image from it (per-job source) */
 		source: { bucket: string; key: string }
+		/**
+		 * The built app's full required runtime env (from the env manifest: generated app secrets,
+		 * auth contract, self-issued secrets, flagged placeholders) to set on the live container, so
+		 * an app requiring its own secrets runs live instead of crashlooping. Omitted → the client
+		 * falls back to the fixed generated app-secret set (older callers / static deliveries).
+		 */
+		env?: Record<string, string>
 		signal?: AbortSignal
 	}) => Promise<{ url: string }>
 }

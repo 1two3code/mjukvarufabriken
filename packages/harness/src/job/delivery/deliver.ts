@@ -1,5 +1,5 @@
 import { deliverableKeyOf, uploadBundle, uploadSite, uploadSource } from './bundle.ts'
-import { generateAppSecrets } from './appSecrets.ts'
+import { buildEnvManifest } from './envManifest.ts'
 import { curateWorkflows } from './curate.ts'
 import { writeDocs } from './docs.ts'
 import { defaultGitHubOrg } from './github.ts'
@@ -10,25 +10,7 @@ import { totalTokens } from '#job/types.ts'
 
 import type { Deliverable, DeliveryEventPayload, NotifyPayload } from '@mf/models'
 import type { TokenUsage } from '#job/types.ts'
-import type { DeliveryClients, DeliveryInput, DeliveryOutcome, PreviewAuth } from './types.ts'
-
-/**
- * The runtime env the boot smoke injects: the template auth contract (the `previewAuth` the deploy
- * passes) PLUS generated app secrets (JWT + web-push VAPID) so an app that requires its own secrets
- * actually boots in the check instead of false-failing. The live deploy generates its own set
- * independently (the values need not match — the app only needs them present). A per-app declared
- * env manifest (arbitrary required vars beyond these) remains a follow-up, tracked in wave7 stream 8.
- */
-export const bootEnvOf = (previewAuth?: PreviewAuth): Record<string, string> => ({
-	...generateAppSecrets(),
-	...(previewAuth
-		? {
-				AUTH_ISSUER: previewAuth.issuer,
-				AUTH_JWKS_URL: previewAuth.jwksUrl,
-				AUTH_AUDIENCE: previewAuth.audience,
-			}
-		: {}),
-})
+import type { DeliveryClients, DeliveryInput, DeliveryOutcome } from './types.ts'
 
 /** Throws on a failed add/commit: the pushed repo and repo.zip must carry the docs */
 const commitDocs = async (repoDir: string, signal: AbortSignal) => {
@@ -194,10 +176,23 @@ export const deliver = async (
 	// MARK: deploy (best effort)
 	let deployUrl: string | null = null
 	let deployReason: string | undefined
+	// Detect the built app's OWN required runtime env and resolve a value for each (generated app
+	// secrets + auth contract, a fresh self-issued secret, or a flagged placeholder). The SAME set
+	// is injected into the boot smoke-check and the live container, so an app requiring arbitrary
+	// secrets boots in the check AND runs live — not just the fixed template contract.
+	const manifest = await buildEnvManifest(repoDir, previewAuth)
+	if (manifest.todos.length) {
+		// A required var we could not generate got a placeholder — surface it, never silently omit it.
+		const note = `env manifest: ${manifest.placeholders.length} required var(s) need operator values before real use — ${manifest.placeholders.join(', ')}`
+		deployReason = manifest.todos.join('\n')
+		await emit({ type: 'log', payload: { message: `${note}\n${manifest.todos.join('\n')}` } }).catch(
+			() => {}
+		)
+	}
 	// Acceptance smoke: boot the built artifact before standing up a service. In-process green
 	// (lint + vitest) does not prove `node src/index.ts` boots — an env-contract mismatch or a
 	// CJS/ESM interop crash only shows here. A boot failure skips the deploy (no crashlooping 503).
-	const bootResult = boot ? await boot.boot({ repoDir, env: bootEnvOf(previewAuth), signal }) : undefined
+	const bootResult = boot ? await boot.boot({ repoDir, env: manifest.env, signal }) : undefined
 	if (bootResult && !bootResult.ok) {
 		deployReason = `acceptance boot: the built app did not start — ${bootResult.reason ?? 'no "Server listening"'}`
 	} else {
@@ -210,6 +205,8 @@ export const deliver = async (
 					repositoryUrl,
 					branch: 'main',
 					source,
+					// The full required set for the live container, so it runs and does not crashloop
+					env: manifest.env,
 					signal,
 				})
 			).url

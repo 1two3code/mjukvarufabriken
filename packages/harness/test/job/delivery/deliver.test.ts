@@ -416,6 +416,43 @@ describe('deliver', () => {
 		expect(outcome.steps[2]).toMatchObject({ step: 'deploy', ok: true })
 	})
 
+	it('Injects the app-declared required env into BOTH the boot check and the deploy container', async () => {
+		// Arrange — a repo whose secrets plugin requires a non-template var (family-hub #2 shape):
+		// a self-issued secret (generated) and an external one (placeholder + TODO surfaced)
+		await mkdir(join(repoDir, 'apps/api/src/plugins'), { recursive: true })
+		await writeFile(
+			join(repoDir, 'apps/api/src/plugins/secrets.ts'),
+			`const required = ['AUTH_JWT_SECRET', 'APP_SIGNING_SECRET', 'MAPBOX_TOKEN'] as const\n`
+		)
+		const deploy = createFakeDeployClient()
+		const boot = createFakeBootCheck({ ok: true, output: 'Server listening' })
+		const { clients } = createClients({ deploy, boot })
+		const input = createInput(repoDir)
+
+		// Act
+		const outcome = await deliver(input, clients)
+
+		// Assert — the boot smoke got the full resolved set: app secrets + the generated self-issued
+		// secret + a flagged placeholder for the external one
+		const bootEnv = boot.calls[0]!.env
+		expect(Object.keys(bootEnv)).toEqual(
+			expect.arrayContaining(['AUTH_JWT_SECRET', 'VAPID_PUBLIC_KEY', 'APP_SIGNING_SECRET', 'MAPBOX_TOKEN'])
+		)
+		expect(bootEnv.APP_SIGNING_SECRET).toBeTruthy()
+		expect(bootEnv.APP_SIGNING_SECRET!.startsWith('TODO_SET_BY_OPERATOR_')).toBe(false)
+		expect(bootEnv.MAPBOX_TOKEN).toBe('TODO_SET_BY_OPERATOR_MAPBOX_TOKEN')
+
+		// The SAME full set was injected into the live deploy container, so it runs (not just boots)
+		expect(deploy.envs[0]).toEqual(bootEnv)
+
+		// The placeholder is surfaced to the operator, not silently omitted
+		const log = input.events.find(
+			event => event.type === 'log' && /MAPBOX_TOKEN/.test((event.payload as { message: string }).message)
+		)
+		expect(log).toBeTruthy()
+		expect(outcome.steps[2]).toMatchObject({ step: 'deploy', ok: true })
+	})
+
 	it('Fails closed when the push fails — no deploy, no bundle', async () => {
 		// Arrange
 		const { deploy, artifacts, clients } = createClients({
