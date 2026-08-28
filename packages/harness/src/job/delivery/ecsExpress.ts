@@ -32,6 +32,9 @@ const previewAuthEnv = (auth?: PreviewAuth) =>
 		: []
 
 /** The PUBLIC ingress endpoint of the active configuration, once ECS has populated it */
+/** The endpoint may already carry a scheme (real AWS returns `https://…on.aws`); don't double it */
+const toHttpsUrl = (endpoint: string) => (/^https?:\/\//i.test(endpoint) ? endpoint : `https://${endpoint}`)
+
 const publicEndpointOf = (service?: ECSExpressGatewayService) =>
 	service?.activeConfigurations
 		?.flatMap(configuration => configuration.ingressPaths ?? [])
@@ -149,7 +152,7 @@ export const createEcsExpressDeployClient = ({
 			if (!service?.serviceArn) {
 				throw new Error('ECS CreateExpressGatewayService returned no service')
 			}
-			return { url: `https://${await waitForEndpoint(service, signal)}` }
+			return { url: toHttpsUrl(await waitForEndpoint(service, signal)) }
 		},
 	}
 }

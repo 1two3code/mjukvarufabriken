@@ -79,6 +79,15 @@ const clients = createLiveDeliveryClients({
 	expressExecutionRoleArn: process.env.EXPRESS_EXECUTION_ROLE_ARN,
 	expressInfrastructureRoleArn: process.env.EXPRESS_INFRASTRUCTURE_ROLE_ARN,
 	cluster: process.env.ECS_CLUSTER,
+	previewAuth: process.env.PREVIEW_AUTH_ISSUER
+		? {
+				issuer: process.env.PREVIEW_AUTH_ISSUER,
+				jwksUrl:
+					process.env.PREVIEW_AUTH_JWKS_URL ??
+					`${process.env.PREVIEW_AUTH_ISSUER.replace(/\/$/, '')}/.well-known/jwks.json`,
+				audience: process.env.PREVIEW_AUTH_AUDIENCE ?? 'mjukvaruhuset',
+			}
+		: undefined,
 	artifactsBucket: process.env.ARTIFACTS_BUCKET,
 	log: line => console.log(line),
 })

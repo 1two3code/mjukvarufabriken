@@ -107,6 +107,18 @@ describe('ECS Express deploy client', () => {
 		})
 	})
 
+	it('Does not double the scheme when AWS returns an endpoint that already has https://', async () => {
+		const { client } = createStub({ createEndpoint: 'https://mf-abc.ecs.eu-north-1.on.aws' })
+		const deploy = deployClient(client, { imageBuilder: createFakeImageBuilder() })
+		const { url } = await deploy.deployFromRepo({
+			serviceName: 'mf-11111111-gym',
+			repositoryUrl: 'https://github.com/x/new',
+			branch: 'main',
+			source: { bucket: 'mf-artifacts-test', key: 'deliverables/11111111/source.zip' },
+		})
+		expect(url).toBe('https://mf-abc.ecs.eu-north-1.on.aws')
+	})
+
 	it('Polls DescribeExpressGatewayService until the endpoint is populated', async () => {
 		// Arrange — Create returns no endpoint yet; the second Describe has it
 		const { client, sent } = createStub({
