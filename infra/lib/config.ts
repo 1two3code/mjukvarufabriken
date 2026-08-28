@@ -115,7 +115,7 @@ export const config: Config = {
 			githubOAuth: { clientId: 'Iv23liGn1P0xZHYqiBYa' },
 			// GitHub App install for delivery (id 157166357, 2026-08-28). `appId` pending — set it
 			// (the App's numeric App ID, not the client id) to enable the live repo push.
-			githubDelivery: { installationId: 157166357 },
+			githubDelivery: { appId: '4746145', installationId: 157166357 },
 			// `log` until SES production access is granted (TODO-EXTERNAL): copy the link from the api log
 			email: { transport: 'log', from: emailFrom },
 			domain: {
