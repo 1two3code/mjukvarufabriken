@@ -54,6 +54,8 @@ export type DeployClient = {
 		serviceName: string
 		repositoryUrl: string
 		branch: string
+		/** S3 location of this job's repo zip — CodeBuild builds the image from it (per-job source) */
+		source: { bucket: string; key: string }
 		signal?: AbortSignal
 	}) => Promise<{ url: string }>
 }

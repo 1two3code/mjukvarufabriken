@@ -1,4 +1,4 @@
-import { deliverableKeyOf, uploadBundle, uploadSite } from './bundle.ts'
+import { deliverableKeyOf, uploadBundle, uploadSite, uploadSource } from './bundle.ts'
 import { writeDocs } from './docs.ts'
 import { defaultGitHubOrg } from './github.ts'
 import { acceptanceReportOf } from './types.ts'
@@ -162,11 +162,14 @@ export const deliver = async (
 	let deployUrl: string | null = null
 	let deployReason: string | undefined
 	try {
+		// Per-job CodeBuild source: this job's repo zip in S3, so the image build is of THIS repo
+		const source = await uploadSource(jobId, repoDir, artifacts, signal)
 		deployUrl = (
 			await deploy.deployFromRepo({
 				serviceName: previewServiceName(jobId, target.slug),
 				repositoryUrl,
 				branch: 'main',
+				source,
 				signal,
 			})
 		).url

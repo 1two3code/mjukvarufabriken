@@ -122,9 +122,9 @@ export const createEcsExpressDeployClient = ({
 	}
 
 	return {
-		deployFromRepo: async ({ serviceName, signal }) => {
+		deployFromRepo: async ({ serviceName, source, signal }) => {
 			const name = expressServiceName(serviceName)
-			const { imageUri } = await imageBuilder.build({ imageTag: name, signal })
+			const { imageUri } = await imageBuilder.build({ imageTag: name, source, signal })
 			if (signal?.aborted) throw abortError()
 			const { service } = await client.send(
 				new CreateExpressGatewayServiceCommand({
@@ -157,7 +157,7 @@ export const createEcsExpressDeployClient = ({
 // MARK: Fakes
 
 export type FakeDeploy = DeployClient & {
-	deployments: { serviceName: string; repositoryUrl: string; branch: string }[]
+	deployments: { serviceName: string; repositoryUrl: string; branch: string; source: { bucket: string; key: string } }[]
 }
 
 /** Placeholder preview URL for the fakes/dry-run (cosmetic — the shape ECS Express hands out) */

@@ -221,11 +221,13 @@ describe('deliver', () => {
 				serviceName: 'mf-11111111-gym-booking',
 				repositoryUrl: 'https://github.com/mjukvaruhuset/gym-booking',
 				branch: 'main',
+				source: { bucket: 'mf-artifacts-test', key: 'delivery-source/11111111-2222-3333-4444-555555555555.zip' },
 			},
 		])
 		const prefix = 'deliverables/11111111-2222-3333-4444-555555555555/'
 		expect([...artifacts.objects.keys()].sort()).toEqual(
 			[
+				'delivery-source/11111111-2222-3333-4444-555555555555.zip',
 				`${prefix}HANDOVER.md`,
 				`${prefix}TEST-REPORT.md`,
 				`${prefix}acceptance.json`,

@@ -84,11 +84,15 @@ describe('ECS Express deploy client', () => {
 			serviceName: 'mf-11111111-gym',
 			repositoryUrl: 'https://github.com/x/new',
 			branch: 'main',
+			source: { bucket: 'mf-artifacts-test', key: 'deliverables/11111111/source.zip' },
 		})
 
 		// Assert — image built first (tag = service name), then a single Create, no Describe needed
 		expect(url).toBe('https://svc.eu-north-1.on.aws')
 		expect(imageBuilder.builds).toEqual(['mf-11111111-gym'])
+		expect(imageBuilder.sources).toEqual([
+			{ bucket: 'mf-artifacts-test', key: 'deliverables/11111111/source.zip' },
+		])
 		expect(names(sent)).toEqual(['CreateExpressGatewayServiceCommand'])
 		expect(sent[0]!.input).toMatchObject({
 			serviceName: 'mf-11111111-gym',
@@ -117,6 +121,7 @@ describe('ECS Express deploy client', () => {
 			serviceName: 'mf-11111111-gym',
 			repositoryUrl: 'https://github.com/x/new',
 			branch: 'main',
+			source: { bucket: 'mf-artifacts-test', key: 'deliverables/11111111/source.zip' },
 		})
 
 		// Assert
@@ -140,6 +145,7 @@ describe('ECS Express deploy client', () => {
 				serviceName: 'mf-11111111-gym',
 				repositoryUrl: 'https://github.com/x/new',
 				branch: 'main',
+				source: { bucket: 'mf-artifacts-test', key: 'deliverables/11111111/source.zip' },
 			})
 		).rejects.toThrow('fake: image build failed')
 		expect(sent).toEqual([])
@@ -160,6 +166,7 @@ describe('ECS Express deploy client', () => {
 				serviceName: 'mf-11111111-gym',
 				repositoryUrl: 'https://github.com/x/new',
 				branch: 'main',
+				source: { bucket: 'mf-artifacts-test', key: 'deliverables/11111111/source.zip' },
 			})
 		).rejects.toThrow('is INACTIVE')
 	})
@@ -175,6 +182,7 @@ describe('ECS Express deploy client', () => {
 			serviceName: 'mf-11111111-gym',
 			repositoryUrl: 'https://github.com/x/new',
 			branch: 'main',
+			source: { bucket: 'mf-artifacts-test', key: 'deliverables/11111111/source.zip' },
 			signal: controller.signal,
 		})
 		await vi.waitFor(() => expect(names(sent)).toContain('DescribeExpressGatewayServiceCommand'))

@@ -13,6 +13,8 @@ import type { CodeBuildClientLike } from './imageBuildClient.ts'
 export type ImageBuildInput = {
 	/** Tag for the built image (the job-unique service name); also the CodeBuild `IMAGE_TAG` override */
 	imageTag: string
+	/** S3 location of this job's repo zip — the per-job CodeBuild source (`sourceLocationOverride`) */
+	source: { bucket: string; key: string }
 	/** Kill switch / budget — rejects the build instead of polling on */
 	signal?: AbortSignal
 }
@@ -56,13 +58,8 @@ export type CodeBuildOptions = {
  * `<ecrRepositoryUri>:<imageTag>` the buildspec pushed to. The CodeBuild API is stable and
  * pre-cutoff; this is marked live-unverified only because it is never run in CI.
  *
- * GAP — NOT YET WIRED (finalize when live delivery is turned on): the build has no PER-JOB source.
- * `StartBuild` passes no `sourceLocationOverride`, so it would rebuild the CodeBuild project's
- * fixed source every time, not this job's repo. Before a real multi-customer deploy, either (a)
- * upload this job's built repo to S3 (e.g. `deliverables/<jobId>/source.zip`, before the deploy
- * step) and pass `sourceTypeOverride:'S3'` + `sourceLocationOverride:'<bucket>/<key>'`, or (b) point
- * the CodeBuild project at the pushed GitHub repo with a source-credential. This needs the
- * `mjukvaruhuset` org + a live run to verify, so it is intentionally left for that step.
+ * The per-job source is `sourceLocationOverride` (an S3 zip the delivery uploaded via
+ * `uploadSource`), so each delivery builds its own repo without any GitHub credentials in CodeBuild.
  */
 export const createCodeBuildImageBuilder = ({
 	project,
@@ -92,11 +89,14 @@ export const createCodeBuildImageBuilder = ({
 	}
 
 	return {
-		build: async ({ imageTag, signal }) => {
+		build: async ({ imageTag, source, signal }) => {
 			if (signal?.aborted) throw abortError()
 			const { build } = await client.send(
 				new StartBuildCommand({
 					projectName: project,
+					// Per-job source: build THIS job's repo zip, not the project's fixed source
+					sourceTypeOverride: 'S3',
+					sourceLocationOverride: `${source.bucket}/${source.key}`,
 					environmentVariablesOverride: [
 						{ name: 'ECR_REPOSITORY_URI', value: ecrRepositoryUri },
 						{ name: 'IMAGE_TAG', value: imageTag },
@@ -115,6 +115,8 @@ export const createCodeBuildImageBuilder = ({
 export type FakeImageBuilder = ImageBuilderLike & {
 	/** Every `build` call's image tag, in order — asserted by the tests */
 	builds: string[]
+	/** Every `build` call's per-job source, in order */
+	sources: { bucket: string; key: string }[]
 }
 
 /** In-memory image builder for the unit tests: records tags, returns a deterministic URI */
@@ -124,10 +126,12 @@ export const createFakeImageBuilder = (
 ): FakeImageBuilder => {
 	const fake: FakeImageBuilder = {
 		builds: [],
-		build: async ({ imageTag, signal }) => {
+		sources: [],
+		build: async ({ imageTag, source, signal }) => {
 			if (signal?.aborted) throw abortError()
 			if (fail) throw new Error('fake: image build failed')
 			fake.builds.push(imageTag)
+			fake.sources.push(source)
 			return { imageUri: `${ecrRepositoryUri}:${imageTag}` }
 		},
 	}

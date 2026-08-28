@@ -43,7 +43,7 @@ describe('CodeBuild image builder', () => {
 		})
 
 		// Act
-		const { imageUri } = await builder.build({ imageTag: 'mf-11111111-gym' })
+		const { imageUri } = await builder.build({ imageTag: 'mf-11111111-gym', source: { bucket: 'b', key: 'deliverables/11111111/source.zip' } })
 
 		// Assert
 		expect(imageUri).toBe(
@@ -56,6 +56,8 @@ describe('CodeBuild image builder', () => {
 		])
 		expect(sent[0]!.input).toMatchObject({
 			projectName: 'mf-delivery-build-dev',
+			sourceTypeOverride: 'S3',
+			sourceLocationOverride: 'b/deliverables/11111111/source.zip',
 			environmentVariablesOverride: [
 				{ name: 'ECR_REPOSITORY_URI', value: 'acct.dkr.ecr.eu-north-1.amazonaws.com/mf-deliverables-dev' },
 				{ name: 'IMAGE_TAG', value: 'mf-11111111-gym' },
@@ -75,7 +77,7 @@ describe('CodeBuild image builder', () => {
 		})
 
 		// Act + Assert
-		await expect(builder.build({ imageTag: 't' })).rejects.toThrow('CodeBuild build-1 finished FAILED')
+		await expect(builder.build({ imageTag: 't', source: { bucket: 'b', key: 'k' } })).rejects.toThrow('CodeBuild build-1 finished FAILED')
 	})
 
 	it('Stops polling as soon as the signal aborts', async () => {
@@ -90,7 +92,7 @@ describe('CodeBuild image builder', () => {
 		})
 
 		// Act
-		const pending = builder.build({ imageTag: 't', signal: controller.signal })
+		const pending = builder.build({ imageTag: 't', source: { bucket: 'b', key: 'k' }, signal: controller.signal })
 		await vi.waitFor(() => expect(names(sent)).toContain('BatchGetBuildsCommand'))
 		controller.abort()
 

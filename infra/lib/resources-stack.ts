@@ -294,6 +294,8 @@ export class ResourcesStack extends Stack {
 				},
 			}),
 		})
+		// Per-job source zips live under this prefix (see `uploadSource`); the override reads them
+		this.artifactsBucket.grantRead(this.deliveryBuildProject, 'delivery-source/*')
 		this.deliverablesRepository.grantPullPush(this.deliveryBuildProject)
 		this.artifactsBucket.grantRead(this.deliveryBuildProject)
 

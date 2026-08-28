@@ -156,6 +156,27 @@ export type SiteUploadOutcome = { url: string | null; files: number; reason?: st
  * v1 limitation: the artifacts bucket is private and not a website endpoint, so the returned
  * URL only works through a presigned link / the console — a CloudFront preview is M6+.
  */
+/**
+ * Uploads this job's built repo (`git archive` of `main`) as the per-job CodeBuild source zip,
+ * so the image build reads THIS repo, not the project's fixed source. Returns its S3 location.
+ */
+export const uploadSource = async (
+	jobId: string,
+	repoDir: string,
+	artifacts: ArtifactStore,
+	signal?: AbortSignal
+): Promise<{ bucket: string; key: string }> => {
+	// Under `delivery-source/` (an internal build input, not a customer deliverable) so the
+	// CodeBuild role's prefix grant covers it; per job so concurrent deliveries never collide.
+	const key = `delivery-source/${jobId}.zip`
+	await artifacts.putObject({
+		key,
+		body: await archiveMain(repoDir, signal),
+		contentType: 'application/zip',
+	})
+	return { bucket: artifacts.bucket, key }
+}
+
 export const uploadSite = async (
 	jobId: string,
 	repoDir: string,
