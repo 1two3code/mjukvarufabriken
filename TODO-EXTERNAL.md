@@ -36,3 +36,4 @@ Start these NOW; none of them block building the software.
 
 <!-- M5 live-delivery dev-notes (not external, tracked here for visibility):
 - ECS Express deploy client + CodeBuild image build are code-complete + dry-run/fake verified, infra deployed to dev, but LIVE-UNVERIFIED (post-cutoff API; no org yet). Before the first real deploy: wire the per-job CodeBuild source (upload the job's repo zip → sourceLocationOverride, or a GitHub-source project), then run one real delivery once the mjukvaruhuset org exists. -->
+| Catch-all inbound mail on mjukvaruhuset.se for `aws+<slug>@` addresses (2026-08-28) — each vended customer AWS account needs a unique deliverable root email; we only *send* from the domain today (SES). Set up SES inbound or a mail provider before the first real account vend | you | ~1 day | M11 / org account vending |

@@ -47,11 +47,10 @@ So the product loop becomes: **build once (factory) → iterate forever in dev w
    monthly fee is already decided) — per-environment cost visibility.
 
 ## Open decisions to lock (Hasse's calls)
-- **Whose account?** Do the customer's 3 environments live in **our** account (simplest, we operate
-  everything, cleaner metering) or **the customer's own AWS account** (M8's current decision — data
-  residency, they own it)? This is the biggest architectural fork. The resident-agent decision said
-  "customer's own account"; the live-updating-dev-server-with-LLM vision leans toward us hosting at
-  least dev. Could be hybrid: dev in ours, live in theirs — or all in ours until they graduate.
+- **Whose account? — RESOLVED 2026-08-28:** an AWS **Organization** vends one member account per
+  customer; we operate it (assume-role), the customer can graduate by moving the account out. The
+  three envs (dev/qa/live) are separate stacks inside that one account for v1. See the Decisions
+  section of PLAN.md and the build brief [org-accounts.md](org-accounts.md).
 - **Cost model for always-on dev + qa per customer.** Three ECS services (shared ALB helps) + a
   resident LLM per customer is real monthly cost. Need a per-customer pricing/cap tied to the
   resident monthly fee. Scale-to-zero for idle dev/qa?
