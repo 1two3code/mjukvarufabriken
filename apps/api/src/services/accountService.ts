@@ -1,12 +1,8 @@
 import fp from 'fastify-plugin'
-import {
-	canTransitionLifecycle,
-	lifecycleActionMode,
-	lifecycleActionTarget,
-} from '@mf/models'
+import { canTransitionLifecycle, lifecycleActionMode, lifecycleActionTarget } from '@mf/models'
 
-import { EntityInvalid, EntityNotFound } from '#/lib/entityError.ts'
 import { customerSlugForOrg } from '#/lib/customerSlug.ts'
+import { EntityInvalid, EntityNotFound } from '#/lib/entityError.ts'
 
 import type { FastifyInstance, FastifyPluginAsync } from 'fastify'
 import type { LifecycleAction, LifecycleState, Order, Org } from '@mf/models'
@@ -110,6 +106,17 @@ const plugin: FastifyPluginAsync = async app => {
 
 		// Only a delivered order carries a fence slug; without one there is no compute to act on, so
 		// deprovision is skipped and only the DB lifecycle transition (on confirm) applies.
+		//
+		// FOLLOW-UPS (documented, not built here):
+		//  - `resume` on ECS Express is a no-op: Express has no scale-to-zero, so a suspend DELETES the
+		//    service and a resume is a fresh redelivery the harness owns (see `ecsExpressHandler` in
+		//    plugins/org.ts, which reports `resume` as `skipped`). Resuming a suspended order therefore
+		//    flips the DB state back to `active` without re-standing-up compute — the redelivery is
+		//    still owed. Wiring resume→redelivery is the follow-up.
+		//  - The order stores only the LATEST `customerSlug`. A redelivery mints a new job-unique fence
+		//    (`<app>-<job8>`), so a prior delivery's still-running service (fenced under the OLD slug)
+		//    is orphaned — the lifecycle action only ever deprovisions the newest one. Tracking prior
+		//    fence slugs (or reconciling orphans by `Service=mf-delivery` + org) is the follow-up.
 		const deprovision = order.customerSlug
 			? await org.deprovision(
 					{ customerSlug: order.customerSlug, label },
@@ -120,6 +127,21 @@ const plugin: FastifyPluginAsync = async app => {
 
 		if (dryRun) {
 			return { action, dryRun: true, order, from, to, applied: false, deprovision }
+		}
+
+		// @mf/org `deprovision` NEVER throws on a per-resource action failure: it records
+		// `outcome: 'failed'` on that entry, tallies it in `summary.failed`, and returns normally. So a
+		// missing thrown error is NOT proof the AWS resources are gone — inspect the tally before
+		// advancing the DB lifecycle. If any resource failed we must not record the target state (least
+		// of all `torn_down`, which would strand live resources under a "gone" order). Leave the order
+		// where it is — a teardown from `suspended` stays `suspended`, so the grace sweep retries it —
+		// and surface the failure (the returned `deprovision.summary.failed` carries the count).
+		if (deprovision && deprovision.summary.failed > 0) {
+			app.log.warn(
+				{ orderId, action, from, to, failed: deprovision.summary.failed },
+				'Deprovision reported resource failures — lifecycle NOT advanced'
+			)
+			return { action, dryRun: false, order, from, to, applied: false, deprovision }
 		}
 
 		const updated = await db.orders.setLifecycle(orderId, [from], to)

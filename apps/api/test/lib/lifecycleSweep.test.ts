@@ -28,7 +28,7 @@ describe('Lifecycle grace-period sweep', () => {
 
 		const result = await runLifecycleSweep(app)
 
-		expect(result).toEqual({ checked: 0, tornDown: 0 })
+		expect(result).toEqual({ checked: 0, tornDown: 0, failed: 0 })
 		expect((await app.db.orders.getOrder(order.id))?.lifecycle).toBe('suspended')
 	})
 
@@ -41,7 +41,7 @@ describe('Lifecycle grace-period sweep', () => {
 
 		const result = await runLifecycleSweep(app)
 
-		expect(result).toEqual({ checked: 1, tornDown: 1 })
+		expect(result).toEqual({ checked: 1, tornDown: 1, failed: 0 })
 		expect((await app.db.orders.getOrder(order.id))?.lifecycle).toBe('torn_down')
 		// A real (confirmed) teardown, fenced to the order's Customer=<slug>
 		expect(app.org.deprovision).toHaveBeenCalledWith(
@@ -59,7 +59,38 @@ describe('Lifecycle grace-period sweep', () => {
 		await runLifecycleSweep(app)
 		const second = await runLifecycleSweep(app)
 
-		expect(second).toEqual({ checked: 0, tornDown: 0 })
+		expect(second).toEqual({ checked: 0, tornDown: 0, failed: 0 })
+	})
+
+	it('Leaves an order suspended when its teardown deprovision reports resource failures', async () => {
+		const order = await seedSuspended('order-fail')
+		vi.useFakeTimers()
+		vi.setSystemTime(Date.now() + 31 * 24 * 60 * 60 * 1000)
+		// @mf/org records outcome:failed and returns (it never throws) — the sweep must NOT tear down.
+		vi.mocked(app.org.deprovision).mockResolvedValueOnce({
+			mode: 'teardown',
+			dryRun: false,
+			customerSlug: 'app-order-fail',
+			discovered: 1,
+			fenced: 1,
+			skippedByFence: 0,
+			entries: [],
+			summary: {
+				planned: 0,
+				suspended: 0,
+				resumed: 0,
+				deleted: 0,
+				skipped: 0,
+				'already-gone': 0,
+				failed: 1,
+			},
+		})
+
+		const result = await runLifecycleSweep(app)
+
+		expect(result).toEqual({ checked: 1, tornDown: 0, failed: 1 })
+		// Still suspended, so the next hourly pass retries it.
+		expect((await app.db.orders.getOrder(order.id))?.lifecycle).toBe('suspended')
 	})
 
 	it('Continues past an order whose teardown throws (fault-tolerant)', async () => {

@@ -131,7 +131,11 @@ describe('Account Service', () => {
 
 		it('Skips deprovision for an order that never delivered (no customer slug)', async () => {
 			const org = await seedOrg()
-			const order = await app.db.orders.insert({ id: 'order-2', orgId: org.id, name: 'Undelivered' })
+			const order = await app.db.orders.insert({
+				id: 'order-2',
+				orgId: org.id,
+				name: 'Undelivered',
+			})
 
 			const result = await app.accountService.runLifecycleAction(order.id, 'suspend', {
 				confirm: true,
@@ -143,10 +147,46 @@ describe('Account Service', () => {
 			expect((await app.db.orders.getOrder(order.id))?.lifecycle).toBe('suspended')
 		})
 
+		it('Does NOT advance the lifecycle when the deprovision reports resource failures', async () => {
+			const { order } = await seedDeliveredOrder()
+			// Teardown runs from suspended → torn_down, so suspend first.
+			await app.accountService.runLifecycleAction(order.id, 'suspend', { confirm: true })
+
+			// @mf/org NEVER throws on a per-resource action failure: it records outcome:failed, tallies it
+			// in summary.failed, and returns normally. The service must inspect the tally, not just catch.
+			vi.mocked(app.org.deprovision).mockResolvedValueOnce({
+				mode: 'teardown',
+				dryRun: false,
+				customerSlug: 'acme-gym-11111111',
+				discovered: 1,
+				fenced: 1,
+				skippedByFence: 0,
+				entries: [],
+				summary: {
+					planned: 0,
+					suspended: 0,
+					resumed: 0,
+					deleted: 0,
+					skipped: 0,
+					'already-gone': 0,
+					failed: 1,
+				},
+			})
+
+			const result = await app.accountService.runLifecycleAction(order.id, 'teardown', {
+				confirm: true,
+			})
+
+			expect(result.applied).toBe(false)
+			expect(result.deprovision?.summary.failed).toBe(1)
+			// Kept suspended (not torn_down) so the grace sweep retries.
+			expect((await app.db.orders.getOrder(order.id))?.lifecycle).toBe('suspended')
+		})
+
 		it('Throws EntityNotFound for an unknown order', async () => {
-			await expect(
-				app.accountService.runLifecycleAction('order-nope', 'suspend')
-			).rejects.toThrow(EntityNotFound)
+			await expect(app.accountService.runLifecycleAction('order-nope', 'suspend')).rejects.toThrow(
+				EntityNotFound
+			)
 		})
 	})
 })

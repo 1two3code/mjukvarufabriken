@@ -18,25 +18,38 @@ export const graceWindowMs = (graceDays: number) => graceDays * dayMs
  */
 export const runLifecycleSweep = async (
 	app: FastifyInstance
-): Promise<{ checked: number; tornDown: number }> => {
+): Promise<{ checked: number; tornDown: number; failed: number }> => {
 	const changedBefore = new Date(Date.now() - graceWindowMs(app.secrets.orgLifecycle.graceDays))
 	const due = await app.db.orders.listSuspendedBefore(changedBefore)
-	if (!due.length) return { checked: 0, tornDown: 0 }
+	if (!due.length) return { checked: 0, tornDown: 0, failed: 0 }
 
 	let tornDown = 0
+	let failed = 0
 	for (const order of due) {
 		try {
 			const result = await app.accountService.runLifecycleAction(order.id, 'teardown', {
 				confirm: true,
 				label: 'grace-period sweep',
 			})
-			if (result.applied) tornDown++
+			if (result.applied) {
+				tornDown++
+			} else if (result.deprovision && result.deprovision.summary.failed > 0) {
+				// runLifecycleAction inspected the deprovision tally and kept the order `suspended`
+				// because a resource action reported `failed` (@mf/org records it rather than throwing).
+				// Surface it; the order stays in the `suspended` set, so the next hourly pass retries.
+				failed++
+				app.log.warn(
+					{ orderId: order.id, failed: result.deprovision.summary.failed },
+					'Grace-period teardown left order suspended — deprovision reported resource failures'
+				)
+			}
 		} catch (error) {
+			failed++
 			app.log.warn({ err: error, orderId: order.id }, 'Grace-period teardown failed')
 		}
 	}
 
-	const result = { checked: due.length, tornDown }
-	if (tornDown) app.log.info(result, 'Grace-period sweep tore down suspended orders')
+	const result = { checked: due.length, tornDown, failed }
+	if (tornDown || failed) app.log.info(result, 'Grace-period sweep ran over suspended orders')
 	return result
 }

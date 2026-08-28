@@ -1,6 +1,6 @@
 import fp from 'fastify-plugin'
-import { DeleteExpressGatewayServiceCommand, ECSClient } from '@aws-sdk/client-ecs'
 import { ECRClient } from '@aws-sdk/client-ecr'
+import { DeleteExpressGatewayServiceCommand, ECSClient } from '@aws-sdk/client-ecs'
 import { OrganizationsClient } from '@aws-sdk/client-organizations'
 import { ResourceGroupsTaggingAPIClient } from '@aws-sdk/client-resource-groups-tagging-api'
 import { S3Client } from '@aws-sdk/client-s3'
@@ -132,11 +132,16 @@ const plugin: FastifyPluginAsync = async app => {
 				{ client: organizations, log: (message, detail) => app.log.info(detail, message) }
 			)
 			if (customersOuId) {
+				// A failed move leaves the account OUTSIDE the Customers OU (its SCP guard-rails). Do NOT
+				// swallow that into a warning and let onboarding record the account as fully provisioned —
+				// surface it. `moveToCustomerOu` is itself idempotent (an already-in-OU account is a no-op,
+				// not an error), and `vendAccount` reuses the existing account on the retry, so re-running
+				// onboarding safely re-attempts only the move.
 				await moveToCustomerOu(result.accountId, {
 					client: organizations,
 					customerOuId: customersOuId,
 					log: (message, detail) => app.log.info(detail, message),
-				}).catch(error => app.log.warn({ err: error }, 'move to Customers OU failed'))
+				})
 			}
 			return { accountId: result.accountId, reused: result.reused }
 		},

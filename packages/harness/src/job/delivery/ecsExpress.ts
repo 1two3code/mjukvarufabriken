@@ -6,6 +6,8 @@ import {
 	ECSClient,
 } from '@aws-sdk/client-ecs'
 
+/** The api's auth env (the same `previewAuth` the App Runner client wrote into `apprunner.yaml`) */
+import { appSecretsEnv } from './appSecrets.ts'
 import { abortError, defaultSleep } from './polling.ts'
 
 import type { ECSExpressGatewayService } from '@aws-sdk/client-ecs'
@@ -37,19 +39,23 @@ export const expressServiceName = (name: string) =>
  */
 export const customerTagValue = (serviceName: string): string => {
 	const withoutPrefix = expressServiceName(serviceName).replace(/^mf-[0-9a-f]{1,8}-/i, '')
-	const slug = (withoutPrefix || serviceName)
+	const normalised = (withoutPrefix || serviceName)
 		.toLowerCase()
 		.replace(/[^a-z0-9-]+/g, '-')
 		.replace(/-+/g, '-')
 		.replace(/^-+|-+$/g, '')
-		.slice(0, 40)
-		.replace(/-+$/g, '')
+	// The delivery slug is `<app-name>-<job8>` (apps/job): the trailing `-<job8>` is the discriminator
+	// that makes the `Customer=<slug>` fence JOB-unique. A blind `.slice(0, 40)` on a long app name
+	// would truncate that suffix off and two different jobs for the same long-named app would share a
+	// fence — a teardown of one could then span the other. So when the value ends in a job discriminator,
+	// truncate only the app-name portion and reattach the suffix, staying within the 40-char slug limit.
+	const jobId = /^(.*)-([0-9a-f]{8})$/.exec(normalised)
+	const slug = jobId
+		? `${jobId[1].slice(0, 40 - jobId[2].length - 1).replace(/-+$/g, '')}-${jobId[2]}`
+		: normalised.slice(0, 40).replace(/-+$/g, '')
 	// @mf/org SlugSchema requires ≥2 chars; pad a degenerate slug so the fence stays parseable.
 	return slug.length >= 2 ? slug : `mf-${slug}`.slice(0, 40)
 }
-
-/** The api's auth env (the same `previewAuth` the App Runner client wrote into `apprunner.yaml`) */
-import { appSecretsEnv } from './appSecrets.ts'
 
 const previewAuthEnv = (auth?: PreviewAuth) =>
 	auth
@@ -67,7 +73,9 @@ const previewAuthEnv = (auth?: PreviewAuth) =>
  * `env` (older callers / static deliveries) it falls back to the fixed generated app-secret set.
  */
 const containerEnvironment = (previewAuth?: PreviewAuth, env?: Record<string, string>) => {
-	const appEnv = env ? Object.entries(env).map(([name, value]) => ({ name, value })) : appSecretsEnv()
+	const appEnv = env
+		? Object.entries(env).map(([name, value]) => ({ name, value }))
+		: appSecretsEnv()
 	const merged = new Map<string, string>()
 	for (const { name, value } of [...previewAuthEnv(previewAuth), ...appEnv]) merged.set(name, value)
 	return [...merged].map(([name, value]) => ({ name, value }))
@@ -75,7 +83,8 @@ const containerEnvironment = (previewAuth?: PreviewAuth, env?: Record<string, st
 
 /** The PUBLIC ingress endpoint of the active configuration, once ECS has populated it */
 /** The endpoint may already carry a scheme (real AWS returns `https://…on.aws`); don't double it */
-const toHttpsUrl = (endpoint: string) => (/^https?:\/\//i.test(endpoint) ? endpoint : `https://${endpoint}`)
+const toHttpsUrl = (endpoint: string) =>
+	/^https?:\/\//i.test(endpoint) ? endpoint : `https://${endpoint}`
 
 const publicEndpointOf = (service?: ECSExpressGatewayService) =>
 	service?.activeConfigurations
@@ -169,7 +178,8 @@ export const createEcsExpressDeployClient = ({
 	const account = executionRoleArn.split(':')[4] ?? ''
 	// Build the full service ARN (the API describes by ARN, not by bare name) for the idempotency
 	// fallback below.
-	const serviceArnOf = (svc: string) => `arn:aws:ecs:${region ?? ''}:${account}:service/${cluster}/${svc}`
+	const serviceArnOf = (svc: string) =>
+		`arn:aws:ecs:${region ?? ''}:${account}:service/${cluster}/${svc}`
 	const describe = async (serviceIdentifier: string) =>
 		(await client.send(new DescribeExpressGatewayServiceCommand({ serviceArn: serviceIdentifier })))
 			.service
@@ -258,7 +268,12 @@ export const createEcsExpressDeployClient = ({
 // MARK: Fakes
 
 export type FakeDeploy = DeployClient & {
-	deployments: { serviceName: string; repositoryUrl: string; branch: string; source: { bucket: string; key: string } }[]
+	deployments: {
+		serviceName: string
+		repositoryUrl: string
+		branch: string
+		source: { bucket: string; key: string }
+	}[]
 	/** The runtime env passed alongside each deployment (the app's required set), parallel to `deployments` */
 	envs: (Record<string, string> | undefined)[]
 }
@@ -285,7 +300,9 @@ export const createFakeDeployClient = (fail = false): FakeDeploy => {
 export const createDryRunDeployClient = (log: (line: string) => void): DeployClient => ({
 	deployFromRepo: async ({ serviceName, repositoryUrl, branch }) => {
 		const name = expressServiceName(serviceName)
-		log(`[dry-run] ecs express: build image + create service ${name} from ${repositoryUrl}#${branch}`)
+		log(
+			`[dry-run] ecs express: build image + create service ${name} from ${repositoryUrl}#${branch}`
+		)
 		return { url: fakeUrl(name) }
 	},
 })

@@ -3,9 +3,9 @@ import {
 	DescribeExpressGatewayServiceCommand,
 } from '@aws-sdk/client-ecs'
 
+import { previewServiceName } from '#job/delivery/deliver.ts'
 import { createEcsExpressDeployClient, customerTagValue } from '#job/delivery/ecsExpress.ts'
 import { createFakeImageBuilder } from '#job/delivery/imageBuild.ts'
-import { previewServiceName } from '#job/delivery/deliver.ts'
 
 import type { EcsClientLike } from '#job/delivery/ecsExpressClient.ts'
 
@@ -17,9 +17,7 @@ type Sent = { name: string; input: Record<string, unknown> }
 const service = (endpoint?: string, statusCode = 'ACTIVE') => ({
 	serviceArn: 'arn:svc',
 	status: { statusCode },
-	activeConfigurations: [
-		{ ingressPaths: endpoint ? [{ accessType: 'PUBLIC', endpoint }] : [] },
-	],
+	activeConfigurations: [{ ingressPaths: endpoint ? [{ accessType: 'PUBLIC', endpoint }] : [] }],
 })
 
 /**
@@ -197,7 +195,12 @@ describe('ECS Express deploy client', () => {
 		).environment
 		const names_ = environment.map(entry => entry.name)
 		expect(names_).toEqual(
-			expect.arrayContaining(['AUTH_ISSUER', 'AUTH_JWT_SECRET', 'VAPID_PUBLIC_KEY', 'VAPID_SUBJECT'])
+			expect.arrayContaining([
+				'AUTH_ISSUER',
+				'AUTH_JWT_SECRET',
+				'VAPID_PUBLIC_KEY',
+				'VAPID_SUBJECT',
+			])
 		)
 	})
 
@@ -240,7 +243,10 @@ describe('ECS Express deploy client', () => {
 
 	it('Stops polling as soon as the signal aborts', async () => {
 		// Arrange
-		const { client, sent } = createStub({ createEndpoint: undefined, describeEndpoints: [undefined] })
+		const { client, sent } = createStub({
+			createEndpoint: undefined,
+			describeEndpoints: [undefined],
+		})
 		const controller = new AbortController()
 		const deploy = deployClient(client, { pollIntervalMs: 60_000 })
 
@@ -257,7 +263,9 @@ describe('ECS Express deploy client', () => {
 
 		// Assert
 		await expect(pending).rejects.toThrow('aborted')
-		expect(names(sent).filter(name => name === 'DescribeExpressGatewayServiceCommand')).toHaveLength(1)
+		expect(
+			names(sent).filter(name => name === 'DescribeExpressGatewayServiceCommand')
+		).toHaveLength(1)
 	})
 
 	it('Passes a deterministic idempotency clientToken and always wires the container log group', async () => {
@@ -304,7 +312,9 @@ describe('ECS Express deploy client', () => {
 		})
 
 		// Assert — awsLogsConfiguration is present regardless (boot crashes must be visible)
-		const container = sent[0]!.input.primaryContainer as { awsLogsConfiguration?: { logGroup: string } }
+		const container = sent[0]!.input.primaryContainer as {
+			awsLogsConfiguration?: { logGroup: string }
+		}
 		expect(container.awsLogsConfiguration?.logGroup).toBe('/mf/local/express')
 	})
 
@@ -337,7 +347,9 @@ describe('ECS Express deploy client', () => {
 			'CreateExpressGatewayServiceCommand',
 			'DescribeExpressGatewayServiceCommand',
 		])
-		expect(sent[1]!.input).toMatchObject({ serviceArn: expect.stringContaining('service/default/mf-11111111-gym') })
+		expect(sent[1]!.input).toMatchObject({
+			serviceArn: expect.stringContaining('service/default/mf-11111111-gym'),
+		})
 	})
 
 	it('Rethrows a create error that is not an already-exists / idempotency error', async () => {
@@ -395,6 +407,24 @@ describe('ECS Express deploy client', () => {
 		const long = customerTagValue(`mf-11111111-${'a'.repeat(60)}`)
 		expect(long.length).toBe(40)
 		expect(long.endsWith('-')).toBe(false)
+	})
+
+	it('Preserves the trailing job-id discriminator when the app name is long (fence stays job-unique)', () => {
+		// The delivery slug is `<app-name>-<job8>`; a long app name must not push the discriminator past
+		// the 40-char cap. Two jobs for the SAME long-named app must keep distinct fence values.
+		const longApp = 'a-very-long-application-name-from-the-spec-goal'
+		const a = customerTagValue(`mf-11111111-${longApp}-11111111`)
+		const b = customerTagValue(`mf-22222222-${longApp}-22222222`)
+
+		// Both stay within the @mf/org slug limit and keep their own job8 suffix
+		expect(a.length).toBeLessThanOrEqual(40)
+		expect(b.length).toBeLessThanOrEqual(40)
+		expect(a.endsWith('-11111111')).toBe(true)
+		expect(b.endsWith('-22222222')).toBe(true)
+		// …so the two jobs never collide on the same Customer=<slug> fence
+		expect(a).not.toBe(b)
+		// Still a valid @mf/org slug
+		expect(a).toMatch(/^[a-z0-9]([a-z0-9-]*[a-z0-9])?$/)
 	})
 
 	it('Keeps the job-unique part of the service name (no collision between jobs)', () => {
