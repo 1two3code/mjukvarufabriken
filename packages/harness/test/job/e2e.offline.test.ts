@@ -73,6 +73,7 @@ type SessionRole =
 	| 'acceptance-tests'
 	| 'acceptance-fix'
 	| 'review'
+	| 'review-skeptic'
 	| 'review-fix'
 	| 'acceptance-check'
 	| 'merge'
@@ -82,6 +83,7 @@ const sessionRoleOf = (systemPrompt: string): SessionRole => {
 	if (systemPrompt.includes('You are the QA engineer at Mjukvaruhuset')) return 'acceptance-tests'
 	if (systemPrompt.includes('Acceptance tests derived from')) return 'acceptance-fix'
 	if (systemPrompt.includes('You are the independent reviewer at Mjukvaruhuset')) return 'review'
+	if (systemPrompt.includes('You are an adversarial skeptic at Mjukvaruhuset')) return 'review-skeptic'
 	if (systemPrompt.includes('An independent review of the application')) return 'review-fix'
 	if (systemPrompt.includes('You are the acceptance checker at Mjukvaruhuset')) return 'acceptance-check'
 	return 'worker'
@@ -149,6 +151,17 @@ const defaultHandler =
 		if (role === 'review') {
 			yield assistantMessage()
 			yield successResult({ structured_output: { findings: config.reviewFindings ?? [] } })
+			return
+		}
+
+		if (role === 'review-skeptic') {
+			// Each skeptic upholds every finding it is asked to disprove, so the refute pass keeps
+			// them (a real finding still fails the gate closed) — hallucinations are tested in unit
+			const ids = [...systemPrompt.matchAll(/^- \[([^\]]+)\]/gm)].map(match => match[1]!)
+			yield assistantMessage()
+			yield successResult({
+				structured_output: { verdicts: ids.map(id => ({ id, verdict: 'upheld' })) },
+			})
 			return
 		}
 
