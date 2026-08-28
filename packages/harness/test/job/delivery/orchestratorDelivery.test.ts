@@ -132,7 +132,6 @@ describe('runJob delivery step', () => {
 	})
 })
 
-
 // MARK: Approve-before-deliver hold (W9)
 
 type ApprovalHooks = {
@@ -141,6 +140,8 @@ type ApprovalHooks = {
 	isApproved?: () => Promise<boolean>
 	isKilled?: () => Promise<boolean>
 	pollIntervalMs?: number
+	maxDurationMinutes?: number
+	now?: () => number
 }
 
 const okDeliver = () =>
@@ -157,7 +158,11 @@ const runWithApproval = async (deliver: OrchestratorPorts['deliver'], hooks: App
 			id: 'job-1',
 			spec,
 			repoDir: '/tmp/repo',
-			budget: { maxTokens: 1_000_000, maxDurationMinutes: 60, maxWorkers: 1 },
+			budget: {
+				maxTokens: 1_000_000,
+				maxDurationMinutes: hooks.maxDurationMinutes ?? 60,
+				maxWorkers: 1,
+			},
 			delivery: hooks.withTarget === false ? undefined : { slug: 'gym', appName: 'Gym' },
 			approveBeforeDeliver: hooks.approveBeforeDeliver,
 		},
@@ -172,6 +177,7 @@ const runWithApproval = async (deliver: OrchestratorPorts['deliver'], hooks: App
 				isKilled: hooks.isKilled,
 				pollIntervalMs: hooks.pollIntervalMs ?? 1_000_000,
 			},
+			...(hooks.now ? { now: hooks.now } : {}),
 		}
 	)
 	return { outcome, events, onAwaitingApproval }
@@ -221,6 +227,35 @@ describe('runJob approve-before-deliver hold', () => {
 		expect(deliver).not.toHaveBeenCalled()
 		expect(outcome.status).toBe('killed')
 		expect(outcome.deliverable).toBeUndefined()
+	})
+
+	it('Does not charge the approval wait against the wall-clock budget', async () => {
+		// The clock jumps far past `maxDurationMinutes` WHILE the job is parked for approval. Because
+		// the hold freezes the duration budget, that wait must not abort the job: it still delivers.
+		let clockMs = 0
+		const budgetMs = 1 * 60_000 // maxDurationMinutes: 1
+		const isApproved = vi.fn(async () => {
+			// First poll: leap 10× the whole budget forward, still unapproved. Without the pause the
+			// background poll's checkDuration would abort here with 'duration exceeded'.
+			if (isApproved.mock.calls.length === 1) {
+				clockMs += budgetMs * 10
+				return false
+			}
+			return true
+		})
+		const deliver = okDeliver()
+
+		const { outcome, onAwaitingApproval } = await runWithApproval(deliver, {
+			approveBeforeDeliver: true,
+			isApproved,
+			maxDurationMinutes: 1,
+			pollIntervalMs: 1,
+			now: () => clockMs,
+		})
+
+		expect(onAwaitingApproval).toHaveBeenCalledTimes(1)
+		expect(outcome.status).toBe('delivered')
+		expect(deliver).toHaveBeenCalledOnce()
 	})
 
 	it('Auto-delivers unchanged when the flag is off (no hold, no approval poll)', async () => {

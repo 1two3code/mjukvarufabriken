@@ -32,10 +32,11 @@ export const JobReportSchema = z.object({
 	/**
 	 * Approve-before-deliver gate (W9), resolved from the order: when true the job holds after the
 	 * green gates instead of delivering. `approved` is the resume signal the paused job polls for —
-	 * a human flips it once they accept, and delivery proceeds. Both default false (auto-deliver).
+	 * a human flips it once they accept, and delivery proceeds. Both optional and absent-means-false
+	 * so the report response shape is unchanged for consumers predating the hold (auto-deliver).
 	 */
-	approveBeforeDeliver: z.boolean(),
-	approved: z.boolean(),
+	approveBeforeDeliver: z.boolean().optional(),
+	approved: z.boolean().optional(),
 })
 export type JobReport = z.infer<typeof JobReportSchema>
 

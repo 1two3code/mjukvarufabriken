@@ -199,8 +199,10 @@ export const updateJob = async (
 			update.gateWaivers === undefined ? undefined : sql.json(update.gateWaivers as never),
 		task_arn: update.taskArn,
 		repository_url: update.repositoryUrl,
-		awaiting_approval: update.awaitingApproval,
-		approved: update.approved,
+		// The approve-before-deliver hold ends when the job delivers: clear both flags so a
+		// delivered job never keeps reading `awaiting_approval`/`approved` (W9).
+		awaiting_approval: update.status === 'delivered' ? false : update.awaitingApproval,
+		approved: update.status === 'delivered' ? false : update.approved,
 		started_at: update.startedAt,
 		finished_at: update.finishedAt,
 		report_token_hash: update.reportTokenHash,

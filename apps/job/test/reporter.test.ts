@@ -155,6 +155,28 @@ describe('api reporter', () => {
 		await expect(createApiReporter(options(fetchStub)).isKilled()).resolves.toBe(true)
 	})
 
+	it('Reads `approved` from the approval poll (true when set, false when absent)', async () => {
+		const approved = createFetchStub([{ status: 200, body: { id: 'job-1', approved: true } }])
+		await expect(createApiReporter(options(approved.fetchStub)).isApproved()).resolves.toBe(true)
+
+		const unset = createFetchStub([{ status: 200, body: { id: 'job-1' } }])
+		await expect(createApiReporter(options(unset.fetchStub)).isApproved()).resolves.toBe(false)
+	})
+
+	it('Returns false from the approval poll for an unknown job (404)', async () => {
+		const { fetchStub } = createFetchStub([{ status: 404, body: { error: {} } }])
+
+		await expect(createApiReporter(options(fetchStub)).isApproved()).resolves.toBe(false)
+	})
+
+	it('Reads a revoked token (401) on the approval poll as not approved', async () => {
+		// A killed job's token is revoked; the approval poll must not read that as an approval — it
+		// returns false and lets `isKilled` abort the run on its own next round.
+		const { fetchStub } = createFetchStub([{ status: 401, body: { error: {} } }])
+
+		await expect(createApiReporter(options(fetchStub)).isApproved()).resolves.toBe(false)
+	})
+
 	it('Retries on 5xx and network errors, then succeeds', async () => {
 		const { fetchStub, calls } = createFetchStub([
 			{ status: 503, body: { error: {} } },

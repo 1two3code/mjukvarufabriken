@@ -253,7 +253,11 @@ export const runJob = async (
 				message: 'Green gates — holding for approval before delivery',
 			},
 		})
+		// The human approval wait is not compute: freeze the wall-clock budget so a slow approver
+		// never trips `maxDurationMinutes` and kills a green build (the kill switch still aborts).
+		budget.pauseClock()
 		const approved = await waitForApproval()
+		budget.resumeClock()
 		if (budget.aborted) return abortedOutcome(plan)
 		if (approved) {
 			await emit({
