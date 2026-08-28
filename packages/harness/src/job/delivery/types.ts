@@ -71,6 +71,21 @@ export type PreviewAuth = {
 	audience: string
 }
 
+/**
+ * Smoke-boots the built artifact before a service is stood up: in-process green (lint + vitest)
+ * does not prove the real `node src/index.ts` boots — an env-contract mismatch or a named ESM
+ * import of a CJS-only dep crashes only at a real boot. `ok: false` → the deploy is skipped and
+ * the reason surfaced, instead of standing up a service that 503s.
+ */
+export type BootCheck = {
+	boot: (input: {
+		repoDir: string
+		/** Runtime env the app needs to boot (auth contract + any generated secrets) */
+		env: Record<string, string>
+		signal?: AbortSignal
+	}) => Promise<{ ok: boolean; output: string; reason?: string }>
+}
+
 export type ArtifactStore = {
 	/** Which backend backs the store — real S3, dry-run logger, in-memory fake, or unconfigured */
 	kind: 's3' | 'dry-run' | 'fake' | 'none'
@@ -98,6 +113,11 @@ export type DeliveryClients = {
 	deploy: DeployClient
 	artifacts: ArtifactStore
 	prose?: ProseWriter
+	/**
+	 * Boots the built artifact before the deploy (acceptance smoke). Omitted → the boot check is
+	 * skipped (gates-only runs, older callers); provided → a boot failure skips the deploy.
+	 */
+	boot?: BootCheck
 	/** GitHub organisation that owns customer repos (default `mjukvaruhuset`) */
 	githubOrg?: string
 	/** IdP for the preview api; without it the Express deploy step is not attempted */

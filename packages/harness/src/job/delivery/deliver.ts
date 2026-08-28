@@ -8,7 +8,22 @@ import { totalTokens } from '#job/types.ts'
 
 import type { Deliverable, DeliveryEventPayload, NotifyPayload } from '@mf/models'
 import type { TokenUsage } from '#job/types.ts'
-import type { DeliveryClients, DeliveryInput, DeliveryOutcome } from './types.ts'
+import type { DeliveryClients, DeliveryInput, DeliveryOutcome, PreviewAuth } from './types.ts'
+
+/**
+ * The runtime env the boot smoke injects. Today only the template's auth contract (the same
+ * `previewAuth` the deploy passes to the container). Generated apps evolve their own required
+ * env (own JWT secret, web-push VAPID keys, …); injecting those needs an app-declared env
+ * manifest — a follow-up (TODO-EXTERNAL), tracked in wave7 stream 8.
+ */
+export const bootEnvOf = (previewAuth?: PreviewAuth): Record<string, string> =>
+	previewAuth
+		? {
+				AUTH_ISSUER: previewAuth.issuer,
+				AUTH_JWKS_URL: previewAuth.jwksUrl,
+				AUTH_AUDIENCE: previewAuth.audience,
+			}
+		: {}
 
 /** Throws on a failed add/commit: the pushed repo and repo.zip must carry the docs */
 const commitDocs = async (repoDir: string, signal: AbortSignal) => {
@@ -68,6 +83,8 @@ export const deliver = async (
 		deploy,
 		artifacts,
 		prose,
+		boot,
+		previewAuth,
 		githubOrg = defaultGitHubOrg,
 		dryRun,
 	} = clients
@@ -161,20 +178,28 @@ export const deliver = async (
 	// MARK: deploy (best effort)
 	let deployUrl: string | null = null
 	let deployReason: string | undefined
-	try {
-		// Per-job CodeBuild source: this job's repo zip in S3, so the image build is of THIS repo
-		const source = await uploadSource(jobId, repoDir, artifacts, signal)
-		deployUrl = (
-			await deploy.deployFromRepo({
-				serviceName: previewServiceName(jobId, target.slug),
-				repositoryUrl,
-				branch: 'main',
-				source,
-				signal,
-			})
-		).url
-	} catch (error) {
-		deployReason = `ecs express: ${(error as Error).message}`
+	// Acceptance smoke: boot the built artifact before standing up a service. In-process green
+	// (lint + vitest) does not prove `node src/index.ts` boots — an env-contract mismatch or a
+	// CJS/ESM interop crash only shows here. A boot failure skips the deploy (no crashlooping 503).
+	const bootResult = boot ? await boot.boot({ repoDir, env: bootEnvOf(previewAuth), signal }) : undefined
+	if (bootResult && !bootResult.ok) {
+		deployReason = `acceptance boot: the built app did not start — ${bootResult.reason ?? 'no "Server listening"'}`
+	} else {
+		try {
+			// Per-job CodeBuild source: this job's repo zip in S3, so the image build is of THIS repo
+			const source = await uploadSource(jobId, repoDir, artifacts, signal)
+			deployUrl = (
+				await deploy.deployFromRepo({
+					serviceName: previewServiceName(jobId, target.slug),
+					repositoryUrl,
+					branch: 'main',
+					source,
+					signal,
+				})
+			).url
+		} catch (error) {
+			deployReason = `ecs express: ${(error as Error).message}`
+		}
 	}
 	if (aborted()) return aborted()!
 	let siteUrl: string | null = null

@@ -4,6 +4,7 @@ import { join } from 'node:path'
 
 import { createFakeDeployClient } from '#job/delivery/ecsExpress.ts'
 import { createFakeArtifactStore } from '#job/delivery/artifacts.ts'
+import { createFakeBootCheck } from '#job/delivery/bootArtifact.ts'
 import { deliver } from '#job/delivery/deliver.ts'
 import { createFakeGitHubClient } from '#job/delivery/github.ts'
 import { createLiveDeliveryClients } from '#job/delivery/index.ts'
@@ -362,6 +363,56 @@ describe('deliver', () => {
 			subject: 'Build job 11111111-2222-3333-4444-555555555555 delivered without a preview URL',
 			text: expect.stringContaining('ECS Express deployment failed'),
 		})
+	})
+
+	it('Skips the deploy when the acceptance boot fails — no service is stood up, admins notified', async () => {
+		// Arrange — the built artifact would crashloop (env-contract / CJS-ESM crash)
+		const deploy = createFakeDeployClient()
+		const boot = createFakeBootCheck({ ok: false, output: '', reason: "no 'Server listening'" })
+		const { clients } = createClients({ deploy, boot })
+		const input = createInput(repoDir)
+
+		// Act
+		const outcome = await deliver(input, clients)
+
+		// Assert — delivery still ok (repo + bundle), but no deploy attempted, boot reason surfaced
+		expect(outcome.ok).toBe(true)
+		expect(outcome.deliverable?.deployUrl).toBeNull()
+		expect(deploy.deployments).toEqual([])
+		expect(outcome.steps[2]).toMatchObject({ step: 'deploy', ok: false })
+		expect(outcome.steps[2]!.reason).toContain('acceptance boot')
+		const notify = input.events.find(event => event.type === 'notify')
+		expect(notify?.payload).toMatchObject({ to: 'admins' })
+	})
+
+	it('Boots the built artifact with the preview auth env, then deploys when it is green', async () => {
+		// Arrange
+		const deploy = createFakeDeployClient()
+		const boot = createFakeBootCheck({ ok: true, output: 'Server listening' })
+		const previewAuth = {
+			issuer: 'https://api.mjukvaruhuset.se',
+			jwksUrl: 'https://api.mjukvaruhuset.se/.well-known/jwks.json',
+			audience: 'preview',
+		}
+		const { clients } = createClients({ deploy, boot, previewAuth })
+		const input = createInput(repoDir)
+
+		// Act
+		const outcome = await deliver(input, clients)
+
+		// Assert — the boot ran with the repo + the auth contract env, and the deploy went ahead
+		expect(boot.calls).toEqual([
+			{
+				repoDir,
+				env: {
+					AUTH_ISSUER: previewAuth.issuer,
+					AUTH_JWKS_URL: previewAuth.jwksUrl,
+					AUTH_AUDIENCE: previewAuth.audience,
+				},
+			},
+		])
+		expect(deploy.deployments).toHaveLength(1)
+		expect(outcome.steps[2]).toMatchObject({ step: 'deploy', ok: true })
 	})
 
 	it('Fails closed when the push fails — no deploy, no bundle', async () => {
