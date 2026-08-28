@@ -102,6 +102,11 @@ export const config: Config = {
 			region,
 			auth: { ...auth, issuer: 'https://api.dev.mjukvaruhuset.se' },
 			adminEmails: ['hasse.lofgren@outlook.com'],
+			// "Sign in with GitHub" (M6). Client id is public; the client secret lives in the
+			// `github-oauth-client-secret` secret. Note: an `Iv23li…` prefix is a GitHub *App*
+			// (same web sign-in endpoints as an OAuth App; needs the "Email addresses: read" account
+			// permission for the `user:email` fetch).
+			githubOAuth: { clientId: 'Iv23liGn1P0xZHYqiBYa' },
 			// `log` until SES production access is granted (TODO-EXTERNAL): copy the link from the api log
 			email: { transport: 'log', from: emailFrom },
 			domain: {
