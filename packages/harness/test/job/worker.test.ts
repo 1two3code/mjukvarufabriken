@@ -17,10 +17,10 @@ import {
 	gateScopeForChanges,
 	hasTestFiles,
 	maxTurnsForSpec,
-	renderCommand,
-	repoConventions,
 	protectGitDir,
 	removeWorktree,
+	renderCommand,
+	repoConventions,
 	resolveEffort,
 	sessionEnv,
 	shareWithWorker,
@@ -182,7 +182,12 @@ describe('addUsage', () => {
 		expect(
 			addUsage(
 				{ inputTokens: 1, outputTokens: 2, cacheReadInputTokens: 3, cacheCreationInputTokens: 4 },
-				{ inputTokens: 10, outputTokens: 20, cacheReadInputTokens: 30, cacheCreationInputTokens: 40 }
+				{
+					inputTokens: 10,
+					outputTokens: 20,
+					cacheReadInputTokens: 30,
+					cacheCreationInputTokens: 40,
+				}
 			)
 		).toEqual({
 			inputTokens: 11,
@@ -235,17 +240,19 @@ describe('taskEfficiency', () => {
 			cacheReadInputTokens: 0,
 			cacheCreationInputTokens: 0,
 		}
-		expect(taskEfficiency({
-			taskId: 't',
-			size: 'M',
-			model: 'some-future-model',
-			turns: 1,
-			turnCap: 120,
-			capHit: false,
-			gateRuns: 1,
-			scopedGate: false,
-			usage,
-		}).costUsd).toBe(3)
+		expect(
+			taskEfficiency({
+				taskId: 't',
+				size: 'M',
+				model: 'some-future-model',
+				turns: 1,
+				turnCap: 120,
+				capHit: false,
+				gateRuns: 1,
+				scopedGate: false,
+				usage,
+			}).costUsd
+		).toBe(3)
 	})
 })
 
@@ -300,7 +307,7 @@ describe('sessionEnv', () => {
 		expect(env.HOME).toBeUndefined()
 	})
 
-	it('Gives the session the worker uid\'s HOME and Claude config dir when one is configured', () => {
+	it("Gives the session the worker uid's HOME and Claude config dir when one is configured", () => {
 		const env = sessionEnv({ PATH: '/usr/bin', HOME: '/home/node', WORKER_UID: '1001' })
 		expect(env).toMatchObject({
 			PATH: '/usr/bin',
@@ -367,7 +374,7 @@ describe('shareWithWorker', () => {
 		}
 	})
 
-	it('Keeps the main repo\'s .git the job\'s own: readable, never group-writable', async () => {
+	it("Keeps the main repo's .git the job's own: readable, never group-writable", async () => {
 		if (!(await hasSetpriv())) return
 		const dir = await fakeTree()
 		await fakeGit(dir)
@@ -677,7 +684,12 @@ describe('hasTestFiles', () => {
 describe('cliJsonSchema', () => {
 	it('Drops the $schema/$id keywords Zod adds, keeps everything else', () => {
 		expect(
-			cliJsonSchema({ $schema: 'https://json-schema.org/draft/2020-12/schema', $id: 'x', type: 'object', properties: { a: { type: 'string' } } })
+			cliJsonSchema({
+				$schema: 'https://json-schema.org/draft/2020-12/schema',
+				$id: 'x',
+				type: 'object',
+				properties: { a: { type: 'string' } },
+			})
 		).toEqual({ type: 'object', properties: { a: { type: 'string' } } })
 	})
 })

@@ -3,7 +3,13 @@ import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 
 import { exec } from '#job/exec.ts'
-import { resolveWorkerModel, runSession, runTask, taskEfficiency, workerLimits } from '#job/worker.ts'
+import {
+	resolveWorkerModel,
+	runSession,
+	runTask,
+	taskEfficiency,
+	workerLimits,
+} from '#job/worker.ts'
 
 import type { Plan, Spec, Task } from '@mf/models'
 import type { VerifyOutcome } from '#job/types.ts'
@@ -285,7 +291,10 @@ describe('runTask', () => {
 
 	it('Marks the efficiency summary full-gate and two gate runs when the gate widened and a repair ran', async () => {
 		const sessions = fakeSessions([
-			{ edits: { 'apps/app/src/x.ts': 'x', 'packages/models/schemas/Order.ts': 'z' }, outcome: capped },
+			{
+				edits: { 'apps/app/src/x.ts': 'x', 'packages/models/schemas/Order.ts': 'z' },
+				outcome: capped,
+			},
 			{ edits: { 'apps/app/src/x.ts': 'fixed' }, outcome: { turns: 7 } },
 		])
 		const outcome = await runTask({

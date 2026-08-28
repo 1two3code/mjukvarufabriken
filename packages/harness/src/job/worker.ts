@@ -232,8 +232,7 @@ Depends on (already merged into your branch): ${task.dependsOn.join(', ') || 'no
 Stay within your task: do not implement the other tasks in the plan, but keep interfaces compatible with them.
 
 # Working efficiently (every turn re-reads your whole context; keep it small)
-- Read only the files you need; do not read CLAUDE.md or the rules up front (they are large and stay in context for the rest of the session — read a single rule file only when a convention below is not enough).
-- Do not re-read a file already in your context; it is still in the conversation.
+- Read only the files you need; do not read CLAUDE.md or the rules up front.
 - While iterating, type-check with \`npx tsgo --noemit -p <workspace>\` (seconds) instead of the full lint.
 - Run the lint + test gate at most twice: once when the implementation is complete, once after fixing what it reported. Never run the full-repo \`npm run lint\`/\`npm test\` when the scoped commands above cover your change.
 - Batch independent shell commands and edits; do not re-run passing tests.
@@ -333,7 +332,9 @@ export const shareWithWorker = async (
 	// setgid on directories: everything either uid creates under a shared dir inherits the shared
 	// group and stays group-writable, so a worker can always create `.git/index.lock` (EACCES on
 	// it failed worker commits on Fargate run b6a5c09f, 2026-08-27)
-	await exec('find', [dir, ...prune, '-type', 'd', '-exec', 'chmod', 'g+s', '{}', '+'], { cwd: dir })
+	await exec('find', [dir, ...prune, '-type', 'd', '-exec', 'chmod', 'g+s', '{}', '+'], {
+		cwd: dir,
+	})
 	if (gitDir === 'private') await protectGitDir(dir)
 	shared.add(dir)
 }
@@ -982,7 +983,8 @@ const commitLeftovers = async (dir: string, task: Task, signal: AbortSignal) => 
 			branch: head.stdout.trim(),
 			commitsAhead: Number(ahead.stdout.trim()) || 0,
 			addError: add.code ? tail(add.stderr, 5) : undefined,
-			commitError: commit.code && !nothingToCommit ? tail(commit.stderr || commit.stdout, 5) : undefined,
+			commitError:
+				commit.code && !nothingToCommit ? tail(commit.stderr || commit.stdout, 5) : undefined,
 		})
 	)
 	// A git error other than "nothing to commit" (e.g. a lock/permission problem) is a real
@@ -990,11 +992,20 @@ const commitLeftovers = async (dir: string, task: Task, signal: AbortSignal) => 
 	if (add.code || (commit.code && !nothingToCommit)) {
 		const ls = await exec('ls', ['-ldn', join(dir, '.git'), join(dir, '.git/index')], { cwd: dir })
 		const id = await exec('id', [], { ...options })
-		console.log(JSON.stringify({ message: 'commit failure diag', taskId: task.id, git: ls.stdout.trim(), worker: id.stdout.trim() }))
+		console.log(
+			JSON.stringify({
+				message: 'commit failure diag',
+				taskId: task.id,
+				git: ls.stdout.trim(),
+				worker: id.stdout.trim(),
+			})
+		)
 	}
 	if (add.code) throw new Error(`git add failed in the task clone: ${tail(add.stderr, 5)}`)
 	if (commit.code && !nothingToCommit) {
-		throw new Error(`git commit failed in the task clone: ${tail(commit.stderr || commit.stdout, 5)}`)
+		throw new Error(
+			`git commit failed in the task clone: ${tail(commit.stderr || commit.stdout, 5)}`
+		)
 	}
 }
 
@@ -1017,10 +1028,9 @@ export const runTask = async ({
 }: RunTaskInput): Promise<TaskOutcome> => {
 	const session = ports.runSession ?? runSession
 	const verify = ports.verifyRepo ?? verifyRepo
-	const { dir, branch } = await createWorktree(repoDir, task, signal)
-	const tdir = transcriptsDir(repoDir)
 	let tokens = 0
-	// Efficiency instrumentation (logged once at the end, all paths): raw usage for cost(), turns
+	// Efficiency instrumentation (logged once in `finally`, so every exit path emits it — a normal
+	// return, an abort, or a throw from createWorktree/gate/a session): raw usage for cost(), turns
 	// across both sessions, how the gate ran. Accounting only — it changes no control flow.
 	let usageTotal = emptyUsage()
 	let turns = 0
@@ -1039,7 +1049,8 @@ export const runTask = async ({
 	const { size, maxTurns: sizeCap } = maxTurnsForSpec(spec)
 	// The foundation task (dependency-free) carries the size-independent scaffolding cost, so floor
 	// its cap at the measured foundation turns instead of the (possibly smaller) size cap.
-	const maxTurns = task.dependsOn.length === 0 ? Math.max(sizeCap, workerLimits.foundationTurns) : sizeCap
+	const maxTurns =
+		task.dependsOn.length === 0 ? Math.max(sizeCap, workerLimits.foundationTurns) : sizeCap
 	const notes: string[] = []
 	const noteCap = (outcome: SessionOutcome, label: string, cap: number) => {
 		if (!outcome.maxTurnsReached) return
@@ -1050,7 +1061,82 @@ export const runTask = async ({
 		)
 	}
 	const withNotes = (reason: string) => (notes.length ? `${reason} (${notes.join('; ')})` : reason)
-	const done = (outcome: TaskOutcome): TaskOutcome => {
+	try {
+		const { dir, branch } = await createWorktree(repoDir, task, signal)
+		const tdir = transcriptsDir(repoDir)
+		const gate = async () => {
+			const changed = await changedFiles(dir, signal)
+			const scope = gateScopeForChanges(task.areas, changed)
+			if ('full' in scope && !('full' in plannedScope)) {
+				notes.push('gate widened to the full repository (changes outside the task workspaces)')
+			}
+			scopedGate = !('full' in scope)
+			gateRuns += 1
+			const commands = gateCommands(scope).map(renderCommand)
+			return { verification: await verify(dir, signal, { areas: task.areas, changed }), commands }
+		}
+
+		const first = await session({
+			cwd: dir,
+			onMessage: openTranscript(tdir, `${task.id}.worker`).onMessage,
+			systemPrompt,
+			prompt: `Implement the task "${task.title}" as described in your instructions. Work through the task, run the gate (\`${lint}\`, \`${test}\`), fix, and commit.`,
+			signal,
+			onUsage: count,
+			model,
+			maxTurns,
+		})
+		turns += first.turns ?? 0
+		if (signal.aborted) return { ok: false, tokens, branch, reason: 'aborted' }
+		if (!first.ok && !first.maxTurnsReached) {
+			return { ok: false, tokens, branch, reason: `agent session failed: ${first.result}` }
+		}
+		noteCap(first, 'worker session', maxTurns)
+
+		// A capped session is not a failure yet: whatever it left is committed and gated, and the
+		// second session is the safety valve that finishes the last mile.
+		await commitLeftovers(dir, task, signal)
+		const gated = await gate()
+		let { verification } = gated
+		const { commands } = gated
+		if (!verification.ok || first.maxTurnsReached) {
+			const [scopedLint, scopedTest] = commands
+			const prompt = verification.ok
+				? `Your previous session was cut off by its turn cap (${maxTurns} turns for size ${size}) and its work was committed; the gate (\`${scopedLint}\`, \`${scopedTest}\`) is green. Check the task against its description and acceptance criteria, finish whatever is missing, run the gate once, and commit.`
+				: `Verification failed after your work${first.maxTurnsReached ? ` (your session hit its turn cap: ${maxTurns} turns for size ${size})` : ''}. Fix it so that \`${scopedLint}\` and \`${scopedTest}\` pass, then commit. Run the gate at most once more after your fixes.\n\n${verification.output}`
+			const repair = await session({
+				cwd: dir,
+				onMessage: openTranscript(tdir, `${task.id}.repair`).onMessage,
+				systemPrompt,
+				prompt,
+				signal,
+				onUsage: count,
+				model,
+				maxTurns: workerLimits.repairTurns,
+			})
+			turns += repair.turns ?? 0
+			if (signal.aborted) return { ok: false, tokens, branch, reason: 'aborted' }
+			if (!repair.ok && !repair.maxTurnsReached) {
+				return {
+					ok: false,
+					tokens,
+					branch,
+					reason: withNotes(`repair session failed: ${repair.result}`),
+				}
+			}
+			noteCap(repair, 'repair session', workerLimits.repairTurns)
+			await commitLeftovers(dir, task, signal)
+			;({ verification } = await gate())
+			if (!verification.ok) {
+				return { ok: false, tokens, branch, reason: withNotes(verification.output) }
+			}
+		}
+		await fetchTaskBranch(repoDir, dir, branch, signal)
+		if (!(await hasCommits(repoDir, branch, signal))) {
+			return { ok: false, tokens, branch, reason: withNotes('worker produced no commits') }
+		}
+		return { ok: true, tokens, branch, ...(notes.length ? { notes } : {}) }
+	} finally {
 		console.log(
 			JSON.stringify(
 				taskEfficiency({
@@ -1066,80 +1152,7 @@ export const runTask = async ({
 				})
 			)
 		)
-		return outcome
 	}
-	const gate = async () => {
-		const changed = await changedFiles(dir, signal)
-		const scope = gateScopeForChanges(task.areas, changed)
-		if ('full' in scope && !('full' in plannedScope)) {
-			notes.push('gate widened to the full repository (changes outside the task workspaces)')
-		}
-		scopedGate = !('full' in scope)
-		gateRuns += 1
-		const commands = gateCommands(scope).map(renderCommand)
-		return { verification: await verify(dir, signal, { areas: task.areas, changed }), commands }
-	}
-
-	const first = await session({
-		cwd: dir,
-		onMessage: openTranscript(tdir, `${task.id}.worker`).onMessage,
-		systemPrompt,
-		prompt: `Implement the task "${task.title}" as described in your instructions. Work through the task, run the gate (\`${lint}\`, \`${test}\`), fix, and commit.`,
-		signal,
-		onUsage: count,
-		model,
-		maxTurns,
-	})
-	turns += first.turns ?? 0
-	if (signal.aborted) return done({ ok: false, tokens, branch, reason: 'aborted' })
-	if (!first.ok && !first.maxTurnsReached) {
-		return done({ ok: false, tokens, branch, reason: `agent session failed: ${first.result}` })
-	}
-	noteCap(first, 'worker session', maxTurns)
-
-	// A capped session is not a failure yet: whatever it left is committed and gated, and the
-	// second session is the safety valve that finishes the last mile.
-	await commitLeftovers(dir, task, signal)
-	const gated = await gate()
-	let { verification } = gated
-	const { commands } = gated
-	if (!verification.ok || first.maxTurnsReached) {
-		const [scopedLint, scopedTest] = commands
-		const prompt = verification.ok
-			? `Your previous session was cut off by its turn cap (${maxTurns} turns for size ${size}) and its work was committed; the gate (\`${scopedLint}\`, \`${scopedTest}\`) is green. Check the task against its description and acceptance criteria, finish whatever is missing, run the gate once, and commit.`
-			: `Verification failed after your work${first.maxTurnsReached ? ` (your session hit its turn cap: ${maxTurns} turns for size ${size})` : ''}. Fix it so that \`${scopedLint}\` and \`${scopedTest}\` pass, then commit. Run the gate at most once more after your fixes.\n\n${verification.output}`
-		const repair = await session({
-			cwd: dir,
-			onMessage: openTranscript(tdir, `${task.id}.repair`).onMessage,
-			systemPrompt,
-			prompt,
-			signal,
-			onUsage: count,
-			model,
-			maxTurns: workerLimits.repairTurns,
-		})
-		turns += repair.turns ?? 0
-		if (signal.aborted) return done({ ok: false, tokens, branch, reason: 'aborted' })
-		if (!repair.ok && !repair.maxTurnsReached) {
-			return done({
-				ok: false,
-				tokens,
-				branch,
-				reason: withNotes(`repair session failed: ${repair.result}`),
-			})
-		}
-		noteCap(repair, 'repair session', workerLimits.repairTurns)
-		await commitLeftovers(dir, task, signal)
-		;({ verification } = await gate())
-		if (!verification.ok) {
-			return done({ ok: false, tokens, branch, reason: withNotes(verification.output) })
-		}
-	}
-	await fetchTaskBranch(repoDir, dir, branch, signal)
-	if (!(await hasCommits(repoDir, branch, signal))) {
-		return done({ ok: false, tokens, branch, reason: withNotes('worker produced no commits') })
-	}
-	return done({ ok: true, tokens, branch, ...(notes.length ? { notes } : {}) })
 }
 
 /** True when the directory exists (used by callers that clean up worktrees defensively) */
