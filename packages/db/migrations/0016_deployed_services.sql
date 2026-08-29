@@ -14,7 +14,7 @@
 
 create table deployed_services (
 	id uuid primary key default gen_random_uuid(),
-	order_id uuid not null references orders(id) on delete cascade,
+	order_id text not null references orders(id) on delete cascade,
 	job_id uuid references jobs(id) on delete set null,
 	service_name text not null,
 	-- Null after a suspend deletes the service (compute gone; the record + config are retained)
