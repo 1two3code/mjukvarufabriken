@@ -1,5 +1,7 @@
 # Backlog brief: teardown & deprovisioning policy
 
+> **STATUS 2026-08-28/29:** `@mf/org` `deprovision(target, mode: suspend|resume|teardown)` is BUILT — tag-fenced to `Service=mf-delivery` + a REQUIRED per-customer `Customer=<slug>` scope (fails closed on an unscoped destructive run), dry-run default, audit log, idempotent. Wired into an admin lifecycle action + a grace scheduler + a per-order deployed-service registry (migration 0016) so teardown finds ALL of an order's services; resume re-stands-up (Express has no scale-to-zero). Live suspend→resume→teardown still to be done once, manually.
+
 Direction from Hasse 2026-08-28. We can *provision* (repo → CodeBuild → ECR → ECS Express, and
 soon a vended AWS account per customer) but there is **no orderly way to tear it down**. Every
 teardown so far has been ad-hoc — and it bit us: the App Runner/Express teardowns this session hit

@@ -1,5 +1,7 @@
 # Multi-environment platform + per-customer environments (dev / qa / live)
 
+> **STATUS 2026-08-29:** phase 1 (platform `qa` env) is BUILT (ultracode wave 9/10). Customer-side foundations landed too: order lifecycle `active|suspended|torn_down`, the resident **iteration-brief** foundation (model + db 0017 + api + `toIterationBriefSpecSeed`). Still needs the M11 design decisions below + the live resident-LLM + per-customer dev/qa/live delivery.
+
 Direction set by Hasse 2026-08-28. This is the shift from "the factory delivers a one-shot
 artifact" to "the factory delivers and operates a living product with a resident LLM." It
 subsumes and evolves M8 (resident agent).

@@ -7,6 +7,8 @@ and closes the gaps the live delivery surfaced. Same wave mechanics as waves 1�
 
 Priorities, highest first. Hasse: say if you'd reorder or drop any.
 
+> **STATUS 2026-08-29 — ALL STREAMS LANDED on `main`** via ultracode waves 7–10 (1116 tests green). Each stream was built in a parallel isolated worktree, adversarially verified by a skeptic panel, fixed, and merged through the full gate. Beyond these 8, waves 8–10 also shipped: `@mf/org` (vend + fenced `deprovision`), `infra/org` CDK (Customers OU + guardrail SCP), platform `qa` env, org onboarding + order lifecycle + `Customer` tag, a real pre-delivery approval hold, a per-order deployed-service registry + resume-restand-up, and the resident iteration-brief foundation. See TOKENS.md and the org-accounts / teardown-deprovisioning / environments briefs.
+
 ## Stream 1 — stripe-klarna (needs Hasse's test keys to fully verify; code is unblocked)
 Brief: [stripe-klarna.md](stripe-klarna.md). Handle Klarna's async payment events, verify the real
 provider in test mode, invoices, explicit payment methods. The code + tests are buildable now; the live

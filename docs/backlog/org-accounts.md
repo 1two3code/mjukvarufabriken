@@ -1,5 +1,7 @@
 # Build brief: AWS Organization + per-customer account vending
 
+> **STATUS 2026-08-28/29:** the `@mf/org` module (vendAccount / assumeAccountRole / graduateAccount / fenced+audited deprovision) AND `infra/org` CDK (Customers OU + guardrail SCP) are BUILT + tested (ultracode waves 8–9). Onboarding `provisionCustomerAccount` (flag) + `orgs.aws_account_id` (migration 0013) wired. Still needs the operator prereqs below (catch-all email, one real vend) + the cross-account CDK deploy path (deliverable 3, not yet built).
+
 Decision recorded in PLAN.md Decisions 2026-08-28. This is the multi-tenant foundation for M11
 (customer environments) and M8 (resident agent): each customer gets an isolated AWS account we
 vend and operate; the customer can graduate by moving the account out of the org.
