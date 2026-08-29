@@ -14,6 +14,22 @@ jobs:
   verify:
     name: Lint, test, build, synth
     runs-on: ubuntu-latest
+    # Throwaway Postgres so migrations run against a real server (packages/db migrations.test.ts).
+    # Reached at localhost:5432; TEST_DATABASE_URL below opts the migration suite in.
+    services:
+      postgres:
+        image: postgres:17-alpine
+        env:
+          POSTGRES_USER: mf
+          POSTGRES_PASSWORD: mf
+          POSTGRES_DB: mf
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd "pg_isready -U mf"
+          --health-interval 10s
+          --health-timeout 5s
+          --health-retries 5
     steps:
       - uses: actions/checkout@v4
 
@@ -53,6 +69,10 @@ jobs:
       # the bar. Docker image builds (apps/job, apps/api) are deliberately NOT part of CI — the
       # deploy workflow builds them once through CDK assets.
       - name: Test (with coverage)
+        env:
+          # Opts packages/db migrations.test.ts into the `postgres` service above; it resets this
+          # database's public schema, so it is a throwaway, never a real dev/live URL.
+          TEST_DATABASE_URL: postgres://mf:mf@localhost:5432/mf
         run: npm run coverage
 
       - name: Build SPAs
