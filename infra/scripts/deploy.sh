@@ -30,6 +30,16 @@ set -- $rest
 export MF_ENV="$env"
 # Per-env infra values (cert ARNs, hosted-zone id, account) written by scripts/provision-env — optional.
 if [ -f "./.env.$env" ]; then set -a; . "./.env.$env"; set +a; fi
+# Wrong-account guard, part 1: qa/live must resolve an explicit target account BEFORE we ever
+# touch root .env's AWS_* creds below — those are today's management-account creds. Without this,
+# an absent .env.$env (e.g. live, which provision-env refuses to write) falls straight through to
+# management creds, and a live deploy lands silently in the org MANAGEMENT account (real risk:
+# hardening audit 2026-08-30, finding A1).
+case "$env" in
+qa | live)
+	: "${MF_ACCOUNT:?refusing $env deploy: no target account resolved (need infra/.env.$env from provision-env, or MF_ACCOUNT + --assume-role)}"
+	;;
+esac
 # Only the AWS_* lines — the root .env also holds api secrets the deploy has no use for.
 set -a; eval "$(grep -E '^AWS_[A-Z_]+=' ../.env || true)"; set +a
 if [ -n "$assume_role" ]; then
@@ -42,7 +52,15 @@ if [ -n "$assume_role" ]; then
 fi
 export CDK_DEFAULT_ACCOUNT=$(aws sts get-caller-identity --query Account --output text)
 export CDK_DEFAULT_REGION=${AWS_REGION:-eu-north-1}
-# Wrong-account guard: if the env pins an account (MF_ACCOUNT), the creds must match it.
+# Wrong-account guard, part 2: never let qa/live resolve to the org MANAGEMENT account, even if
+# MF_ACCOUNT were somehow misconfigured to match it. dev's residency there today is separate,
+# already-tracked tech debt (docs/backlog/phoenix.md) — qa/live must never share it.
+MF_MANAGEMENT_ACCOUNT=814967776290
+if [ "$env" != "dev" ] && [ "$CDK_DEFAULT_ACCOUNT" = "$MF_MANAGEMENT_ACCOUNT" ]; then
+	echo "refusing: resolved account $CDK_DEFAULT_ACCOUNT is the org MANAGEMENT account — $env must never deploy there" >&2
+	exit 1
+fi
+# Wrong-account guard, part 3: if the env pins an account (MF_ACCOUNT), the creds must match it.
 if [ -n "${MF_ACCOUNT:-}" ] && [ "$MF_ACCOUNT" != "$CDK_DEFAULT_ACCOUNT" ]; then
 	echo "refusing: env '$env' targets account $MF_ACCOUNT but creds are $CDK_DEFAULT_ACCOUNT — use --assume-role or switch creds" >&2
 	exit 1
