@@ -1,5 +1,0 @@
-.form {
-	display: flex;
-	gap: var(--spacing-s);
-	align-items: flex-end;
-}
