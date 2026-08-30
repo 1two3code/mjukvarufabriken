@@ -1,0 +1,25 @@
+.filter {
+	display: flex;
+	gap: var(--spacing-s);
+	align-items: flex-end;
+}
+
+.select {
+	display: flex;
+	flex-direction: column;
+	gap: var(--spacing-xxs);
+}
+
+.selectElement {
+	height: 4rem;
+	padding: 0 var(--spacing-s);
+	border: var(--border-width-xs) solid var(--input-border-color);
+	border-radius: var(--border-radius-s);
+
+	background: var(--input-color);
+}
+
+.label {
+	composes: composable-caption-font from global;
+	color: var(--secondary-text-color);
+}

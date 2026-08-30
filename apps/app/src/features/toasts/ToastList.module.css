@@ -1,0 +1,6 @@
+.container {
+	position: absolute;
+	z-index: 11;
+	top: var(--spacing-xs);
+	right: var(--spacing-xs);
+}

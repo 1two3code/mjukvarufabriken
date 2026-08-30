@@ -1,0 +1,19 @@
+@keyframes spin {
+	to {
+		transform: rotate(360deg);
+	}
+}
+
+.spinner {
+	width: 4rem;
+	height: 4rem;
+	border: 0.4rem solid var(--divider-color);
+	border-top-color: var(--brand-500);
+	border-radius: 50%;
+
+	animation: spin 900ms linear infinite;
+}
+
+.center {
+	margin: auto;
+}
