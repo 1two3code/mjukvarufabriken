@@ -99,6 +99,7 @@ describe('security baseline', () => {
 						'codebuild:StartBuild',
 						'codebuild:BatchGetBuilds',
 						'ecs:CreateExpressGatewayService',
+						'ecs:TagResource',
 						'ecs:DescribeExpressGatewayService',
 						'iam:PassRole',
 					])

@@ -418,10 +418,15 @@ export class ResourcesStack extends Stack {
 		)
 		// ECS Express has no grant* helpers. Create is fenced by the `Service=mf-delivery` request tag
 		// the job sets on every service; Describe by that tag on the resource.
+		// CreateExpressGatewayService applies the request tags (Service=mf-delivery + the per-order
+		// Customer=<slug> fence) via a distinct TagResource authorization, so the role needs
+		// ecs:TagResource too — fenced by the SAME aws:RequestTag/Service (the service has no
+		// existing tags at create time, so aws:ResourceTag would not yet match). Without it the
+		// deploy step fails "not authorized to perform: ecs:TagResource" and delivers no live URL.
 		this.jobTaskDefinition.taskRole.addToPrincipalPolicy(
 			new PolicyStatement({
 				sid: 'EcsExpressCreatePreviewServices',
-				actions: ['ecs:CreateExpressGatewayService'],
+				actions: ['ecs:CreateExpressGatewayService', 'ecs:TagResource'],
 				resources: ['*'],
 				conditions: { StringEquals: { 'aws:RequestTag/Service': 'mf-delivery' } },
 			})
