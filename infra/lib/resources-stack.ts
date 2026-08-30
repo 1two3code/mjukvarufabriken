@@ -44,6 +44,7 @@ export type ExternalSecretName =
 	| 'auth-jwt-private-key'
 	| 'github-app-key'
 	| 'github-oauth-client-secret'
+	| 'sentry-dsn'
 	| 'stripe-secret-key'
 	| 'stripe-webhook-secret'
 
@@ -167,6 +168,9 @@ export class ResourcesStack extends Stack {
 			'github-app-key': createSecret('github-app-key'),
 			// Client secret of the "Sign in with GitHub" OAuth App (M6; TODO-EXTERNAL)
 			'github-oauth-client-secret': createSecret('github-oauth-client-secret'),
+			// Error tracking (SaaS, free tier) DSN for the api; TODO-EXTERNAL until a Sentry project
+			// exists — the api's `sentry` plugin decorates an inert client while this is a placeholder
+			'sentry-dsn': createSecret('sentry-dsn'),
 			'stripe-secret-key': createSecret('stripe-secret-key'),
 			'stripe-webhook-secret': createSecret('stripe-webhook-secret'),
 		}

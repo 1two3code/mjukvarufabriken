@@ -41,6 +41,13 @@ declare module 'fastify' {
 			/** Model id override for the spec engine (`SPEC_MODEL`) */
 			specModel?: string
 			/**
+			 * Sentry (SaaS, free tier) DSN for error tracking. From `SENTRY_DSN`, or resolved from
+			 * Secrets Manager via `SENTRY_DSN_SECRET_ARN`. Undefined when neither is set — the api
+			 * still boots, the `sentry` plugin decorates an inert client instead of crashing (no
+			 * Sentry project exists yet — TODO-EXTERNAL).
+			 */
+			sentryDsn?: string
+			/**
 			 * Resident installations (M8): installation id → bearer token the resident in the
 			 * customer's account reports usage with. `RESIDENT_INSTALLATIONS` = `id:token,id:token`
 			 * (or resolved from `RESIDENT_INSTALLATIONS_SECRET_ARN`); empty → no resident can report.
@@ -225,6 +232,7 @@ const plugin: FastifyPluginAsync = async app => {
 		emailFrom: process.env.AUTH_EMAIL_FROM || 'noreply@mjukvaruhuset.se',
 		anthropicApiKey: await resolveSecret('ANTHROPIC_API_KEY', 'ANTHROPIC_API_KEY_SECRET_ARN'),
 		specModel: process.env.SPEC_MODEL || undefined,
+		sentryDsn: await resolveSecret('SENTRY_DSN', 'SENTRY_DSN_SECRET_ARN'),
 		residentInstallations: parseInstallations(
 			await resolveSecret('RESIDENT_INSTALLATIONS', 'RESIDENT_INSTALLATIONS_SECRET_ARN')
 		),

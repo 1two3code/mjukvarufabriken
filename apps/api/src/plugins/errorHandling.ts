@@ -45,12 +45,18 @@ const extractDetails = (details: ErrorDetails) => {
 const plugin: FastifyPluginAsync = async app => {
 	const { log } = app
 
-	const logErrorResponse = (status: number, content: ApiError & Record<string, unknown>) => {
+	const logErrorResponse = (
+		status: number,
+		details: ErrorDetails,
+		content: ApiError & Record<string, unknown>
+	) => {
 		switch (status) {
 			case 403:
 			case 404:
 				return log.info(content)
 			default:
+				// Same place as the log.error below: also report to Sentry (no-ops when unconfigured).
+				app.sentry.captureException(details)
 				return log.error(content)
 		}
 	}
@@ -72,7 +78,7 @@ const plugin: FastifyPluginAsync = async app => {
 			const logDetails = extractDetails(details)
 			const userId = request.session?.userId ?? 'anonymous'
 
-			logErrorResponse(status, {
+			logErrorResponse(status, details, {
 				...error,
 				...(logDetails && { details: logDetails }),
 				context: { userId },
@@ -89,4 +95,4 @@ const plugin: FastifyPluginAsync = async app => {
 	})
 }
 
-export default fp(plugin, { name: '#internal/errorHandling' })
+export default fp(plugin, { name: '#internal/errorHandling', dependencies: ['#internal/sentry'] })

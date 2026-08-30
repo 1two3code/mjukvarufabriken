@@ -7,6 +7,8 @@ interface ImportMetaEnv {
 	readonly VITE_APP_TITLE: string
 	/** `1` shows "Sign in with GitHub" on the login page (the api must have the OAuth App) */
 	readonly VITE_GITHUB_SIGNIN?: string
+	/** SaaS Sentry (free tier) DSN. Empty until a Sentry project exists — `Sentry.init` no-ops. */
+	readonly VITE_SENTRY_DSN?: string
 }
 
 interface ImportMeta {
