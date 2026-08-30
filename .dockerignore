@@ -1,0 +1,9 @@
+.vscode
+.github
+.claude
+.husky
+docs
+infra
+.git
+**/node_modules
+**/dist

@@ -1,0 +1,82 @@
+/* MARK: Sizing */
+.tiny {
+	--size: 2.8rem;
+	--font-size: var(--font-size-xs);
+	--padding: var(--spacing-xs);
+	--border-radius: var(--border-radius-xs);
+}
+
+.small {
+	--size: 4rem;
+	--font-size: var(--font-size-s);
+	--padding: var(--spacing-s);
+	--border-radius: var(--border-radius-s);
+}
+
+.default {
+	--size: 4.8rem;
+	--font-size: var(--font-size-base);
+	--padding: var(--spacing-base);
+	--border-radius: var(--border-radius-base);
+}
+
+/* MARK: Variants */
+.primary {
+	color: var(--primary-button-text-color);
+	background: var(--primary-button-color);
+
+	&:hover {
+		background: var(--primary-button-hover-color);
+	}
+}
+
+.secondary {
+	color: var(--secondary-button-text-color);
+	background: var(--secondary-button-color);
+
+	&:hover {
+		background: var(--secondary-button-hover-color);
+		box-shadow: var(--box-shadow);
+	}
+}
+
+.danger {
+	color: var(--danger-button-text-color);
+	background: var(--danger-button-color);
+
+	&:hover {
+		background: var(--danger-button-hover-color);
+	}
+}
+
+/* MARK: Generic */
+.button {
+	cursor: pointer;
+
+	display: inline-flex;
+	gap: var(--spacing-xs);
+	align-items: center;
+	justify-content: center;
+
+	height: var(--size);
+	padding: 0 var(--padding);
+	border: 0;
+	border-radius: var(--border-radius);
+
+	font-size: var(--font-size);
+	font-weight: 700;
+	white-space: nowrap;
+
+	transition:
+		background 150ms ease,
+		box-shadow 150ms ease;
+
+	svg {
+		height: 1.6rem;
+	}
+
+	&:disabled {
+		cursor: not-allowed;
+		opacity: 0.5;
+	}
+}

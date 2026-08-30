@@ -1,0 +1,56 @@
+{
+  "plugins": ["@ianvs/prettier-plugin-sort-imports"],
+  "semi": false,
+  "useTabs": true,
+  "tabWidth": 2,
+  "printWidth": 100,
+  "arrowParens": "avoid",
+  "singleQuote": true,
+  "trailingComma": "es5",
+  "bracketSpacing": true,
+  "endOfLine": "lf",
+  "overrides": [
+    {
+      "files": ["*.json", "*.json5", "**/*.*rc"],
+      "options": { "parser": "json", "useTabs": false }
+    },
+    {
+      "files": ["*.css"],
+      "options": { "printWidth": 120 }
+    }
+  ],
+  "importOrderTypeScriptVersion": "5.0.0",
+  "importOrderParserPlugins": ["typescript", "jsx"],
+  "importOrder": [
+    // Side effect imports
+    "^.+\\.?(css)$",
+    // Internal assets
+    "^#\/assets",
+    // Internal assets
+    "<BUILTIN_MODULES>",
+    "",
+    // External packages
+    "<THIRD_PARTY_MODULES>",
+    "^react",
+    "^@",
+    "",
+    "^[.]",
+    "",
+    // Internal packages
+    "^#\/app",
+    "^#\/hooks",
+    "^#\/features.*\.(ts)$",
+    "^#\/features.*\.(tsx)$",
+    "",
+    "^#\/layouts",
+    "^#\/components",
+    "^#\/utils",
+    "^#",
+    "",
+    // Type imports
+    "<TYPES>",
+    "<TYPES>^@",
+    "<TYPES>^#",
+    "<TYPES>^[.]"
+  ]
+}
