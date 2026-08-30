@@ -14,6 +14,8 @@ apps/job        @mf/job     build-job container (Fargate): loads a job from Post
 packages/       @mf/models, @mf/utils, @mf/access-control, @mf/harness (spec engine + orchestrator: plan → DAG → Agent SDK workers in worktrees → merge), @mf/db (postgres driver + migrations/, `npm run db:migrate`), @mf/resident (M8 resident agent service for a customer's own AWS account: issues → harness build → PR, cap/pause/audit/metering; docs/RESIDENT.md)
 infra/          CDK: resources-<env> + mf-<env> (site + portal + api), envs dev/live in eu-north-1 — not a workspace, `npm i --prefix infra`
 infra/resident/ separate CDK app a customer deploys into their account for the resident (`npm i --prefix infra/resident`, `cdk deploy -c repository=owner/name`)
+infra/org/      separate CDK app, deployed ONCE into the management account: Customers OU + guardrail SCP for vended customer accounts (docs/backlog/org-accounts.md)
+infra/mail/     separate CDK app, deployed ONCE alongside infra/org: inbound MX + SES receiving for mjukvaruhuset.se, forwarded by Lambda
 docker-compose.yml  local Postgres 17; `--profile job` builds/runs the job image behind the egress-proxy sidecar
 .github/        ci.yml (lint/test/build/synth), deploy.yml → deploy-environment.yml (OIDC)
 ```

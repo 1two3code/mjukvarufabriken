@@ -1,6 +1,8 @@
 # Build brief: AWS Organization + per-customer account vending
 
 > **STATUS 2026-08-28/29:** the `@mf/org` module (vendAccount / assumeAccountRole / graduateAccount / fenced+audited deprovision) AND `infra/org` CDK (Customers OU + guardrail SCP) are BUILT + tested (ultracode waves 8–9). Onboarding `provisionCustomerAccount` (flag) + `orgs.aws_account_id` (migration 0013) wired. Still needs the operator prereqs below (catch-all email, one real vend) + the cross-account CDK deploy path (deliverable 3, not yet built).
+>
+> **STATUS 2026-08-30:** catch-all inbound mail is DONE — `infra/mail` deployed to eu-north-1 (`mf-mail` stack) and live-verified (a real send to `test@mjukvaruhuset.se` forwarded successfully to `hasse.lofgren@outlook.com`, `Reply-To` set to the original sender). The prerequisite below is cleared. One follow-up noted in TODO-EXTERNAL: the forwarder's `Reply-To` identity (`hasse.lofgren@outlook.com`) was verified in SES to satisfy the sandbox's recipient-must-be-verified rule — drop that once SES production access lands.
 
 Decision recorded in PLAN.md Decisions 2026-08-28. This is the multi-tenant foundation for M11
 (customer environments) and M8 (resident agent): each customer gets an isolated AWS account we
@@ -55,8 +57,7 @@ vend and operate; the customer can graduate by moving the account out of the org
    `assumeAccountRole`, the SCP/OU synth, and the onboarding step — all against injected fakes.
 
 ## Prerequisites (Hasse / out-of-band — flag, don't block the build)
-- **Catch-all inbound mail on `mjukvaruhuset.se`** for `aws+<slug>@…` root emails (we only send
-  today via SES). Without deliverable root emails, account creation + root recovery break. → TODO-EXTERNAL.
+- ~~**Catch-all inbound mail on `mjukvaruhuset.se`**~~ — DONE 2026-08-30 (`infra/mail`, see STATUS above).
 - **One real vend done together** when ready — `CreateAccount` makes a real account (slow, 90-day
   close), so keep it out of CI and out of casual runs.
 - **Management-account-runs-prod tech debt**: our platform currently lives in the management

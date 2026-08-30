@@ -42,6 +42,7 @@ jobs:
             infra/package-lock.json
             infra/resident/package-lock.json
             infra/org/package-lock.json
+            infra/mail/package-lock.json
 
       - name: Install
         run: |
@@ -49,6 +50,7 @@ jobs:
           npm ci --prefix infra
           npm ci --prefix infra/resident
           npm ci --prefix infra/org
+          npm ci --prefix infra/mail
 
       - name: Lint
         run: npm run lint
@@ -64,6 +66,7 @@ jobs:
           npm audit --audit-level=high --prefix infra
           npm audit --audit-level=high --prefix infra/resident
           npm audit --audit-level=high --prefix infra/org
+          npm audit --audit-level=high --prefix infra/mail
 
       # Coverage thresholds (lines ≥ 60 %) are enforced by vitest.config.ts; the run fails below
       # the bar. Docker image builds (apps/job, apps/api) are deliberately NOT part of CI — the
@@ -106,6 +109,16 @@ jobs:
       # lockfile, type check, offline synth (no AWS calls — root id is config), template assertions
       - name: Org infra lint, synth, tests
         working-directory: infra/org
+        run: |
+          npm run lint
+          npx cdk synth --quiet
+          npm test
+
+      # Inbound-mail CDK app (MX + SES receive + forwarder Lambda), deployed once alongside
+      # infra/org: its own lockfile, type check, offline synth (checked-in zone id/defaults —
+      # no AWS calls), template assertions
+      - name: Mail infra lint, synth, tests
+        working-directory: infra/mail
         run: |
           npm run lint
           npx cdk synth --quiet
