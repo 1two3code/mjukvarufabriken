@@ -9,8 +9,10 @@ required — since 2026-08-30). A direct `git push … main` is rejected for eve
 push your branch and open a PR (`gh pr create`), then merge it — no required reviewer count, so a
 solo session can merge its own PR once checks are green.
 
-Work in an isolated git worktree (`EnterWorktree`, or plain `git worktree add`) for anything that
-touches source, not the shared checkout — several sessions run here concurrently. `templates/web`
+Enter an isolated git worktree (`EnterWorktree`, or plain `git worktree add`) at **session start**
+and stay in it for the whole session — one worktree per session, PR branches come and go inside it.
+Several sessions run here concurrently, so the shared checkout is read/sync-only: never work or
+idle there; touch it only to fast-forward main (`git -C <root> pull --ff-only`). `templates/web`
 is a separate npm project (not a root workspace): a fresh worktree needs its own
 `npm i --prefix templates/web` before `packages/harness`'s offline e2e tests (which hard-link its
 `node_modules` to seed a simulated job) will pass.
