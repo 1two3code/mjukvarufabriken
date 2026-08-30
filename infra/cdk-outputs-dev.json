@@ -5,7 +5,7 @@
     "ExportsOutputRefSecretauthjwtprivatekeyE2B2E2EB63A62641": "arn:aws:secretsmanager:eu-north-1:814967776290:secret:mf/dev/auth-jwt-private-key-wJxVBE",
     "ExportsOutputFnGetAttArtifactsBucket2AAC5544ArnD57FAE19": "arn:aws:s3:::resources-dev-artifactsbucket2aac5544-eqwazue2gczd",
     "ExportsOutputRefVpc8378EB38272D6E3A": "vpc-01344a46706a7ab77",
-    "JobTaskDefinitionArn": "arn:aws:ecs:eu-north-1:814967776290:task-definition/mf-job-dev:29",
+    "JobTaskDefinitionArn": "arn:aws:ecs:eu-north-1:814967776290:task-definition/mf-job-dev:36",
     "JobsClusterArn": "arn:aws:ecs:eu-north-1:814967776290:cluster/mf-jobs-dev",
     "ExportsOutputRefVpcpublicSubnet1Subnet2BB74ED74EB42ADC": "subnet-0074450831f5d9786",
     "DatabaseSecretArn": "arn:aws:secretsmanager:eu-north-1:814967776290:secret:resourcesdevDatabaseSecret3-kj3TrFD9DO70-yoGXRm",

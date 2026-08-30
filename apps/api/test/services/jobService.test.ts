@@ -480,6 +480,77 @@ describe('Job Service', () => {
 			expect(result).toEqual({ status: 'verifying', killed: false })
 		})
 
+		it('Prices reported usage at the model prices in effect when the order was created', async () => {
+			// The order was created before the (only) seed price rows apply → no prices → fallback
+			// (Sonnet list) tier; then a cheaper Sonnet row dated before the order takes over.
+			const usage = {
+				'claude-sonnet-5': {
+					inputTokens: 1_000_000,
+					outputTokens: 0,
+					cacheReadInputTokens: 0,
+					cacheCreationInputTokens: 0,
+				},
+			}
+			vi.spyOn(app.db.orders, 'getOrder').mockResolvedValue({
+				createdAt: '2026-09-02T00:00:00.000Z',
+			} as never)
+
+			await app.jobService.reportUpdate(job(), { tokensUsed: 5, usage })
+			expect(app.db.jobs.update).toHaveBeenLastCalledWith(
+				'job-1',
+				expect.objectContaining({ usage, costUsd: 3 })
+			)
+
+			await app.db.modelPrices.insert({
+				modelPrefix: 'claude-sonnet',
+				input: 1,
+				output: 5,
+				cacheRead: 0.1,
+				cacheWrite: 1.25,
+				effectiveFrom: '2026-09-01T00:00:00.000Z',
+			})
+			await app.jobService.reportUpdate(job(), { tokensUsed: 5, usage })
+			expect(app.db.jobs.update).toHaveBeenLastCalledWith(
+				'job-1',
+				expect.objectContaining({ usage, costUsd: 1 })
+			)
+
+			// A price dated after the order does not reprice it
+			await app.db.modelPrices.insert({
+				modelPrefix: 'claude-sonnet',
+				input: 100,
+				output: 500,
+				cacheRead: 10,
+				cacheWrite: 125,
+				effectiveFrom: '2026-09-03T00:00:00.000Z',
+			})
+			await app.jobService.reportUpdate(job(), { tokensUsed: 5, usage })
+			expect(app.db.jobs.update).toHaveBeenLastCalledWith(
+				'job-1',
+				expect.objectContaining({ usage, costUsd: 1 })
+			)
+		})
+
+		it('Keeps usage and cost on a killed row', async () => {
+			vi.spyOn(app.db.jobs, 'update').mockResolvedValue(undefined)
+			const usage = {
+				'claude-sonnet-5': {
+					inputTokens: 1_000_000,
+					outputTokens: 0,
+					cacheReadInputTokens: 0,
+					cacheCreationInputTokens: 0,
+				},
+			}
+
+			await app.jobService.reportUpdate(job(), { status: 'failed', tokensUsed: 99, usage })
+
+			expect(app.db.jobs.update).toHaveBeenLastCalledWith('job-1', {
+				tokensUsed: 99,
+				usage,
+				costUsd: 3,
+			})
+		})
+
 		it('Revokes the token with a terminal status', async () => {
 			await app.jobService.reportUpdate(job(), { status: 'delivered', tokensUsed: 10 })
 

@@ -5,6 +5,7 @@ import {
 	DeliveryEventPayloadSchema,
 	GateReportSchema,
 	isActiveJobStatus,
+	jobCostUsd,
 	jobNotifyEventsMax,
 	NotifyPayloadSchema,
 	notifySubjectMaxLength,
@@ -220,14 +221,22 @@ const truncateNotifyPayload = (payload: Record<string, unknown>) => ({
 })
 
 /** Fields of a refused (killed) update that may still land on the row */
-const keepOnKilledRow = ({ tokensUsed, plan, gates }: JobReportUpdate): JobUpdate => ({
+const keepOnKilledRow = ({ tokensUsed, usage, costUsd, plan, gates }: JobUpdate): JobUpdate => ({
 	...(tokensUsed !== undefined && { tokensUsed }),
+	...(usage !== undefined && { usage }),
+	...(costUsd !== undefined && { costUsd }),
 	...(plan !== undefined && { plan }),
 	...(gates !== undefined && { gates }),
 })
 
 const plugin: FastifyPluginAsync = async app => {
 	const { db, ecs, s3, specService } = app
+
+	/** The model prices the job bills at: those in effect at its order's creation (else now) */
+	const pricesForJob = async (job: Job) => {
+		const order = await db.orders.getOrder(job.orderId)
+		return db.modelPrices.effectiveAt(order ? new Date(order.createdAt) : new Date())
+	}
 
 	/**
 	 * The order creator's GitHub login as of their latest GitHub sign-in (M6) — resolved from the
@@ -499,17 +508,21 @@ const plugin: FastifyPluginAsync = async app => {
 			const { status } = update
 			if (status && statusRank[status] < statusRank[job.status]) throw new StatusRegression(job.id)
 			const terminal = status !== undefined && !isActiveJobStatus(status)
-			const row = await db.jobs.update(job.id, {
+			const write: JobUpdate = {
 				...update,
+				// Raw usage is priced at the model prices in effect when the ORDER was created, so a
+				// later price change never reprices an order already placed (migration 0018).
+				...(update.usage && { costUsd: jobCostUsd(update.usage, await pricesForJob(job)) }),
 				startedAt: toDate(update.startedAt),
 				finishedAt: toDate(update.finishedAt),
 				// The last write of the job: nothing holding this token has anything left to say
 				...(terminal && { reportTokenHash: null }),
-			})
+			}
+			const row = await db.jobs.update(job.id, write)
 			if (row) return { status: row.status, killed: row.status === 'killed' }
 			// Status write refused: the admin killed the job. Usage, plan and gates still land;
 			// the reason and the timestamps of the kill stay as the admin wrote them.
-			const rest = keepOnKilledRow(update)
+			const rest = keepOnKilledRow(write)
 			if (Object.keys(rest).length) await db.jobs.update(job.id, rest)
 			return { status: 'killed', killed: true }
 		},

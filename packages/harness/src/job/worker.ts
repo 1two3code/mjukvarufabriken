@@ -17,14 +17,14 @@ import {
 } from './exec.ts'
 import { renderSpecForPlanning } from './planner.ts'
 import { openTranscript, transcriptsDir } from './transcript.ts'
-import { cost, totalTokens } from './types.ts'
+import { addUsage, cost, emptyUsage, totalTokens } from './types.ts'
 import { createUsageAccumulator } from './usage.ts'
 
 import { sizeClass } from '#spec/priceEstimator.ts'
 
 import type { Options, SDKMessage } from '@anthropic-ai/claude-agent-sdk'
 import type { Plan, SizeClass, Spec, Task } from '@mf/models'
-import type { TaskOutcome, TokenUsage, VerifyOutcome } from './types.ts'
+import type { TaskOutcome, TokenUsage, UsageTotals, VerifyOutcome } from './types.ts'
 
 // MARK: Session query seam (record/replay)
 //
@@ -850,22 +850,6 @@ export const runSession = async ({
 // MARK: Per-task efficiency
 
 /** The four token buckets with none optional — the shape `cost()` bills and the log reports */
-export type UsageTotals = Required<TokenUsage>
-
-export const emptyUsage = (): UsageTotals => ({
-	inputTokens: 0,
-	outputTokens: 0,
-	cacheReadInputTokens: 0,
-	cacheCreationInputTokens: 0,
-})
-
-/** Sum two usage samples bucket by bucket; an absent bucket counts as 0 */
-export const addUsage = (a: TokenUsage, b: TokenUsage): UsageTotals => ({
-	inputTokens: a.inputTokens + b.inputTokens,
-	outputTokens: a.outputTokens + b.outputTokens,
-	cacheReadInputTokens: (a.cacheReadInputTokens ?? 0) + (b.cacheReadInputTokens ?? 0),
-	cacheCreationInputTokens: (a.cacheCreationInputTokens ?? 0) + (b.cacheCreationInputTokens ?? 0),
-})
 
 export type TaskEfficiency = {
 	message: 'task efficiency'

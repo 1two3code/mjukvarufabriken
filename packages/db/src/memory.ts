@@ -5,8 +5,9 @@
  * are terminal, one active job per order (rejects with `code: '23505'`), single-use magic
  * links and refresh tokens. Everything is lost when the process exits.
  */
-import { isActiveJobStatus, isOrderSpecFrozen, toSpecStatus } from '@mf/models'
+import { isActiveJobStatus, isOrderSpecFrozen, pricesEffectiveAt, toSpecStatus } from '@mf/models'
 
+import { defaultModelPriceRows } from './modelPrices.ts'
 import { rateLimitRetentionMs } from './rateLimits.ts'
 
 import type {
@@ -15,6 +16,7 @@ import type {
 	DeployedService,
 	Job,
 	JobEvent,
+	ModelPriceRow,
 	Order,
 	OrderStatus,
 	Org,
@@ -75,6 +77,7 @@ export type MemoryRepositories = Repositories & {
 
 export const createMemoryRepositories = (): MemoryRepositories => {
 	const jobs = new Map<string, Job>()
+	const modelPrices: ModelPriceRow[] = defaultModelPriceRows()
 	const events: JobEvent[] = []
 	/** report token hash → job id (the hash is never part of the `Job` model) */
 	const reportTokens = new Map<string, string>()
@@ -261,6 +264,38 @@ export const createMemoryRepositories = (): MemoryRepositories => {
 	}
 
 	return {
+		modelPrices: {
+			list: async () =>
+				[...modelPrices]
+					.sort(
+						(a, b) =>
+							b.effectiveFrom.localeCompare(a.effectiveFrom) ||
+							a.modelPrefix.localeCompare(b.modelPrefix)
+					)
+					.map(clone),
+			insert: async price => {
+				const effectiveFrom = new Date(price.effectiveFrom ?? now()).toISOString()
+				if (
+					modelPrices.some(
+						row => row.modelPrefix === price.modelPrefix && row.effectiveFrom === effectiveFrom
+					)
+				)
+					{throw new UniqueViolation('model_prices_model_prefix_effective_from_key')}
+				const row: ModelPriceRow = {
+					id: `price-${modelPrices.length + 1}`,
+					modelPrefix: price.modelPrefix,
+					input: price.input,
+					output: price.output,
+					cacheRead: price.cacheRead,
+					cacheWrite: price.cacheWrite,
+					effectiveFrom,
+					createdAt: now(),
+				}
+				modelPrices.push(row)
+				return clone(row)
+			},
+			effectiveAt: async at => pricesEffectiveAt(modelPrices, at),
+		},
 		jobs: {
 			insert: async job => {
 				const active = [...jobs.values()].some(
@@ -318,6 +353,8 @@ export const createMemoryRepositories = (): MemoryRepositories => {
 					...job,
 					status: update.status ?? job.status,
 					tokensUsed: update.tokensUsed ?? job.tokensUsed,
+					usage: update.usage ?? job.usage,
+					costUsd: update.costUsd ?? job.costUsd,
 					plan: update.plan ?? job.plan,
 					reason: update.reason ?? job.reason,
 					gates: update.gates ?? job.gates,

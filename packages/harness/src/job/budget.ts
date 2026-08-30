@@ -1,7 +1,10 @@
-import { totalTokens } from './types.ts'
+import { addUsage, emptyUsage, totalTokens } from './types.ts'
 
-import type { JobBudget } from '@mf/models'
+import type { JobBudget, JobUsage } from '@mf/models'
 import type { TokenUsage } from './types.ts'
+
+/** The usage key when a sample arrives without a model id */
+export const unknownModel = 'unknown'
 
 export type AbortReason = 'budget exceeded' | 'duration exceeded' | 'killed'
 
@@ -13,6 +16,8 @@ export type AbortReason = 'budget exceeded' | 'duration exceeded' | 'killed'
 export class BudgetTracker {
 	readonly controller = new AbortController()
 	private tokens = 0
+	/** Raw four-bucket usage per model — never weighted, the billing basis */
+	private readonly usageByModel: JobUsage = {}
 	private abortReason: AbortReason | undefined
 	private readonly startedAt: number
 	private readonly budget: JobBudget
@@ -36,6 +41,11 @@ export class BudgetTracker {
 		return this.tokens
 	}
 
+	/** Raw usage per model so far (a copy) */
+	get usage(): JobUsage {
+		return structuredClone(this.usageByModel)
+	}
+
 	get reason() {
 		return this.abortReason
 	}
@@ -44,9 +54,13 @@ export class BudgetTracker {
 		return this.controller.signal.aborted
 	}
 
-	/** Count a message's usage; aborts once the cap is crossed */
-	add(usage: TokenUsage) {
+	/**
+	 * Count a message's usage; aborts once the cap is crossed. `model` attributes the raw sample
+	 * for billing (`unknown` when the caller cannot tell — priced at the fallback tier).
+	 */
+	add(usage: TokenUsage, model = unknownModel) {
 		this.tokens += totalTokens(usage)
+		this.usageByModel[model] = addUsage(this.usageByModel[model] ?? emptyUsage(), usage)
 		if (this.tokens > this.budget.maxTokens) this.abort('budget exceeded')
 	}
 

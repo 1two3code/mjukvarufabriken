@@ -44,8 +44,9 @@ export const truncateReason = (reason: string | undefined) =>
 		: reason.slice(0, jobReasonMaxLength - truncationMarker.length) + truncationMarker
 
 /** Keeps the fields a killed row still accepts (mirrors the api's `reportUpdate` fallback) */
-const keepOnKilledRow = ({ tokensUsed, plan, gates }: JobReportUpdate) => ({
+const keepOnKilledRow = ({ tokensUsed, usage, plan, gates }: JobReportUpdate) => ({
 	...(tokensUsed !== undefined && { tokensUsed }),
+	...(usage !== undefined && { usage }),
 	...(plan !== undefined && { plan }),
 	...(gates !== undefined && { gates }),
 })

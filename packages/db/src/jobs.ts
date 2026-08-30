@@ -6,6 +6,7 @@ import type {
 	JobBudget,
 	JobEvent,
 	JobStatus,
+	JobUsage,
 	NewJobEvent,
 	Plan,
 	Spec,
@@ -23,6 +24,9 @@ type JobRow = {
 	spec: Spec
 	budget_tokens: number
 	tokens_used: number
+	usage: JobUsage | null
+	/** `numeric` arrives as a string from the driver */
+	cost_usd: string | number | null
 	max_workers: number
 	max_duration_minutes: number
 	plan: Plan | null
@@ -61,6 +65,8 @@ export const toJob = (row: JobRow): Job => ({
 		maxDurationMinutes: row.max_duration_minutes,
 	},
 	tokensUsed: row.tokens_used,
+	usage: row.usage ?? undefined,
+	costUsd: row.cost_usd === null ? undefined : Number(row.cost_usd),
 	plan: row.plan ?? undefined,
 	reason: row.reason ?? undefined,
 	gates: row.gates ?? undefined,
@@ -101,6 +107,10 @@ export type NewJob = {
 export type JobUpdate = Partial<{
 	status: JobStatus
 	tokensUsed: number
+	/** Raw four-bucket usage per model (billing basis) */
+	usage: JobUsage
+	/** USD at the order's model prices, computed by the api when `usage` lands */
+	costUsd: number
 	plan: Plan
 	reason: string
 	gates: GateReport[]
@@ -192,6 +202,8 @@ export const updateJob = async (
 	const columns = {
 		status: update.status,
 		tokens_used: update.tokensUsed,
+		usage: update.usage === undefined ? undefined : sql.json(update.usage as never),
+		cost_usd: update.costUsd,
 		plan: update.plan === undefined ? undefined : sql.json(update.plan as never),
 		reason: update.reason,
 		gates: update.gates === undefined ? undefined : sql.json(update.gates as never),

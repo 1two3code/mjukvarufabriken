@@ -45,6 +45,8 @@ describe('jobs repository', () => {
 			spec: {} as never,
 			budget_tokens: 1,
 			tokens_used: 0,
+			usage: null,
+			cost_usd: null,
 			max_workers: 1,
 			max_duration_minutes: 1,
 			plan: null,
@@ -66,5 +68,17 @@ describe('jobs repository', () => {
 			gates: undefined,
 			gateWaivers: undefined,
 		})
+
+		// usage + cost_usd (a numeric string from the driver) land on the job; absent on older rows
+		const usage = {
+			'claude-sonnet-5': {
+				inputTokens: 1,
+				outputTokens: 2,
+				cacheReadInputTokens: 3,
+				cacheCreationInputTokens: 4,
+			},
+		}
+		expect(toJob({ ...row, usage, cost_usd: '1.2345' })).toMatchObject({ usage, costUsd: 1.2345 })
+		expect(toJob(row)).toMatchObject({ usage: undefined, costUsd: undefined })
 	})
 })

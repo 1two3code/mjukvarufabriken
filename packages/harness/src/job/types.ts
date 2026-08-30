@@ -1,8 +1,12 @@
+import { defaultModelPrices, usageCostUsd } from '@mf/models'
+
 import type {
 	Deliverable,
 	GateReport,
 	Job,
 	JobBudget,
+	JobUsage,
+	ModelPrices,
 	NewJobEvent,
 	Plan,
 	Spec,
@@ -29,6 +33,8 @@ export type JobInput = Pick<Job, 'id' | 'spec' | 'budget' | 'gateWaivers'> & {
 export type JobOutcome = {
 	status: 'delivered' | 'failed' | 'killed'
 	tokensUsed: number
+	/** Raw four-bucket usage per model — the billing basis, persisted by the job */
+	usage: JobUsage
 	plan?: Plan
 	reason?: string
 	/** Reports of the gates that ran, in order (empty when the build never reached them) */
@@ -62,54 +68,30 @@ export const totalTokens = (usage: TokenUsage) =>
 
 // MARK: Cost
 
-/**
- * Anthropic list price of a model, USD per **million** tokens, one rate per bucket. Output bills
- * at its own (higher) rate; cache reads at 0.1× input; 5-minute cache writes at 1.25× input — the
- * same ratios for every model.
- */
-export type ModelPrice = {
-	/** USD / MTok, uncached input */
-	input: number
-	/** USD / MTok, output — Anthropic bills output ~5× input */
-	output: number
-	/** USD / MTok, cache-read input (0.1× input) */
-	cacheRead: number
-	/** USD / MTok, cache-write input (1.25× input, 5-minute TTL) */
-	cacheWrite: number
-}
+/** Every bucket present — the shape usage is summed in */
+export type UsageTotals = Required<TokenUsage>
+
+export const emptyUsage = (): UsageTotals => ({
+	inputTokens: 0,
+	outputTokens: 0,
+	cacheReadInputTokens: 0,
+	cacheCreationInputTokens: 0,
+})
+
+export const addUsage = (a: TokenUsage, b: TokenUsage): UsageTotals => ({
+	inputTokens: a.inputTokens + b.inputTokens,
+	outputTokens: a.outputTokens + b.outputTokens,
+	cacheReadInputTokens: (a.cacheReadInputTokens ?? 0) + (b.cacheReadInputTokens ?? 0),
+	cacheCreationInputTokens: (a.cacheCreationInputTokens ?? 0) + (b.cacheCreationInputTokens ?? 0),
+})
 
 /**
- * Per-model list prices, keyed by model-id prefix (longest match wins). These drive **billing**
- * (`cost`), never the budget cap (`totalTokens`).
- *
- * Source: Anthropic pricing — https://www.anthropic.com/pricing and the Claude Developer Platform
- * pricing page (captured 2026-08-28). Cache-read = 0.1× input, cache-write (5-min) = 1.25× input.
- *
- * TODO-EXTERNAL: Hasse to confirm the exact per-model USD/MTok rates against the Anthropic console
- * before these figures drive real customer invoices (see TODO-EXTERNAL.md).
+ * Per-model list prices live in `@mf/models` (`defaultModelPrices`, the seed of the api's
+ * `model_prices` table) and drive **billing** (`cost`), never the budget cap (`totalTokens`).
+ * Re-exported here so the harness and the resident keep their `@mf/harness` import.
  */
-export const modelPrices: Record<string, ModelPrice> = {
-	'claude-opus': { input: 15, output: 75, cacheRead: 1.5, cacheWrite: 18.75 },
-	'claude-sonnet': { input: 3, output: 15, cacheRead: 0.3, cacheWrite: 3.75 },
-	'claude-haiku': { input: 1, output: 5, cacheRead: 0.1, cacheWrite: 1.25 },
-	'claude-3-5-haiku': { input: 0.8, output: 4, cacheRead: 0.08, cacheWrite: 1 },
-}
-
-/** Unknown model ids price at the Sonnet tier, so a new model name never bills at zero */
-export const fallbackModelPrice: ModelPrice = modelPrices['claude-sonnet']!
-
-/** The price of a model id: the longest matching prefix in `prices`, else the Sonnet fallback */
-export const priceForModel = (
-	model: string,
-	prices: Record<string, ModelPrice> = modelPrices
-): ModelPrice => {
-	const match = Object.keys(prices)
-		.filter(prefix => model.startsWith(prefix))
-		.sort((a, b) => b.length - a.length)[0]
-	return match ? prices[match]! : fallbackModelPrice
-}
-
-const perMillionTokens = 1_000_000
+export { defaultModelPrices as modelPrices, fallbackModelPrice, priceForModel } from '@mf/models'
+export type { ModelPrice } from '@mf/models'
 
 /**
  * Actual USD **cost** of a usage sample at a model's list prices — the billing basis, distinct
@@ -120,17 +102,11 @@ const perMillionTokens = 1_000_000
 export const cost = (
 	usage: TokenUsage,
 	model: string,
-	prices: Record<string, ModelPrice> = modelPrices
-): number => {
-	const price = priceForModel(model, prices)
-	return (
-		(usage.inputTokens * price.input +
-			usage.outputTokens * price.output +
-			(usage.cacheReadInputTokens ?? 0) * price.cacheRead +
-			(usage.cacheCreationInputTokens ?? 0) * price.cacheWrite) /
-		perMillionTokens
-	)
-}
+	prices: ModelPrices = defaultModelPrices
+): number => usageCostUsd(addUsage(emptyUsage(), usage), model, prices)
+
+/** Usage attributed to the model that produced it; `model` is absent when the caller cannot tell */
+export type OnUsage = (usage: TokenUsage, model?: string) => void
 
 export type TaskOutcome = {
 	ok: boolean
@@ -163,7 +139,7 @@ export type GateInput = {
 	/** Review finding ids waived by an admin (`Job.gateWaivers`) */
 	waivers: string[]
 	signal: AbortSignal
-	onUsage: (usage: TokenUsage) => void
+	onUsage: OnUsage
 }
 
 export type GateOutcome = {
@@ -180,7 +156,7 @@ export type OrchestratorPorts = {
 	plan: (input: {
 		spec: Spec
 		signal: AbortSignal
-		onUsage: (usage: TokenUsage) => void
+		onUsage: OnUsage
 	}) => Promise<Plan>
 	runTask: (input: {
 		task: Task
@@ -188,7 +164,7 @@ export type OrchestratorPorts = {
 		plan: Plan
 		repoDir: string
 		signal: AbortSignal
-		onUsage: (usage: TokenUsage) => void
+		onUsage: OnUsage
 	}) => Promise<TaskOutcome>
 	mergeTask: (input: {
 		task: Task
@@ -196,7 +172,7 @@ export type OrchestratorPorts = {
 		spec: Spec
 		repoDir: string
 		signal: AbortSignal
-		onUsage: (usage: TokenUsage) => void
+		onUsage: OnUsage
 	}) => Promise<MergeOutcome>
 	verify: (input: { repoDir: string; signal: AbortSignal }) => Promise<VerifyOutcome>
 	/** M4 gates, run after `verify` in this order; each one fails closed */
@@ -217,15 +193,15 @@ export type DeliveryPortInput = {
 	repoDir: string
 	target: DeliveryTarget
 	signal: AbortSignal
-	onUsage: (usage: TokenUsage) => void
+	onUsage: OnUsage
 	emit: (event: NewJobEvent) => Promise<void>
 }
 
 export type OrchestratorHooks = {
 	/** Persist an event (planned, task_started, …). Awaited; failures are logged, not fatal. */
 	emit: (event: NewJobEvent) => Promise<void>
-	/** Persist the running token total (called after every task/merge) */
-	onTokens?: (tokensUsed: number) => Promise<void>
+	/** Persist the running (budget-weighted) token total + raw usage per model (called after every task/merge) */
+	onTokens?: (tokensUsed: number, usage: JobUsage) => Promise<void>
 	/** Polled every `pollIntervalMs`; returning true aborts the job with status `killed` */
 	isKilled?: () => Promise<boolean>
 	/**

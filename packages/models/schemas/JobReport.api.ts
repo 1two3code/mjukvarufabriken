@@ -7,6 +7,7 @@ import {
 	NewJobEventSchema,
 	PlanSchema,
 } from './Job.ts'
+import { JobUsageSchema } from './ModelPrice.ts'
 import { SpecSchema } from './Spec.ts'
 
 /**
@@ -88,6 +89,8 @@ export const JobReportUpdateSchema = z
 	.object({
 		status: z.enum(jobReportStatus).optional(),
 		tokensUsed: z.number().int().nonnegative().optional(),
+		/** Raw four-bucket usage per model so far; the api prices it at the order's model prices */
+		usage: JobUsageSchema.optional(),
 		plan: PlanSchema.optional(),
 		reason: z.string().max(jobReasonMaxLength).optional(),
 		gates: z.array(GateReportSchema).optional(),

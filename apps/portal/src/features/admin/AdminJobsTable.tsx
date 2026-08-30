@@ -2,7 +2,7 @@ import styles from './AdminJobsTable.module.css'
 
 import { useTranslation } from 'react-i18next'
 import { Link } from 'react-router-dom'
-import { isActiveJobStatus } from '@mf/models'
+import { isActiveJobStatus, rawTokens } from '@mf/models'
 
 import { useToast } from '#/hooks/useToast.ts'
 import {
@@ -11,6 +11,7 @@ import {
 	useKillAdminJobMutation,
 } from '#/features/admin/adminApiSlice.ts'
 import { formatTokens } from '#/features/admin/AdminTotals.tsx'
+import { formatUsd } from '#/features/admin/residentBilling.ts'
 
 import { Button } from '#/components/Button.tsx'
 import { Table } from '#/components/table/Table.tsx'
@@ -75,6 +76,25 @@ export function AdminJobsTable({ jobs, isLoading, isError }: AdminJobsTableProps
 					/>
 				</span>
 			),
+		},
+		{
+			header: t('admin.field.cost'),
+			field: 'costUsd',
+			sortable: true,
+			alignment: 'right',
+			// Real USD at the order's model prices; jobs from before migration 0018 have none
+			cell: row =>
+				row.costUsd === undefined ? (
+					'–'
+				) : (
+					<span
+						title={t('admin.field.costTitle', {
+							tokens: formatTokens(row.usage ? rawTokens(row.usage) : 0, i18n.language),
+						})}
+					>
+						{formatUsd(row.costUsd, i18n.language)}
+					</span>
+				),
 		},
 		{
 			header: t('admin.field.created'),

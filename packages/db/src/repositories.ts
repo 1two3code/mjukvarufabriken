@@ -10,6 +10,9 @@ import type {
 	DeployedServiceConfig,
 	Job,
 	JobEvent,
+	ModelPriceRow,
+	ModelPrices,
+	NewModelPrice,
 	LifecycleState,
 	NewJobEvent,
 	Order,
@@ -372,8 +375,25 @@ export type DeployedServicesRepository = {
 	markTornDown: (orderId: string) => Promise<number>
 }
 
+// MARK: Model prices (per-job cost)
+
+/**
+ * The operator-editable Anthropic price table (migration 0018). Append-only: a new row for a
+ * prefix takes effect for orders created from its `effectiveFrom` on; earlier orders keep the
+ * prices they were created under.
+ */
+export type ModelPricesRepository = {
+	/** Every row, newest `effectiveFrom` first */
+	list: () => Promise<ModelPriceRow[]>
+	/** Adds a row (`effectiveFrom` defaults to now); rejects with `code: '23505'` on an exact duplicate */
+	insert: (price: NewModelPrice) => Promise<ModelPriceRow>
+	/** The prices in effect at the instant, keyed by prefix (`pricesEffectiveAt`) */
+	effectiveAt: (at: Date) => Promise<ModelPrices>
+}
+
 export type Repositories = {
 	jobs: JobsRepository
+	modelPrices: ModelPricesRepository
 	orders: OrdersRepository
 	deployedServices: DeployedServicesRepository
 	users: UsersRepository

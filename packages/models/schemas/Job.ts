@@ -1,5 +1,6 @@
 import { z } from 'zod'
 
+import { JobUsageSchema } from './ModelPrice.ts'
 import { SpecSchema } from './Spec.ts'
 
 // MARK: Enums
@@ -179,6 +180,10 @@ export const JobSchema = z.object({
 	spec: SpecSchema,
 	budget: JobBudgetSchema,
 	tokensUsed: z.number().int().nonnegative(),
+	/** Raw four-bucket usage per model — what the Anthropic console meters; absent on older jobs */
+	usage: JobUsageSchema.optional(),
+	/** USD at the prices in effect when the order was created (`model_prices`); absent on older jobs */
+	costUsd: z.number().nonnegative().optional(),
 	plan: PlanSchema.optional(),
 	/** Human-readable reason when `status` is `failed` or `killed` */
 	reason: z.string().optional(),

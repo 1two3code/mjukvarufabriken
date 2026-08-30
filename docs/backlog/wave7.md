@@ -59,6 +59,9 @@ console shows ~8× our number (observed 2026-08-28: console ~250M vs our meterin
   tokens). Reconcile the monthly total against the Anthropic console.
 - Areas: `packages/harness` (types.ts `cost()`, usage capture), `packages/models` (usage-record
   shape), `apps/api` (`residentService`/metering).
+- **2026-08-30 follow-up landed:** raw per-model usage + `cost_usd` are now persisted per build job
+  (migration 0018) and priced from the operator-editable `model_prices` table at the order's creation
+  instant; the admin shows cost + raw tokens next to the budget metric. See PLAN.md M12.
 
 ## Stream 7 — review-gate accuracy (HIGH — failed a good 12M build, evidenced 2026-08-28)
 The review gate **false-positived a good build** (`0b5efa32`, family-hub #2, 12.4M weighted tokens)

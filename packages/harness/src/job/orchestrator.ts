@@ -3,7 +3,7 @@ import { blockedBy, readyTasks } from './dag.ts'
 import { failureNotification, gatesFailedReason, runGates } from './gates.ts'
 
 import type { Deliverable, GateReport, Plan, Task } from '@mf/models'
-import type { JobInput, JobOutcome, RunJobOptions, TokenUsage } from './types.ts'
+import type { JobInput, JobOutcome, OnUsage, RunJobOptions } from './types.ts'
 
 /**
  * Drives one job: plan → schedule ready tasks up to `maxWorkers` in parallel → merge each finished
@@ -20,8 +20,8 @@ export const runJob = async (
 	const budget = new BudgetTracker(job.budget, now)
 	const { signal } = budget
 	const emit = (event: Parameters<typeof hooks.emit>[0]) => hooks.emit(event).catch(() => {})
-	const persistTokens = () => hooks.onTokens?.(budget.used).catch(() => {})
-	const onUsage = (usage: TokenUsage) => budget.add(usage)
+	const persistTokens = () => hooks.onTokens?.(budget.used, budget.usage).catch(() => {})
+	const onUsage: OnUsage = (usage, model) => budget.add(usage, model)
 
 	// Poll the kill switch + wall clock while work is in flight
 	const poll = setInterval(async () => {
@@ -48,10 +48,12 @@ export const runJob = async (
 	const gates: GateReport[] = []
 	let deliverable: Deliverable | undefined
 
-	const finish = async (outcome: Omit<JobOutcome, 'tokensUsed' | 'gates'>): Promise<JobOutcome> => {
+	const finish = async (
+		outcome: Omit<JobOutcome, 'tokensUsed' | 'usage' | 'gates'>
+	): Promise<JobOutcome> => {
 		clearInterval(poll)
 		await persistTokens()
-		const result = { ...outcome, tokensUsed: budget.used, gates, deliverable }
+		const result = { ...outcome, tokensUsed: budget.used, usage: budget.usage, gates, deliverable }
 		if (result.status === 'delivered') {
 			await emit({
 				type: 'done',

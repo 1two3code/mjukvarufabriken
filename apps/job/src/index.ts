@@ -198,8 +198,8 @@ try {
 					await trackPhase(event)
 					await emit(event)
 				},
-				onTokens: async tokensUsed => {
-					await reporter.update({ tokensUsed })
+				onTokens: async (tokensUsed, usage) => {
+					await reporter.update({ tokensUsed, usage })
 				},
 				// Kill switch: the api flips the row to `killed`; the orchestrator aborts on the next poll
 				isKilled: async () => killedByApi || (await reporter.isKilled()),
@@ -245,6 +245,7 @@ try {
 	const final = await setStatus({
 		status: outcome.status,
 		tokensUsed: outcome.tokensUsed,
+		usage: outcome.usage,
 		plan: outcome.plan,
 		reason: outcome.reason,
 		gates: outcome.gates,

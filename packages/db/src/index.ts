@@ -13,6 +13,7 @@ import { createAuthRepository } from './auth.ts'
 import { createIterationBriefRepository } from './iterationBrief.ts'
 import { createDeployedServicesRepository } from './deployedServices.ts'
 import { createJobsRepository } from './jobs.ts'
+import { createModelPricesRepository } from './modelPrices.ts'
 import { createOrdersRepository } from './orders.ts'
 import { createResidentRepository } from './resident.ts'
 import { createRateLimitsRepository } from './rateLimits.ts'
@@ -27,6 +28,7 @@ export * from './deployedServices.ts'
 export * from './jobs.ts'
 export * from './memory.ts'
 export * from './migrate.ts'
+export * from './modelPrices.ts'
 export * from './orders.ts'
 export * from './rateLimits.ts'
 export * from './repositories.ts'
@@ -133,6 +135,7 @@ export const connectionStringFromSecret = (secret: DatabaseSecret) => {
 /** Every repository over one Postgres connection pool */
 export const createPostgresRepositories = (db: Db): Repositories => ({
 	jobs: createJobsRepository(db),
+	modelPrices: createModelPricesRepository(db),
 	iterationBrief: createIterationBriefRepository(db),
 	orders: createOrdersRepository(db),
 	deployedServices: createDeployedServicesRepository(db),
