@@ -187,14 +187,15 @@ describe('sandboxUser', () => {
 	})
 
 	it('Reads the uid, an optional gid (default: the uid) and the home', () => {
-		expect(sandboxUser({ WORKER_UID: '1001' })).toEqual({
-			uid: 1001,
-			gid: 1001,
+		// Not 1001: that is the GitHub Actions runner's own uid, and "own uid" means no sandbox
+		expect(sandboxUser({ WORKER_UID: '4242' })).toEqual({
+			uid: 4242,
+			gid: 4242,
 			home: '/home/worker',
 		})
-		expect(sandboxUser({ WORKER_UID: '1001', WORKER_GID: '1002', WORKER_HOME: '/w' })).toEqual({
-			uid: 1001,
-			gid: 1002,
+		expect(sandboxUser({ WORKER_UID: '4242', WORKER_GID: '4243', WORKER_HOME: '/w' })).toEqual({
+			uid: 4242,
+			gid: 4243,
 			home: '/w',
 		})
 	})

@@ -307,12 +307,13 @@ describe('sessionEnv', () => {
 	})
 
 	it("Gives the session the worker uid's HOME and Claude config dir when one is configured", () => {
-		const env = sessionEnv({ PATH: '/usr/bin', HOME: '/home/node', WORKER_UID: '1001' })
+		// Not 1001: that is the GitHub Actions runner's own uid, and "own uid" means no sandbox
+		const env = sessionEnv({ PATH: '/usr/bin', HOME: '/home/node', WORKER_UID: '4242' })
 		expect(env).toMatchObject({
 			PATH: '/usr/bin',
 			HOME: '/home/worker',
 			CLAUDE_CONFIG_DIR: '/home/worker/.claude',
-			WORKER_UID: '1001',
+			WORKER_UID: '4242',
 		})
 		expect(sessionEnv({ HOME: '/home/node' }).HOME).toBe('/home/node')
 	})

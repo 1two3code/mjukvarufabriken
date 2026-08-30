@@ -38,10 +38,14 @@ describe('github-deploy stack', () => {
 						Condition: {
 							StringEquals: { 'token.actions.githubusercontent.com:aud': 'sts.amazonaws.com' },
 							StringLike: {
+								// Classic + "immutable" (id-suffixed) subject per environment
 								'token.actions.githubusercontent.com:sub': [
 									'repo:owner/name:environment:dev',
+									'repo:owner@*/name@*:environment:dev',
 									'repo:owner/name:environment:qa',
+									'repo:owner@*/name@*:environment:qa',
 									'repo:owner/name:environment:live',
+									'repo:owner@*/name@*:environment:live',
 								],
 							},
 						},

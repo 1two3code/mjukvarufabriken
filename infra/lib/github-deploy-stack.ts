@@ -41,6 +41,8 @@ export class GithubDeployStack extends Stack {
 	) {
 		super(scope, id, props)
 		this.templateOptions.description = 'GitHub Actions OIDC provider + CDK deploy role (once per account)'
+		const [owner, name] = repository.split('/')
+		if (!owner || !name) throw new Error(`repository must be owner/name, got '${repository}'`)
 
 		// GitHub's well-known thumbprints; AWS now validates the provider through its trusted CA
 		// store so these are informational, but CloudFormation still accepts them.
@@ -59,9 +61,13 @@ export class GithubDeployStack extends Stack {
 			assumedBy: new WebIdentityPrincipal(provider.attrArn, {
 				StringEquals: { [`${githubOidcHost}:aud`]: 'sts.amazonaws.com' },
 				StringLike: {
-					[`${githubOidcHost}:sub`]: environments.map(
-						environment => `repo:${repository}:environment:${environment}`
-					),
+					[`${githubOidcHost}:sub`]: environments.flatMap(environment => [
+						// Classic subject
+						`repo:${repository}:environment:${environment}`,
+						// "Immutable" subject GitHub issues for this repo (verified in CloudTrail 2026-08-30):
+						// owner and name suffixed with their numeric ids, `repo:owner@123/name@456:…`
+						`repo:${owner}@*/${name}@*:environment:${environment}`,
+					]),
 				},
 			}),
 		})
