@@ -15,10 +15,11 @@
     "#/*": "./src/*"
   },
   "dependencies": {
-    "@reduxjs/toolkit": "^2.12.0",
     "@mf/access-control": "*",
     "@mf/models": "*",
     "@mf/utils": "*",
+    "@reduxjs/toolkit": "^2.12.0",
+    "@sentry/react": "^10.72.0",
     "async-mutex": "^0.5.0",
     "i18next": "^26.3.6",
     "i18next-http-backend": "^4.0.0",

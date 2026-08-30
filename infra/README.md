@@ -37,6 +37,7 @@ aws secretsmanager put-secret-value --secret-id mf/$ENV/anthropic-api-key     --
 aws secretsmanager put-secret-value --secret-id mf/$ENV/auth-jwt-private-key  --secret-string "$(node scripts/gen-auth-key.mjs)"   # from the repo root
 aws secretsmanager put-secret-value --secret-id mf/$ENV/github-token          --secret-string 'ghp_...'
 aws secretsmanager put-secret-value --secret-id mf/$ENV/github-oauth-client-secret --secret-string '...'   # "Sign in with GitHub" OAuth App; client id → config.ts githubOAuth
+aws secretsmanager put-secret-value --secret-id mf/$ENV/sentry-dsn            --secret-string 'https://...@o0.ingest.sentry.io/0'   # SaaS Sentry (free tier); api only, no-ops until set
 aws secretsmanager put-secret-value --secret-id mf/$ENV/stripe-secret-key     --secret-string 'sk_test_...'
 aws secretsmanager put-secret-value --secret-id mf/$ENV/stripe-webhook-secret --secret-string 'whsec_...'
 ```
