@@ -25,8 +25,9 @@ describe('Error handling plugin', () => {
 			timestamp: expect.any(String),
 			path: '/endpoint',
 		}
+		const routeError = new Error('Random error')
 		app.get('/endpoint', () => {
-			throw new Error('Random error')
+			throw routeError
 		})
 		vi.spyOn(app.log, 'error')
 
@@ -43,6 +44,18 @@ describe('Error handling plugin', () => {
 				context: { userId: 'user-1' },
 			})
 		)
+		expect(app.sentry.captureException).toHaveBeenCalledWith(routeError)
+	})
+
+	it.each([403, 404])('Does not report %i responses to Sentry', async status => {
+		// Arrange
+		app.get('/endpoint', (_request, reply) => reply.error(status, 'Custom message'))
+
+		// Act
+		await app.inject({ url: '/endpoint' })
+
+		// Assert
+		expect(app.sentry.captureException).not.toHaveBeenCalled()
 	})
 
 	it('Maps schema validation errors to a 400 response', async () => {

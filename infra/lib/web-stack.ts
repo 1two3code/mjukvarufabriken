@@ -192,6 +192,9 @@ export class WebStack extends Stack {
 					STRIPE_WEBHOOK_SECRET_SECRET_ARN: resources.secrets['stripe-webhook-secret'].secretArn,
 					GITHUB_OAUTH_CLIENT_SECRET_SECRET_ARN:
 						resources.secrets['github-oauth-client-secret'].secretArn,
+					// Error tracking (M9 follow-up): empty placeholder until a Sentry project exists
+					// (TODO-EXTERNAL) — the api's `sentry` plugin decorates an inert client until then
+					SENTRY_DSN_SECRET_ARN: resources.secrets['sentry-dsn'].secretArn,
 					// The client id is public; only with it does the api enable the GitHub sign-in routes
 					...(environment.githubOAuth && {
 						GITHUB_OAUTH_CLIENT_ID: environment.githubOAuth.clientId,
@@ -235,6 +238,7 @@ export class WebStack extends Stack {
 		//   ... on auth-jwt-private-key                         — signs access tokens (EdDSA issuer)
 		//   ... on stripe-secret-key / stripe-webhook-secret    — checkout + webhook verification (M6)
 		//   ... on github-oauth-client-secret                  — "Sign in with GitHub" code exchange (M6)
+		//   ... on sentry-dsn                                  — error tracking (SaaS, free tier)
 		//   s3 read/write on the artifacts bucket               — presigned deliverable downloads, uploads
 		//   ses:SendEmail on the domain identity                — magic-link mail (only with a domain)
 		//   ecs:RunTask (job family, jobs cluster only)         — start a build job
@@ -249,6 +253,7 @@ export class WebStack extends Stack {
 		resources.secrets['stripe-secret-key'].grantRead(taskRole)
 		resources.secrets['stripe-webhook-secret'].grantRead(taskRole)
 		resources.secrets['github-oauth-client-secret'].grantRead(taskRole)
+		resources.secrets['sentry-dsn'].grantRead(taskRole)
 		resources.artifactsBucket.grantReadWrite(taskRole)
 
 		// Magic-link emails. With a verified domain identity the grant is scoped to it; without one

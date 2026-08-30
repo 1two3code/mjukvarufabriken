@@ -38,6 +38,7 @@
     "@mf/models": "*",
     "@mf/org": "*",
     "@mf/utils": "*",
+    "@sentry/node": "^10.72.0",
     "fastify": "^5.11.3",
     "fastify-plugin": "^6.0.0",
     "fastify-type-provider-zod": "^7.0.0",
