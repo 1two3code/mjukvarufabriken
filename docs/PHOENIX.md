@@ -67,8 +67,10 @@ node infra/scripts/provision-env.mjs qa --assume-role --account <acct> \
   --deploy-role-arn arn:aws:iam::<acct>:role/mf-github-deploy --parent-zone-id Z002863610X79ZE1B3K8F
 node infra/scripts/provision-env.mjs qa --assume-role ... --apply    # after reviewing the plan
 
-# 3. deploy   [P8]
-infra/scripts/deploy.sh qa                          # or push/dispatch the deploy workflow
+# 3. deploy   [P8]  — --assume-role targets the separate qa account from the management creds
+#    (uses infra/.env.qa's MF_ACCOUNT, which provision-env --apply wrote); a wrong-account guard
+#    refuses if the creds don't match. Or dispatch the deploy workflow (CI uses the qa OIDC role).
+infra/scripts/deploy.sh qa --assume-role
 ```
 
 ### Still manual (cannot be scripted)

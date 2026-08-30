@@ -14,6 +14,12 @@ case "$env" in
 dev | qa | live) ;;
 *) echo "unknown env '$env' (expected dev|qa|live)" >&2; exit 1 ;;
 esac
+# Optional --assume-role: assume OrganizationAccountAccessRole in the env's account (MF_ACCOUNT) so a
+# local deploy can target a SEPARATE member account. Stripped from the stack list.
+assume_role=
+rest=
+for a in "$@"; do if [ "$a" = "--assume-role" ]; then assume_role=1; else rest="$rest $a"; fi; done
+set -- $rest
 # Build only this env's stacks (lib/config.ts reads the un-namespaced MF_* below for it; synth then
 # needs only apps/*/dist/$env).
 export MF_ENV="$env"
@@ -21,8 +27,21 @@ export MF_ENV="$env"
 if [ -f "./.env.$env" ]; then set -a; . "./.env.$env"; set +a; fi
 # Only the AWS_* lines — the root .env also holds api secrets the deploy has no use for.
 set -a; eval "$(grep -E '^AWS_[A-Z_]+=' ../.env || true)"; set +a
+if [ -n "$assume_role" ]; then
+	: "${MF_ACCOUNT:?--assume-role needs MF_ACCOUNT (provision-env writes infra/.env.$env, or set it)}"
+	echo "assuming OrganizationAccountAccessRole in $MF_ACCOUNT" >&2
+	read -r AWS_ACCESS_KEY_ID AWS_SECRET_ACCESS_KEY AWS_SESSION_TOKEN < <(aws sts assume-role \
+		--role-arn "arn:aws:iam::$MF_ACCOUNT:role/OrganizationAccountAccessRole" \
+		--role-session-name mf-deploy --query 'Credentials.[AccessKeyId,SecretAccessKey,SessionToken]' --output text)
+	export AWS_ACCESS_KEY_ID AWS_SECRET_ACCESS_KEY AWS_SESSION_TOKEN; unset AWS_PROFILE
+fi
 export CDK_DEFAULT_ACCOUNT=$(aws sts get-caller-identity --query Account --output text)
 export CDK_DEFAULT_REGION=${AWS_REGION:-eu-north-1}
+# Wrong-account guard: if the env pins an account (MF_ACCOUNT), the creds must match it.
+if [ -n "${MF_ACCOUNT:-}" ] && [ "$MF_ACCOUNT" != "$CDK_DEFAULT_ACCOUNT" ]; then
+	echo "refusing: env '$env' targets account $MF_ACCOUNT but creds are $CDK_DEFAULT_ACCOUNT — use --assume-role or switch creds" >&2
+	exit 1
+fi
 
 if [ $# -gt 0 ]; then
 	stacks=$*
