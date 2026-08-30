@@ -19,9 +19,9 @@ works, Phoenix works; they are the same code paths.
 
 | # | Primitive | Where | Idempotent? | Notes |
 |---|---|---|---|---|
-| P1 | Vend a member account | `@mf/org` `vend.ts` (Organizations `CreateAccount`) | yes (reuses ACTIVE account by name) | unique root email via the `mjukvaruhuset.se` catch-all (`qa-aws@…`) |
-| P2 | CDK bootstrap (both regions) | `cdk bootstrap aws://<acct>/{eu-north-1,us-east-1}` | yes | admin creds (assume `OrganizationAccountAccessRole`); the deploy role can't bootstrap |
-| P3 | `github-deploy` stack (OIDC role) | `infra/` `cdk deploy github-deploy` | yes | once per account |
+| P1 | Create a member account | `infra/scripts/provision-account` (Organizations `CreateAccount`) | yes (reuses ACTIVE account by name) | `mf-<env>`, root email `aws+<env>@mjukvaruhuset.se` via the catch-all; run as the management account |
+| P2 | CDK bootstrap (both regions) | `provision-account` (assumes `OrganizationAccountAccessRole`) | yes | `aws://<acct>/{eu-north-1,us-east-1}`; the deploy role can't bootstrap |
+| P3 | `github-deploy` stack (OIDC role) | `provision-account` (`cdk deploy github-deploy`) | yes | once per account |
 | P4 | Subdomain hosted zone + NS delegation | `infra/scripts/provision-env` | yes | `qa.mjukvaruhuset.se` zone in the env account; NS record into the root zone |
 | P5 | ACM certs (CloudFront us-east-1 + API eu-north-1) + DNS validation | `infra/scripts/provision-env` | yes | validated against the env's own zone; auto-renews |
 | P6 | Publish per-env infra values | `infra/scripts/provision-env` → SSM / GitHub env | yes | cert ARNs, zone id, account id — **read by config, never hand-edited** (item 1) |
@@ -57,10 +57,9 @@ Result: after provisioning a fresh account you never touch `config.ts`.
 #    keep the root zone in the live account, or a shared DNS account live reads. qa is a clean
 #    subdomain and needs no such decision.
 
-# 1. (new account) vend + bootstrap + deploy the OIDC role   [P1–P3]
-#    - @mf/org vend  ->  new member account id
-#    - assume OrganizationAccountAccessRole; cdk bootstrap eu-north-1 AND us-east-1
-#    - cdk deploy github-deploy  (in the new account)
+# 1. (new account) create it + bootstrap + deploy the OIDC role   [P1–P3]  — run as the MANAGEMENT account
+node infra/scripts/provision-account.mjs qa            # dry-run: shows the plan
+node infra/scripts/provision-account.mjs qa --apply    # → prints the account id + mf-github-deploy role arn
 
 # 2. zone + certs + GitHub env   [P4–P7]  (dry-run by default)
 infra/scripts/provision-env qa --account <acct> --parent-zone-id <root-zone> --deploy-role-arn <arn>
@@ -86,8 +85,9 @@ natural companion to this brief — captured here so it isn't forgotten (not bui
 
 ## Status
 
-- item 1 (config externalization) — designed above; lands as one coordinated change (it changes the
-  account-setup workflow, so not edited in parallel with a live account setup).
-- item 2 (`provision-env`, P4–P7) — first version added alongside this brief; **dry-run by default**,
-  needs a real run against a throwaway subdomain to verify before trusting it for qa/live.
-- P1–P3 wiring, P9 (dev evacuation), and `bootstrap-dev.sh` — later slices.
+- item 1 (config externalization) — **done** (env-var config, `MF_ENV` build-gating).
+- item 2 (`provision-env`, P4–P7) — **done**; **dry-run by default**, run against a throwaway subdomain
+  once to trust the AWS-mutating paths before qa/live.
+- P1–P3 (`provision-account`) — **added**; **dry-run by default**, run as the management account. P1
+  (real account creation) can only be verified by a real `--apply`.
+- `live` apex path (root-zone-in-account), P9 (dev evacuation), and `bootstrap-dev.sh` — later slices.
