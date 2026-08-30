@@ -113,6 +113,25 @@ describe('exec', () => {
 		expect(sandboxEnv({ AWSOME: '1', ECSTATIC: '1' })).toMatchObject({ AWSOME: '1', ECSTATIC: '1' })
 	})
 
+	it("sandboxEnv strips git's repository-location variables (a git hook exports them)", () => {
+		// Under `git push` → husky pre-push → `npm test`, GIT_DIR/GIT_WORK_TREE point at the
+		// developer's repo; inherited by the offline e2e's `git init`/`commit` they redirected the
+		// seed and fake-worker commits onto the real branch, which was then pushed (2026-08-30).
+		const hook = {
+			GIT_DIR: '/repo/.git',
+			GIT_WORK_TREE: '/repo',
+			GIT_INDEX_FILE: '/repo/.git/index',
+			GIT_COMMON_DIR: '/repo/.git',
+			GIT_OBJECT_DIRECTORY: '/repo/.git/objects',
+			GIT_PREFIX: 'packages/',
+			GIT_NAMESPACE: 'x',
+		}
+		const env = sandboxEnv({ ...hook, PATH: '/usr/bin', GIT_AUTHOR_NAME: 'me' })
+		expect(Object.keys(env).filter(key => key in hook)).toEqual([])
+		// The job's own GIT_CONFIG_* / identity settings and unrelated GIT_* keys still pass
+		expect(env).toMatchObject({ PATH: '/usr/bin', GIT_AUTHOR_NAME: 'me' })
+	})
+
 	it('Redacts URL credentials from the error of a failed command', async () => {
 		// Arrange
 		const url = 'https://x-access-token:ghp_secret@github.com/org/repo.git'

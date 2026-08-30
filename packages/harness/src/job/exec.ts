@@ -41,6 +41,16 @@ const secretEnvKey =
 	/^(DATABASE_|AWS_|ECS_|EXPRESS_|CODEBUILD_|ECR_|GITHUB_TOKEN$|GITHUB_APP_|JOB_TOKEN$|ARTIFACTS_BUCKET$)|_SECRET_ARN$/
 
 /**
+ * Git's repository-location variables. Git exports these to hooks (and `git` sets them for its
+ * own children), and every git command the harness runs is meant for the `cwd` repo it is given —
+ * inherited, they silently redirect `git init`/`add`/`commit` to some OTHER repo. Seen for real
+ * 2026-08-30: `npm test` under a husky pre-push hook ran the offline e2e, whose seed and
+ * fake-worker commits landed on the developer's branch and were pushed to main (8b0bbe9).
+ */
+const gitRepoEnvKey =
+	/^GIT_(DIR|WORK_TREE|INDEX_FILE|COMMON_DIR|OBJECT_DIRECTORY|ALTERNATE_OBJECT_DIRECTORIES|PREFIX|NAMESPACE|CEILING_DIRECTORIES)$/
+
+/**
  * Git configuration for everything the job runs, via `GIT_CONFIG_*` so it applies to every git
  * process regardless of repo config:
  * - Hooks are off. The template ships husky hooks (conventional commit-msg, pre-push lint+test)
@@ -74,10 +84,15 @@ export const gitIdentityEnv: NodeJS.ProcessEnv = {
 	GIT_COMMITTER_EMAIL: 'build@mjukvaruhuset.se',
 }
 
-/** `process.env` minus credentials and cloud config — what child processes and agent sessions get */
+/**
+ * `process.env` minus credentials, cloud config and git's repository-location variables — what
+ * child processes and agent sessions get
+ */
 export const sandboxEnv = (env: NodeJS.ProcessEnv = process.env): NodeJS.ProcessEnv => ({
 	...gitIdentityEnv,
-	...Object.fromEntries(Object.entries(env).filter(([key]) => !secretEnvKey.test(key))),
+	...Object.fromEntries(
+		Object.entries(env).filter(([key]) => !secretEnvKey.test(key) && !gitRepoEnvKey.test(key))
+	),
 	...noHooksEnv,
 })
 
