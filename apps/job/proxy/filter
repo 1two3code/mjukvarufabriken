@@ -1,8 +1,0 @@
-# Hosts a build job may reach: npm, GitHub, Anthropic. One fnmatch pattern per line.
-registry.npmjs.org
-api.anthropic.com
-github.com
-api.github.com
-codeload.github.com
-objects.githubusercontent.com
-raw.githubusercontent.com
