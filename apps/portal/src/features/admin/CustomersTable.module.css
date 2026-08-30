@@ -1,0 +1,14 @@
+.account {
+	display: flex;
+	flex-direction: column;
+	font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+	font-size: var(--font-size-s);
+}
+
+.slug {
+	color: var(--secondary-text-color);
+}
+
+.none {
+	color: var(--secondary-text-color);
+}

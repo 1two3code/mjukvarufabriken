@@ -7,6 +7,7 @@ import { usePermission } from '#/hooks/usePermission.ts'
 import { useGetAdminJobsQuery } from '#/features/admin/adminApiSlice.ts'
 import { AdminJobsTable } from '#/features/admin/AdminJobsTable.tsx'
 import { AdminTotals } from '#/features/admin/AdminTotals.tsx'
+import { CustomersTable } from '#/features/admin/CustomersTable.tsx'
 import { ModelPricesPanel } from '#/features/admin/ModelPricesPanel.tsx'
 
 const pollingInterval = 5000
@@ -34,6 +35,9 @@ export function AdminPage() {
 			<AdminTotals jobs={jobs} />
 			<h2 className={styles.jobsTitle}>{t('page.admin.jobsTitle')}</h2>
 			<AdminJobsTable jobs={jobs} isLoading={isLoading} isError={isError} />
+			<h2 className={styles.jobsTitle}>{t('page.admin.customersTitle')}</h2>
+			<p className={styles.intro}>{t('page.admin.customersIntro')}</p>
+			<CustomersTable />
 			<h2 className={styles.jobsTitle}>{t('page.admin.pricesTitle')}</h2>
 			<p className={styles.intro}>{t('page.admin.pricesIntro')}</p>
 			<ModelPricesPanel />

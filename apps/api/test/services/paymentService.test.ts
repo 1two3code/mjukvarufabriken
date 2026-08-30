@@ -155,9 +155,24 @@ describe('Payment Service', () => {
 				role: 'admin',
 				orgId: 'org-1',
 			})
+			expect(app.accountService.provisionCustomerAccount).toHaveBeenCalledWith('org-1')
 			await expect(app.orderService.get(order.id, user)).resolves.toMatchObject({
 				status: 'building',
 			})
+		})
+
+		it('Does not fail the webhook when AWS account provisioning rejects', async () => {
+			vi.mocked(app.accountService.provisionCustomerAccount).mockRejectedValueOnce(
+				new Error('CreateAccount failed')
+			)
+
+			const { result } = await paidDeposit()
+
+			expect(result.outcome).toBe('applied')
+			// The rejection is fire-and-forget (real account creation can take minutes, so it must
+			// not hold up the webhook response) — give its .catch() a tick to settle so it does not
+			// surface as an unhandled rejection after the test ends.
+			await new Promise(resolve => setImmediate(resolve))
 		})
 
 		it('Is idempotent on the event id and on the session', async () => {
