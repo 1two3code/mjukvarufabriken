@@ -1,1 +1,1 @@
-{"name":"customer-app","scripts":{"build":"mkdir -p apps/app/dist/live/assets && echo \"<html/>\" > apps/app/dist/live/index.html && echo \"x\" > apps/app/dist/live/assets/a.js"}}
+{"name":"t"}
