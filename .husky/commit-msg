@@ -1,0 +1,1 @@
+node "$(dirname "$0")/commit-msg.js" "$1"

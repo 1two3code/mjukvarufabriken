@@ -1,0 +1,20 @@
+.link {
+	padding: var(--spacing-xs) var(--spacing-s);
+	border-radius: var(--border-radius-xs);
+
+	font-size: var(--font-size-s);
+	font-weight: 700;
+	color: var(--secondary-text-color);
+	text-transform: uppercase;
+
+	transition: color 200ms ease;
+
+	&:hover {
+		color: var(--primary-text-color);
+	}
+}
+
+.active {
+	color: var(--primary-text-color);
+	background: var(--base-background);
+}

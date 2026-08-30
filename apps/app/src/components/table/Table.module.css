@@ -1,0 +1,13 @@
+.scrollArea {
+	overflow: auto;
+	width: 100%;
+	height: 100%;
+	border-radius: var(--border-radius-s);
+}
+
+.table {
+	border-spacing: 0;
+	width: 100%;
+	text-align: left;
+	background: var(--content-background);
+}
