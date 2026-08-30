@@ -3,11 +3,7 @@ import {
 	createFakeArtifactStore,
 	createS3ArtifactStore,
 } from './artifacts.ts'
-import {
-	createDryRunBootCheck,
-	createFakeBootCheck,
-	createNodeBootCheck,
-} from './bootArtifact.ts'
+import { createDryRunBootCheck, createFakeBootCheck } from './bootArtifact.ts'
 import {
 	createDryRunDeployClient,
 	createEcsExpressDeployClient,
@@ -22,12 +18,14 @@ import {
 } from './github.ts'
 import { createCodeBuildImageBuilder } from './imageBuild.ts'
 import { createFakeProseWriter, createLiveProseWriter } from './prose.ts'
+import { createWiredSmokeCheck } from './wiredSmoke.ts'
 
 import type { GitHubAppAuth } from './github.ts'
 import type { DeliveryClients, PreviewAuth } from './types.ts'
 
 export * from './artifacts.ts'
 export * from './bootArtifact.ts'
+export * from './wiredSmoke.ts'
 export * from './bundle.ts'
 export * from './deliver.ts'
 export * from './docs.ts'
@@ -198,7 +196,10 @@ export const createLiveDeliveryClients = ({
 					putObject: notConfigured('ARTIFACTS_BUCKET'),
 				},
 		prose: createLiveProseWriter({ model: workerModel }),
-		boot: createNodeBootCheck(),
+		// Boots the built server AND replays the built frontend's calls — a route the SPA needs but
+		// the backend does not serve (a 404, e.g. a `/bff` prefix the worker skipped) fails here, so
+		// a dead-in-browser app never gets deployed even though the gates and a plain boot pass.
+		boot: createWiredSmokeCheck(),
 		githubOrg,
 		previewAuth,
 	}
