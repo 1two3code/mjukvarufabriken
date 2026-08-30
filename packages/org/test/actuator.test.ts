@@ -77,6 +77,25 @@ describe('createAwsActuator', () => {
 		).rejects.toThrow(/no teardown handler for service 'ecs'/)
 	})
 
+	it('cascadeManaged: skips (not fails) a service owned by a handled service lifecycle', async () => {
+		// An Express service's managed fleet (target group, ENIs, autoscaling, alarm, cert) carries
+		// the delivery tags but cascades with the service delete — teardown must skip, never fail.
+		const actuator = createAwsActuator({
+			clients: {},
+			cascadeManaged: ['elasticloadbalancing', 'application-autoscaling'],
+		})
+		const tg = { arn: 'arn:aws:elasticloadbalancing:x:1:targetgroup/z', service: 'elasticloadbalancing', tags: {} }
+		const teardown = await actuator.teardown(tg)
+		expect(teardown.outcome).toBe('skipped')
+		expect(teardown.reason).toMatch(/cascades with the service/)
+		// Same on suspend (Express suspend deletes the service, cascading the fleet too).
+		expect((await actuator.suspend(tg)).outcome).toBe('skipped')
+		// A type NOT in cascadeManaged still fails closed on teardown.
+		await expect(
+			actuator.teardown({ arn: 'arn:aws:secretsmanager:x:1:secret/s', service: 'secretsmanager', tags: {} })
+		).rejects.toThrow(/no teardown handler/)
+	})
+
 	it('Maps an already-gone error to already-gone, not a throw', async () => {
 		const ecr = {
 			send: async () => {

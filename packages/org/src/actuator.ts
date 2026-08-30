@@ -127,6 +127,15 @@ export type AwsActuatorOptions = {
 	 * @mf/harness ecsExpress.ts); this module ships only the handlers whose command shapes are stable.
 	 */
 	handlers?: Record<string, ServiceHandler>
+	/**
+	 * Service segments the ECS-Express service lifecycle OWNS: its managed ALB target group, ENIs,
+	 * security-group rules, autoscaling target, CloudWatch alarm and ACM cert all carry the delivery
+	 * tags but are created and destroyed WITH the service. Deleting the `ecs` service cascades them,
+	 * so suspend/teardown of these is a deliberate no-op (`skipped`), never an unhandled-`failed`.
+	 * Without this, a real teardown of ONE Express delivery reports its whole managed fleet as
+	 * failures (seen: 48 tagged resources discovered for 2 services) and can never report success.
+	 */
+	cascadeManaged?: readonly string[]
 	/** Override the already-gone matcher (defaults to `isAlreadyGone`). */
 	alreadyGone?: (error: unknown) => boolean
 }
@@ -181,7 +190,8 @@ const ecrHandler = (client: EcrClientLike): ServiceHandler => ({
  *   standing behind it; silently `skipped` would hide exactly that.
  */
 export const createAwsActuator = (options: AwsActuatorOptions): ResourceActuator => {
-	const { clients, handlers = {}, alreadyGone = isAlreadyGone } = options
+	const { clients, handlers = {}, alreadyGone = isAlreadyGone, cascadeManaged = [] } = options
+	const cascade = new Set(cascadeManaged)
 	const registry: Record<string, ServiceHandler> = {
 		...(clients.s3 ? { s3: s3Handler(clients.s3) } : {}),
 		...(clients.ecr ? { ecr: ecrHandler(clients.ecr) } : {}),
@@ -193,6 +203,11 @@ export const createAwsActuator = (options: AwsActuatorOptions): ResourceActuator
 		async (resource: DeliveryResource): Promise<ActionResult> => {
 			const handler = registry[resource.service]?.[mode]
 			if (!handler) {
+				// Owned by a handled service's lifecycle (e.g. an Express service's managed fleet): the
+				// service's own delete cascades it, so this is a deliberate no-op, not a failure.
+				if (cascade.has(resource.service)) {
+					return skipped(`'${resource.service}' is managed by its ECS Express service — cascades with the service delete`)
+				}
 				if (mode === 'teardown') {
 					throw new Error(
 						`no teardown handler for service '${resource.service}' — refusing to report success ` +

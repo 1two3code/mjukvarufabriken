@@ -143,6 +143,10 @@ const plugin: FastifyPluginAsync = async app => {
 	const actuator = createAwsActuator({
 		clients: { s3, ecr },
 		handlers: { ecs: ecsExpressHandler(ecs) },
+		// The ECS-Express service owns and tag-propagates to this managed fleet (its ALB target
+		// group, ENIs, SG rules, autoscaling target, alarm, cert); DeleteExpressGatewayService
+		// cascades them, so deprovision skips them here rather than failing on the missing handler.
+		cascadeManaged: ['elasticloadbalancing', 'ec2', 'application-autoscaling', 'cloudwatch', 'acm'],
 	})
 
 	app.decorate('org', {
