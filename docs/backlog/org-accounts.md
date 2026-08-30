@@ -3,6 +3,8 @@
 > **STATUS 2026-08-28/29:** the `@mf/org` module (vendAccount / assumeAccountRole / graduateAccount / fenced+audited deprovision) AND `infra/org` CDK (Customers OU + guardrail SCP) are BUILT + tested (ultracode waves 8–9). Onboarding `provisionCustomerAccount` (flag) + `orgs.aws_account_id` (migration 0013) wired. Still needs the operator prereqs below (catch-all email, one real vend) + the cross-account CDK deploy path (deliverable 3, not yet built).
 >
 > **STATUS 2026-08-30:** catch-all inbound mail is DONE — `infra/mail` deployed to eu-north-1 (`mf-mail` stack) and live-verified (a real send to `test@mjukvaruhuset.se` forwarded successfully to `hasse.lofgren@outlook.com`, `Reply-To` set to the original sender). The prerequisite below is cleared. One follow-up noted in TODO-EXTERNAL: the forwarder's `Reply-To` identity (`hasse.lofgren@outlook.com`) was verified in SES to satisfy the sandbox's recipient-must-be-verified rule — drop that once SES production access lands.
+>
+> **STATUS 2026-08-30 (later, with Hasse):** `infra/org` deployed (`mf-org` stack, us-east-1) and the first real account vended, moved into the Customers OU, and operated via `assumeAccountRole` — all live-verified end to end (see Prerequisites below for the account id and detail). Both operator prerequisites are now cleared. Only deliverable 3 (cross-account CDK deploy path) remains before a real customer account gets stacks deployed into it.
 
 Decision recorded in PLAN.md Decisions 2026-08-28. This is the multi-tenant foundation for M11
 (customer environments) and M8 (resident agent): each customer gets an isolated AWS account we
@@ -58,11 +60,38 @@ vend and operate; the customer can graduate by moving the account out of the org
 
 ## Prerequisites (Hasse / out-of-band — flag, don't block the build)
 - ~~**Catch-all inbound mail on `mjukvaruhuset.se`**~~ — DONE 2026-08-30 (`infra/mail`, see STATUS above).
-- **One real vend done together** when ready — `CreateAccount` makes a real account (slow, 90-day
-  close), so keep it out of CI and out of casual runs.
+- ~~**One real vend done together**~~ — DONE 2026-08-30, with Hasse. `infra/org` deployed (`mf-org`
+  stack, us-east-1 — Organizations is a global-service endpoint; Customers OU `ou-hh2k-uo3j4ipy`,
+  guardrail SCP `p-dbhc1e9h`). Then, via `vendAccount`/`moveToCustomerOu` (`@mf/org`, run directly,
+  not through the onboarding API — no real customer/org exists yet): vended account **072842666463**
+  (`mf-customer-verify`, root email `aws+verify@mjukvaruhuset.se` — first real traffic through
+  `infra/mail`), moved into the Customers OU, and `assumeAccountRole` into
+  `OrganizationAccountAccessRole` confirmed working. All three `@mf/org` primitives now live-verified
+  end to end. This is a throwaway verification account, not a real customer — safe to leave
+  (governed by the guardrail SCP, near-zero cost) or graduate/remove later, deliberately, per "Do
+  NOT" below. Still open: deliverable 3, the cross-account CDK deploy path (bootstrap + deploy a
+  vended account's stacks) — not yet built, needed before a real customer account gets anything
+  deployed into it.
 - **Management-account-runs-prod tech debt**: our platform currently lives in the management
   account; best practice is org-admin-only. Migrating our own dev/qa/live into member accounts is a
   later, separate task — note it, don't do it here.
+  - Confirmed with Hasse 2026-08-30: agreed this should happen **soon**, right after the first
+    customer vend is verified — not urgent-urgent, but next, not indefinitely deferred. Real scope
+    when it's picked up: a `Platform` OU (the Customers OU's guardrail SCP is wrong for us — it's
+    built to restrict customers, not run our own stacks), 2 new vended-style accounts for
+    `mjukvaruhuset-qa`/`mjukvaruhuset-live`, moving the just-built `qa` stack set (M11) into its own
+    account, reworking the shared `mjukvaruhuset.se` Route 53 zone (one zone today serves
+    dev/qa/live — likely NS-delegate `qa.`/`live.` into per-account zones rather than move the apex),
+    and a cross-account deploy path for `deploy.sh`/CI (reuse `assumeAccountRole` from `@mf/org`).
+    The current account (814967776290) keeps its role as the AWS Organization's **management**
+    account regardless — that's fixed at creation and not renameable — so relabelling it
+    "mjukvaruhuset-dev" is a cosmetic Organizations display-name change, not a structural fix; the
+    actual fix is moving qa/live *out*, not making dev's presence here official.
+  - 2026-08-30 (later): a full "phoenix" — evacuating **dev too**, so the management account ends up
+    org-admin-only — is deliberately **out of scope** for the qa/live move above. It is much wider
+    (re-vend the whole dev stack set: RDS data, Secrets Manager values, SES identities, `mf-mail`,
+    ACM, CDK bootstrap in two regions, Route 53 apex repoint) and gets its own brief + scope when
+    picked up, after the qa/live move has landed.
 
 ## Do NOT
 Vend a real account from a test/CI run. Automate `RemoveAccountFromOrganization` (deliberate manual
