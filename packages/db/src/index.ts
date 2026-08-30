@@ -65,7 +65,7 @@ export const sslMode = (connectionString: string, env = process.env): SslMode =>
 	const override = env.DATABASE_SSL?.trim()
 	if (override === 'disable') return false
 	if (override === 'verify-full' || override === 'require') return override
-	let host = ''
+	let host: string
 	try {
 		host = new URL(connectionString).hostname
 	} catch {
