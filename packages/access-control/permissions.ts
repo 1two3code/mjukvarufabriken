@@ -2,11 +2,6 @@
  * All available application permissions
  */
 export const permissions = [
-	// Item permissions
-	'item:read',
-	'item:write',
-	'item:delete',
-
 	// Spec permissions
 	'spec:read',
 	'spec:write',

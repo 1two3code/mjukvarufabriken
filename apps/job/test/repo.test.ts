@@ -1,4 +1,14 @@
-import { mkdir, mkdtemp, readdir, readlink, rm, stat, symlink, writeFile } from 'node:fs/promises'
+import {
+	mkdir,
+	mkdtemp,
+	readdir,
+	readFile,
+	readlink,
+	rm,
+	stat,
+	symlink,
+	writeFile,
+} from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 
@@ -42,6 +52,40 @@ describe('seedRepo', () => {
 		expect(tracked.stdout).toContain('packages/models/index.ts')
 		expect(tracked.stdout).not.toContain('node_modules')
 		expect(tracked.stdout).not.toMatch(/^\.git\//m)
+	})
+
+	it('Rewrites apps/app/index.html title + description with the given app name', async () => {
+		// Arrange: a template shaped like the golden one's apps/app/index.html
+		const template = join(root, 'template')
+		await mkdir(join(template, 'apps', 'app'), { recursive: true })
+		await writeFile(join(template, 'package.json'), '{"name":"t"}')
+		await writeFile(
+			join(template, 'apps', 'app', 'index.html'),
+			'<!doctype html>\n<html>\n<head>\n<title>Template</title>\n' +
+				'<meta name="description" content="Monorepo web template" />\n</head>\n<body></body>\n</html>\n'
+		)
+		const workDir = join(root, 'work')
+
+		// Act
+		const repoDir = await seedRepo(template, workDir, 'job-title', 'Kringlan Bageri & Café')
+
+		// Assert: title + description carry the (HTML-escaped) app name, nothing else changed
+		const html = await readFile(join(repoDir, 'apps', 'app', 'index.html'), 'utf8')
+		expect(html).toContain('<title>Kringlan Bageri &amp; Café</title>')
+		expect(html).toContain(
+			'<meta name="description" content="Kringlan Bageri &amp; Café" />'
+		)
+	})
+
+	it('Leaves the seed untouched when no app name is given, or apps/app/index.html is absent', async () => {
+		// Arrange: no apps/app dir at all (the other fixture templates in this file)
+		const template = join(root, 'template')
+		await mkdir(template, { recursive: true })
+		await writeFile(join(template, 'package.json'), '{"name":"t"}')
+		const workDir = join(root, 'work')
+
+		// Act + Assert: does not throw, whether or not an app name is passed
+		await expect(seedRepo(template, workDir, 'job-no-title')).resolves.toBeTruthy()
 	})
 
 	it('Clears a stale work dir without removing the dir itself (container /work is a fixed mount)', async () => {

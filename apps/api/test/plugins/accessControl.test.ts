@@ -37,12 +37,12 @@ describe('Access control plugin', () => {
 
 	it('Allows access if the session role has all required permissions', async () => {
 		// Arrange
-		app.get('/items', { config: { permissions: ['item:read', 'item:write'] } }, (_, reply) =>
+		app.get('/specs', { config: { permissions: ['spec:read', 'spec:write'] } }, (_, reply) =>
 			reply.send()
 		)
 
 		// Act
-		const response = await app.inject({ url: '/items' })
+		const response = await app.inject({ url: '/specs' })
 
 		// Assert
 		expect(response.statusCode).toBe(200)

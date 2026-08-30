@@ -29,7 +29,7 @@ npm-workspaces TS monorepo instantiated from `templates/web` (the golden templat
 
 ```
 apps/site       @mf/site    public site SPA (sv+en), Vite :5175
-apps/portal     @mf/portal  customer portal SPA, Vite :5173 (Item demo kept as pattern reference)
+apps/portal     @mf/portal  customer portal SPA, Vite :5173
 apps/api        @mf/api     single Fastify BFF serving both SPAs, :5174
 apps/job        @mf/job     build-job container (Fargate): loads a job from Postgres, runs the @mf/harness orchestrator; `npm run job:dev -- <id>` locally
 packages/       @mf/models, @mf/utils, @mf/access-control, @mf/harness (spec engine + orchestrator: plan → DAG → Agent SDK workers in worktrees → merge), @mf/db (postgres driver + migrations/, `npm run db:migrate`), @mf/resident (M8 resident agent service for a customer's own AWS account: issues → harness build → PR, cap/pause/audit/metering; docs/RESIDENT.md)
