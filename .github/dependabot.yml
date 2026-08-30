@@ -12,6 +12,12 @@ updates:
     groups:
       workspace-dependencies:
         patterns: ['*']
+    ignore:
+      # typescript-eslint peers on `typescript <6.1.0`; a major TS bump (e.g. 7.x) breaks `npm ci`
+      # with ERESOLVE (seen: PR #11). Hold TS majors until typescript-eslint supports them; minor
+      # and patch bumps still flow.
+      - dependency-name: 'typescript'
+        update-types: ['version-update:semver-major']
     open-pull-requests-limit: 5
     labels: [dependencies]
 
@@ -43,6 +49,10 @@ updates:
     groups:
       template-dependencies:
         patterns: ['*']
+    ignore:
+      # Same TS-major hold as the root workspace (seen: PR #10) — typescript-eslint peers <6.1.0.
+      - dependency-name: 'typescript'
+        update-types: ['version-update:semver-major']
     open-pull-requests-limit: 3
     labels: [dependencies, template]
 
