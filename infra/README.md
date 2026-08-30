@@ -90,3 +90,20 @@ Then point `VITE_API_URL` in `apps/portal/.env.dev` (and `apps/site/.env.dev`) a
 Deploy with `infra/scripts/deploy.sh <env> [stacks]` (reads AWS creds from the root `.env`); with no stacks given it deploys `resources-<env>`, `mf-<env>` and `ops-<env>` in that order, the same as the `deploy` workflow.
 
 Both SPA distributions forward `/bff/*` to the api ALB, so the apps use `VITE_API_URL=/bff` in every mode (locally Vite proxies `/bff` to `:5174`). ACM certs for dev were requested with `aws acm request-certificate` (us-east-1 for CloudFront, eu-north-1 for the ALB) and DNS-validated in the `mjukvaruhuset.se` hosted zone; ARNs live in `lib/config.ts`. For `live`, repeat with `mjukvaruhuset.se` + `portal.mjukvaruhuset.se` and `api.mjukvaruhuset.se`.
+
+## First live stand-up: deploy RDS deletion-protection off, then flip it on
+
+`resources-live`'s `DatabaseInstance` is deletion-protected. On the *very first* create of that
+stack, if anything else in the same deploy fails afterwards, CloudFormation rolls back the whole
+stack — including the RDS instance it just finished creating — and a protected instance refuses
+the delete, wedging the stack in `ROLLBACK_FAILED` with no self-service recovery (hardening audit
+2026-08-30, finding F1). For the first `resources-live` deploy only:
+
+```shell
+MF_RDS_DELETION_PROTECTION=false infra/scripts/deploy.sh live resources-live   # 1. first create
+# confirm CREATE_COMPLETE, then:
+infra/scripts/deploy.sh live resources-live                                   # 2. flips protection on (in-place, no replacement)
+```
+
+Every later `resources-live` deploy should omit the flag — it only exists for this one-time
+sequencing risk.

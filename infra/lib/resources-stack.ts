@@ -120,6 +120,18 @@ export class ResourcesStack extends Stack {
 		// MARK: RDS Postgres 17 — automated backups (`backupRetentionDays`: 7 dev / 30 live), live
 		// is deletion-protected and takes a final snapshot if the instance is ever removed from
 		// the stack; dev is simply destroyed.
+		//
+		// deletionProtection is deliberately NOT hardcoded to `isLive`: on a stack's very FIRST
+		// create, any other resource failing later in the same deploy makes CloudFormation roll
+		// back the WHOLE stack, including the DB it just finished creating — and a protected RDS
+		// instance refuses that DeleteDBInstance, wedging the stack in ROLLBACK_FAILED (hardening
+		// audit 2026-08-30, finding F1). MF_RDS_DELETION_PROTECTION=false is the operator escape
+		// hatch for a first live stand-up: deploy resources-live once with it set, confirm
+		// CREATE_COMPLETE, then redeploy without it — flipping protection on is an in-place
+		// ModifyDBInstance, not a replacement. Any other value (including unset) keeps the
+		// existing isLive default.
+		const deletionProtection =
+			process.env.MF_RDS_DELETION_PROTECTION === 'false' ? false : isLive
 		this.databaseSecurityGroup = new SecurityGroup(this, 'DatabaseSecurityGroup', {
 			vpc: this.vpc,
 			description: 'Postgres - ingress granted per consumer',
@@ -137,7 +149,7 @@ export class ResourcesStack extends Stack {
 			storageType: StorageType.GP3,
 			multiAz: false,
 			backupRetention: Duration.days(environment.database.backupRetentionDays),
-			deletionProtection: isLive,
+			deletionProtection,
 			removalPolicy: isLive ? RemovalPolicy.SNAPSHOT : RemovalPolicy.DESTROY,
 			storageEncrypted: true,
 			autoMinorVersionUpgrade: true,
