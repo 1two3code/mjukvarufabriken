@@ -1,8 +1,10 @@
 # Phoenix: moving our own platform out of the management account
 
-> **STATUS 2026-08-30:** step 1 done for qa — `mjukvaruhuset-qa` (**212810920591**) vended into
-> the `mjukvaruhuset` OU (`ou-hh2k-mpixv5sr`), `OrganizationAccountAccessRole` verified from the
-> management account. Everything below step 1 is NOT started. `live` account not vended yet.
+> **STATUS 2026-08-30:** steps 1–3 done for qa — `mjukvaruhuset-qa` (**212810920591**) vended into
+> the `mjukvaruhuset` OU (`ou-hh2k-mpixv5sr`), `OrganizationAccountAccessRole` verified; platform
+> guardrail SCP `mf-platform-guardrail` (`p-k2ta5vq5`, `infra/org`) attached to that OU; the qa
+> account is CDK-bootstrapped in eu-north-1 + us-east-1 (default qualifier). Steps 4–7 NOT
+> started. `live` account not vended yet.
 
 Best practice is that the Organization's **management** account (814967776290, fixed at creation,
 not renameable) runs nothing but org administration. Today it runs dev + qa of our platform and

@@ -94,8 +94,9 @@ vend and operate; the customer can graduate by moving the account out of the org
     picked up, after the qa/live move has landed.
   - **Runbook + status now live in [phoenix.md](phoenix.md).** 2026-08-30: `mjukvaruhuset` OU
     (`ou-hh2k-mpixv5sr`) created by Hasse; `mjukvaruhuset-qa` = **212810920591** vended into it
-    and cross-account access verified. Steps 2–7 (platform SCP, bootstrap, CI deploy path,
-    DNS delegation, stack move, per-account services) not started.
+    and cross-account access verified; platform guardrail SCP attached (`infra/org`), qa account
+    CDK-bootstrapped in both regions. Steps 4–7 (CI deploy path, DNS delegation, stack move,
+    per-account services) not started.
 
 ## Do NOT
 Vend a real account from a test/CI run. Automate `RemoveAccountFromOrganization` (deliberate manual
