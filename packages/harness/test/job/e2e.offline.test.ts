@@ -194,6 +194,14 @@ const gitEnv = {
 }
 
 /**
+ * Removes a seeded root. A killed session can still have a git child writing objects for a
+ * moment, so a plain `rm` races it (`ENOTEMPTY … .git/objects` on the CI runner); `fs.rm` retries
+ * that class of error when asked to.
+ */
+const removeRoot = (root: string) =>
+	rm(root, { recursive: true, force: true, maxRetries: 20, retryDelay: 100 })
+
+/**
  * Copies the golden template exactly like `apps/job/src/repo.ts` `seedRepo` (verbatim symlinks,
  * git init -b main, one commit) — but hard-links each `node_modules` instead of copying it, which
  * takes ~1 s instead of ~16 s and is what the real worktree sharing (`shareNodeModules`) does
@@ -386,7 +394,7 @@ describe('offline build-job e2e', () => {
 			// The pushed repo + preview were the fakes, so zero network happened
 			expect((delivery.github as FakeGitHub).pushes).toHaveLength(1)
 		} finally {
-			await rm(root, { recursive: true, force: true })
+			await removeRoot(root)
 		}
 	}, 180_000)
 })
@@ -420,7 +428,7 @@ describe('offline build-job e2e — failure paths', () => {
 			expect(outcome.ok).toBe(false)
 			expect(outcome.reason).toMatch(/worker produced no commits/)
 		} finally {
-			await rm(root, { recursive: true, force: true })
+			await removeRoot(root)
 		}
 	}, 180_000)
 
@@ -435,7 +443,7 @@ describe('offline build-job e2e — failure paths', () => {
 			expect(outcome.ok).toBe(false)
 			expect(outcome.reason).toMatch(/lint/i)
 		} finally {
-			await rm(root, { recursive: true, force: true })
+			await removeRoot(root)
 		}
 	}, 180_000)
 
@@ -488,7 +496,7 @@ describe('offline build-job e2e — failure paths', () => {
 			const merged = (await run(['show', 'HEAD:shared.txt'])).stdout
 			expect(merged).toContain('resolved')
 		} finally {
-			await rm(root, { recursive: true, force: true })
+			await removeRoot(root)
 		}
 	}, 180_000)
 
@@ -517,7 +525,7 @@ describe('offline build-job e2e — failure paths', () => {
 			expect(outcome.ok).toBe(false)
 			expect(outcome.summary).toMatch(/high finding\(s\) still open/)
 		} finally {
-			await rm(root, { recursive: true, force: true })
+			await removeRoot(root)
 		}
 	}, 180_000)
 })
@@ -568,7 +576,7 @@ describe('offline build-job e2e — abort paths', () => {
 			// Nothing was delivered — the fake store is untouched
 			expect(artifacts.objects.size).toBe(0)
 		} finally {
-			await rm(root, { recursive: true, force: true })
+			await removeRoot(root)
 		}
 	}, 180_000)
 
@@ -598,7 +606,7 @@ describe('offline build-job e2e — abort paths', () => {
 			expect(types()).not.toContain('delivery')
 			expect(artifacts.objects.size).toBe(0)
 		} finally {
-			await rm(root, { recursive: true, force: true })
+			await removeRoot(root)
 		}
 	}, 180_000)
 })
@@ -719,7 +727,7 @@ describe('offline build-job e2e — delivery variants', () => {
 			expect((delivery.github as FakeGitHub).pushes).toHaveLength(1)
 			expect([...artifacts.objects.keys()]).toContain(`deliverables/${job.id}/repo.zip`)
 		} finally {
-			await rm(root, { recursive: true, force: true })
+			await removeRoot(root)
 		}
 	}, 180_000)
 
@@ -768,7 +776,7 @@ describe('offline build-job e2e — delivery variants', () => {
 				'review',
 			])
 		} finally {
-			await rm(root, { recursive: true, force: true })
+			await removeRoot(root)
 		}
 	}, 180_000)
 })
