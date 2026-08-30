@@ -343,4 +343,32 @@ describe('Stripe plugin (paymentProvider)', () => {
 			)
 		})
 	})
+
+	describe('placeholder secrets (hardening audit 2026-08-30, E1)', () => {
+		// The CDK placeholder for these secrets is a random 32-char string, never empty — a plain
+		// `!secretKey` check can't distinguish it from a real key. A key without the `sk_` prefix
+		// must be treated exactly like a missing one.
+		const placeholderKey = 'aB3xY9qZ7wErTyUiOpAsDfGhJkLzXcVb'
+
+		it('Falls back to the fake provider — not the real Stripe client — on a non-Stripe-shaped key', async () => {
+			const app = await createApp({ STRIPE_SECRET_KEY: placeholderKey })
+			expect(app.paymentProvider.kind).toBe('fake')
+		})
+
+		it('Throws in live on a non-Stripe-shaped key exactly as it would on a missing one', async () => {
+			await expect(createApp({ ENV: 'live', STRIPE_SECRET_KEY: placeholderKey })).rejects.toThrow(
+				/STRIPE_SECRET_KEY is required in live/
+			)
+		})
+
+		it('Rejects webhooks when the configured webhook secret is not Stripe-shaped', async () => {
+			const app = await createApp({
+				STRIPE_SECRET_KEY: 'sk_test_123',
+				STRIPE_WEBHOOK_SECRET: placeholderKey,
+			})
+			expect(() => app.paymentProvider.constructWebhookEvent('{}', 'sig')).toThrow(
+				/Invalid webhook signature/
+			)
+		})
+	})
 })
