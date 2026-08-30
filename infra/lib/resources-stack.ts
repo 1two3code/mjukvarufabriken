@@ -211,8 +211,14 @@ export class ResourcesStack extends Stack {
 					`  if (event.RequestType === 'Delete') return`,
 					`  const SecretId = event.ResourceProperties.SecretArn`,
 					`  const sm = new SecretsManagerClient({})`,
+					// GetSecretValue is intentionally NOT wrapped in try/catch: the secret is always
+					// pre-created by createSecret() above, so a failure here (throttle, KMS hiccup, IAM
+					// eventual consistency on a re-invoke) is anomalous — let it throw and abort the
+					// custom resource rather than silently falling into the "regenerate" branch below,
+					// which would invalidate every live token on a merely transient read error.
+					`  const current = await sm.send(new GetSecretValueCommand({ SecretId }))`,
 					`  let valid = false`,
-					`  try { const j = JSON.parse((await sm.send(new GetSecretValueCommand({ SecretId }))).SecretString); valid = j && j.kty === 'OKP' && j.crv === 'Ed25519' && !!j.d } catch (e) {}`,
+					`  try { const j = JSON.parse(current.SecretString); valid = j && j.kty === 'OKP' && j.crv === 'Ed25519' && !!j.d } catch (e) {}`,
 					`  if (!valid) {`,
 					`    const { privateKey } = generateKeyPairSync('ed25519')`,
 					`    await sm.send(new PutSecretValueCommand({ SecretId, SecretString: JSON.stringify(privateKey.export({ format: 'jwk' })) }))`,
