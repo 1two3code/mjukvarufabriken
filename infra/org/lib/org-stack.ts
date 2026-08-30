@@ -25,6 +25,7 @@ export type OrgStackProps = StackProps & {
 export class OrgStack extends Stack {
 	readonly customersOu: CfnOrganizationalUnit
 	readonly scp: CfnPolicy
+	readonly platformScp: CfnPolicy
 
 	constructor(scope: Construct, id: string, { config, ...props }: OrgStackProps) {
 		super(scope, id, props)
@@ -43,6 +44,19 @@ export class OrgStack extends Stack {
 			targetIds: [this.customersOu.attrId],
 		})
 
+		// Our own platform accounts (qa/live, later dev — docs/backlog/phoenix.md) sit in the
+		// hand-made `mjukvaruhuset` OU. The same four guardrails apply to them; a separate policy so
+		// the two can diverge later (customer-only restrictions must never land on our accounts, and
+		// vice versa). Never applies to the management account, which also lives in that OU.
+		this.platformScp = new CfnPolicy(this, 'PlatformGuardrail', {
+			name: 'mf-platform-guardrail',
+			description:
+				'Region-lock + leave-org / cloudtrail / root-user denies for our own platform accounts (qa/live)',
+			type: 'SERVICE_CONTROL_POLICY',
+			content: buildCustomersScp(config.allowedRegions),
+			targetIds: [config.platformOuId],
+		})
+
 		Tags.of(this).add('project', 'mjukvaruhuset')
 		Tags.of(this).add('component', 'org-governance')
 
@@ -53,6 +67,10 @@ export class OrgStack extends Stack {
 		new CfnOutput(this, 'CustomersScpId', {
 			value: this.scp.attrId,
 			description: 'Id of the guardrail SCP attached to the Customers OU',
+		})
+		new CfnOutput(this, 'PlatformScpId', {
+			value: this.platformScp.attrId,
+			description: `Id of the guardrail SCP attached to the platform OU ${config.platformOuId}`,
 		})
 	}
 }

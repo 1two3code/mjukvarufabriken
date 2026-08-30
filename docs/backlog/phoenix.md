@@ -1,8 +1,10 @@
 # Phoenix: moving our own platform out of the management account
 
-> **STATUS 2026-08-30:** step 1 done for qa — `mjukvaruhuset-qa` (**212810920591**) vended into
-> the `mjukvaruhuset` OU (`ou-hh2k-mpixv5sr`), `OrganizationAccountAccessRole` verified from the
-> management account. Everything below step 1 is NOT started. `live` account not vended yet.
+> **STATUS 2026-08-30:** steps 1–3 done for qa — `mjukvaruhuset-qa` (**212810920591**) vended into
+> the `mjukvaruhuset` OU (`ou-hh2k-mpixv5sr`), `OrganizationAccountAccessRole` verified; platform
+> guardrail SCP `mf-platform-guardrail` (`p-k2ta5vq5`, `infra/org`) attached to that OU; the qa
+> account is CDK-bootstrapped in eu-north-1 + us-east-1 (default qualifier). Steps 4–7 NOT
+> started. `live` account not vended yet.
 
 Best practice is that the Organization's **management** account (814967776290, fixed at creation,
 not renameable) runs nothing but org administration. Today it runs dev + qa of our platform and
@@ -46,20 +48,26 @@ Root email goes to the catch-all (`infra/mail`); the root user is never used —
 `OrganizationAccountAccessRole` from the management account (later: from a dedicated deploy
 role). qa: `car-1ae227b050b545618f6a36a872403066` → 212810920591.
 
-### 2. Platform guardrail SCP on the `mjukvaruhuset` OU
-Add to `infra/org` (currently: Customers OU + `mf-customers-guardrail` only): region lock to
-`eu-north-1` + `us-east-1` (ACM for CloudFront, Budgets), deny `organizations:LeaveOrganization`,
-deny disabling/deleting CloudTrail, deny root-user actions. NOT the customer-only restrictions.
-Remember SCPs do not apply to the management account — the guardrail protects qa/live only.
-Deploy: `cd infra/org && npx cdk deploy` (management account creds).
+### 2. Platform guardrail SCP on the `mjukvaruhuset` OU — ✅
+`infra/org` `OrgStack` now also creates `mf-platform-guardrail` (`p-k2ta5vq5`) targeted at the
+hand-made OU (`config.platformOuId`, default `ou-hh2k-mpixv5sr`; the OU is referenced, never
+owned). It is built by the same `buildCustomersScp` — the four guardrails (region lock to
+`eu-north-1` + `us-east-1`, deny `organizations:LeaveOrganization`, deny disabling CloudTrail,
+deny the root user) are generic; a separate policy so customer-only restrictions can be added to
+theirs later without touching ours. SCPs do not apply to the management account — the guardrail
+protects qa/live only. Deploy: `cd infra/org && npx cdk deploy` (management account creds,
+`CDK_DEFAULT_REGION=us-east-1`).
 
-### 3. CDK bootstrap the new account (one-time, admin creds)
+### 3. CDK bootstrap the new account (one-time, admin creds) — ✅ qa
 ```sh
 # creds = assume OrganizationAccountAccessRole into the account
 npx cdk bootstrap aws://<id>/eu-north-1 aws://<id>/us-east-1
 ```
 Same default qualifier (`hnb659fds`) as today, so `deploy-environment.yml`'s bootstrap guard and
-the `github-deploy` role's `cdk-*-role-<account>-<region>` grants work unchanged.
+the `github-deploy` role's `cdk-*-role-<account>-<region>` grants work unchanged. Gotcha: run the
+`cdk` binary from a directory WITHOUT `cdk.json` (or pass `--app ''`) — inside `infra/` bootstrap
+synthesises the whole app first and fails on the missing built SPAs. Done for qa 2026-08-30 via
+`OrganizationAccountAccessRole` (assume-role creds exported, then `cdk bootstrap` both regions).
 
 ### 4. CI deploy path for the account
 - Deploy `infra`'s `github-deploy` stack INTO the new account (it is per account:

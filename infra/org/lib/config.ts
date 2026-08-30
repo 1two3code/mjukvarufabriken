@@ -13,12 +13,20 @@ export type OrgConfig = {
 	 * certificates fronting CloudFront, and AWS Budgets.
 	 */
 	allowedRegions: string[]
+	/**
+	 * Id of the `mjukvaruhuset` OU that holds OUR platform accounts (qa/live, later dev — see
+	 * docs/backlog/phoenix.md). Created by hand 2026-08-30, so it is referenced, not owned, by the
+	 * stack; the platform guardrail SCP is attached to it. Overridable with `-c platformOuId=ou-…`.
+	 */
+	platformOuId: string
 	account?: string
 	region?: string
 }
 
 /** The recorded root id of org `o-6lnoiunxku` (management account 814967776290). */
 export const DEFAULT_ROOT_ID = 'r-hh2k'
+/** The recorded id of the hand-made `mjukvaruhuset` (platform) OU under that root. */
+export const DEFAULT_PLATFORM_OU_ID = 'ou-hh2k-mpixv5sr'
 /** eu-north-1 for our workloads; us-east-1 for ACM-for-CloudFront and Budgets. */
 export const DEFAULT_ALLOWED_REGIONS = ['eu-north-1', 'us-east-1']
 
@@ -40,6 +48,8 @@ export const loadConfig = (app: App): OrgConfig => {
 	return {
 		rootId: contextString(app, 'rootId') || process.env.ORG_ROOT_ID || DEFAULT_ROOT_ID,
 		allowedRegions: regions?.length ? regions : DEFAULT_ALLOWED_REGIONS,
+		platformOuId:
+			contextString(app, 'platformOuId') || process.env.ORG_PLATFORM_OU_ID || DEFAULT_PLATFORM_OU_ID,
 		account,
 		// AWS::Organizations resources deploy only through the us-east-1 endpoint, so the stack is
 		// pinned there regardless of CDK_DEFAULT_REGION. This is the deploy region for the org

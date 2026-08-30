@@ -4,7 +4,7 @@ import { describe, it } from 'node:test'
 import { App } from 'aws-cdk-lib'
 import { Match, Template } from 'aws-cdk-lib/assertions'
 
-import { DEFAULT_ROOT_ID, loadConfig } from '../lib/config.ts'
+import { DEFAULT_PLATFORM_OU_ID, DEFAULT_ROOT_ID, loadConfig } from '../lib/config.ts'
 import { OrgStack } from '../lib/org-stack.ts'
 
 const synth = (context: Record<string, string> = {}) => {
@@ -29,8 +29,27 @@ describe('OrgStack', () => {
 		})
 	})
 
-	it('attaches exactly one SCP, targeted at the Customers OU', () => {
-		template.resourceCountIs('AWS::Organizations::Policy', 1)
+	it('attaches the platform guardrail to the hand-made mjukvaruhuset OU (by id, never owned)', () => {
+		template.resourceCountIs('AWS::Organizations::Policy', 2)
+		template.hasResourceProperties('AWS::Organizations::Policy', {
+			Type: 'SERVICE_CONTROL_POLICY',
+			Name: 'mf-platform-guardrail',
+			TargetIds: [DEFAULT_PLATFORM_OU_ID],
+			Content: Match.objectLike({
+				Statement: Match.arrayWith([
+					Match.objectLike({ Sid: 'RegionLock', Effect: 'Deny' }),
+					Match.objectLike({ Sid: 'DenyRootUser', Effect: 'Deny' }),
+				]),
+			}),
+		})
+		const custom = synth({ platformOuId: 'ou-test' })
+		custom.template.hasResourceProperties('AWS::Organizations::Policy', {
+			Name: 'mf-platform-guardrail',
+			TargetIds: ['ou-test'],
+		})
+	})
+
+	it('attaches the customers guardrail, targeted at the Customers OU', () => {
 		const ou = Object.keys(template.findResources('AWS::Organizations::OrganizationalUnit'))[0]
 		template.hasResourceProperties('AWS::Organizations::Policy', {
 			Type: 'SERVICE_CONTROL_POLICY',
