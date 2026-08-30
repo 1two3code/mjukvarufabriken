@@ -1,4 +1,4 @@
-import { CfnOutput, Duration, RemovalPolicy, Stack } from 'aws-cdk-lib'
+import { CfnOutput, CustomResource, Duration, RemovalPolicy, Stack } from 'aws-cdk-lib'
 import { BuildSpec, LinuxBuildImage, Project, Source } from 'aws-cdk-lib/aws-codebuild'
 import { NatProvider, Peer, Port, SecurityGroup, SubnetType, Vpc } from 'aws-cdk-lib/aws-ec2'
 import { Repository, TagStatus } from 'aws-cdk-lib/aws-ecr'
@@ -12,6 +12,8 @@ import {
 	OperatingSystemFamily,
 } from 'aws-cdk-lib/aws-ecs'
 import { ManagedPolicy, PolicyStatement, Role, ServicePrincipal } from 'aws-cdk-lib/aws-iam'
+import { Code, Function as LambdaFunction, Runtime } from 'aws-cdk-lib/aws-lambda'
+import { Provider } from 'aws-cdk-lib/custom-resources'
 import { LogGroup, RetentionDays } from 'aws-cdk-lib/aws-logs'
 import {
 	Credentials,
@@ -168,6 +170,41 @@ export class ResourcesStack extends Stack {
 			'stripe-secret-key': createSecret('stripe-secret-key'),
 			'stripe-webhook-secret': createSecret('stripe-webhook-secret'),
 		}
+
+		// The api parses `auth-jwt-private-key` as an Ed25519 JWK at boot and crash-loops on the random
+		// placeholder above (seen standing up qa from a fresh account). Seed it with a real key on
+		// deploy — idempotent: the handler only (re)generates when the value is NOT a valid Ed25519 JWK,
+		// so a populated env (dev) and every re-deploy are no-ops. The key is generated in-account and
+		// never leaves it. Replaces the manual `node scripts/gen-auth-key.mjs | put-secret-value`.
+		const authKeySeed = new LambdaFunction(this, 'AuthKeySeed', {
+			runtime: Runtime.NODEJS_20_X,
+			handler: 'index.handler',
+			timeout: Duration.seconds(30),
+			code: Code.fromInline(
+				[
+					`const { SecretsManagerClient, GetSecretValueCommand, PutSecretValueCommand } = require('@aws-sdk/client-secrets-manager')`,
+					`const { generateKeyPairSync } = require('crypto')`,
+					`exports.handler = async (event) => {`,
+					`  if (event.RequestType === 'Delete') return`,
+					`  const SecretId = event.ResourceProperties.SecretArn`,
+					`  const sm = new SecretsManagerClient({})`,
+					`  let valid = false`,
+					`  try { const j = JSON.parse((await sm.send(new GetSecretValueCommand({ SecretId }))).SecretString); valid = j && j.kty === 'OKP' && j.crv === 'Ed25519' && !!j.d } catch (e) {}`,
+					`  if (!valid) {`,
+					`    const { privateKey } = generateKeyPairSync('ed25519')`,
+					`    await sm.send(new PutSecretValueCommand({ SecretId, SecretString: JSON.stringify(privateKey.export({ format: 'jwk' })) }))`,
+					`  }`,
+					`}`,
+				].join('\n')
+			),
+		})
+		this.secrets['auth-jwt-private-key'].grantRead(authKeySeed)
+		this.secrets['auth-jwt-private-key'].grantWrite(authKeySeed)
+		const authKeySeedProvider = new Provider(this, 'AuthKeySeedProvider', { onEventHandler: authKeySeed })
+		new CustomResource(this, 'AuthKeySeedResource', {
+			serviceToken: authKeySeedProvider.serviceToken,
+			properties: { SecretArn: this.secrets['auth-jwt-private-key'].secretArn },
+		})
 
 		// MARK: SES — verified sending domain with DKIM records in the hosted zone. Sending to
 		// arbitrary addresses still needs production access (TODO-EXTERNAL).
