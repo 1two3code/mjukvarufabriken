@@ -38,8 +38,11 @@ const plan = m => log(`  ${APPLY ? 'APPLY' : 'PLAN '} ${m}`)
 const sh = (cmd, a, opts = {}) => execFileSync(cmd, a, { encoding: 'utf8', ...opts }).trim()
 const awsJson = a => JSON.parse(sh('aws', [...a, '--output', 'json']) || 'null')
 
-const accountName = `mf-${env}`
-const rootEmail = `aws+${env}@${EMAIL_DOMAIN}`
+// Match the platform account convention (mjukvaruhuset-qa, aws+mjukvaruhuset-qa@…). `--account <id>`
+// uses an already-created account instead of finding/creating one by name.
+const explicitAccount = flag('account')
+const accountName = `mjukvaruhuset-${env}`
+const rootEmail = `aws+mjukvaruhuset-${env}@${EMAIL_DOMAIN}`
 
 // MARK: guard — must be the org management account
 const org = awsJson(['organizations', 'describe-organization'])
@@ -52,11 +55,14 @@ log(`✓ org management account ${mgmt} (org ${org.Organization.Id})`)
 // MARK: P1 — CreateAccount (idempotent)
 log(`\n[P1] account ${accountName} <${rootEmail}>`)
 const accounts = awsJson(['organizations', 'list-accounts']).Accounts || []
-let account = accounts.find(a => a.Name === accountName || a.Email === rootEmail)
+const account = explicitAccount
+	? accounts.find(a => a.Id === explicitAccount)
+	: accounts.find(a => a.Name === accountName || a.Email === rootEmail)
+if (explicitAccount && !account) fail(`--account ${explicitAccount} not found in the org`)
 let accountId
 if (account) {
 	accountId = account.Id
-	log(`  exists: ${accountId} (status ${account.Status})`)
+	log(`  using existing ${accountId} (${account.Name}, ${account.Status})`)
 	if (account.Status !== 'ACTIVE') fail(`account ${accountId} is ${account.Status}, not ACTIVE`)
 } else if (APPLY) {
 	const created = awsJson(['organizations', 'create-account', '--account-name', accountName, '--email', rootEmail, '--role-name', ACCESS_ROLE])
@@ -87,10 +93,13 @@ if (APPLY && accountId !== '<new-account-id>') {
 		AWS_ACCESS_KEY_ID: creds.AccessKeyId,
 		AWS_SECRET_ACCESS_KEY: creds.SecretAccessKey,
 		AWS_SESSION_TOKEN: creds.SessionToken,
-		AWS_PROFILE: '',
 		CDK_DEFAULT_ACCOUNT: accountId,
 		CDK_DEFAULT_REGION: region,
+		// Build ONLY the account-scoped github-deploy stack (created outside the env loop): a value
+		// matching no env skips every web stack, so `cdk deploy github-deploy` needs no SPA dist.
+		MF_ENV: 'github-deploy',
 	}
+	delete childEnv.AWS_PROFILE // an empty/stale AWS_PROFILE would shadow the assumed creds
 }
 const cdk = a => (APPLY ? log(sh('npx', ['cdk', ...a], { cwd: INFRA_DIR, env: childEnv })) : plan(`(in ${accountId}) npx cdk ${a.join(' ')}`))
 

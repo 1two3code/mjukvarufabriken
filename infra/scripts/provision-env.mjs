@@ -82,8 +82,8 @@ if (ASSUME) {
 		AWS_ACCESS_KEY_ID: creds.AccessKeyId,
 		AWS_SECRET_ACCESS_KEY: creds.SecretAccessKey,
 		AWS_SESSION_TOKEN: creds.SessionToken,
-		AWS_PROFILE: '',
 	}
+	delete targetEnv.AWS_PROFILE // an empty AWS_PROFILE reads as a profile named "" — must be unset
 }
 const aws = (cmdArgs, opts = {}) =>
 	sh('aws', [...cmdArgs, '--output', 'json', ...(opts.region ? ['--region', opts.region] : [])], opts.env ?? targetEnv)
