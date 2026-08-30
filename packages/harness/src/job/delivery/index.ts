@@ -84,6 +84,14 @@ export type LiveDeliveryOptions = {
 	previewAuth?: PreviewAuth
 	/** `ARTIFACTS_BUCKET` + region */
 	artifactsBucket?: string
+	/**
+	 * This job's id and `ARTIFACTS_ROLE_ARN` (M3 hardening #1) — with both, every S3 write is
+	 * scoped to this job's own prefix/key via an assumed-role session policy
+	 * (`artifacts.ts#createS3ArtifactStore`); without either, the bucket is written with ambient
+	 * credentials as before (local `job:dev`, tests).
+	 */
+	jobId?: string
+	artifactsRoleArn?: string
 	region?: string
 	workerModel?: string
 	/** Log instead of calling GitHub / ECS Express / S3 */
@@ -130,11 +138,14 @@ export const createLiveDeliveryClients = ({
 	cluster,
 	previewAuth,
 	artifactsBucket,
+	jobId,
+	artifactsRoleArn,
 	region = process.env.AWS_REGION || 'eu-north-1',
 	workerModel,
 	dryRun = false,
 	log = line => console.log(JSON.stringify({ message: line })),
 }: LiveDeliveryOptions): DeliveryClients => {
+	const artifactsScope = jobId && artifactsRoleArn ? { jobId, roleArn: artifactsRoleArn } : undefined
 	if (dryRun) {
 		// Dry-run means "skip the external accounts we do not have yet" — GitHub and ECS Express.
 		// The S3 bundle is OUR artifacts bucket (the job task role already writes it) and needs no
@@ -144,7 +155,7 @@ export const createLiveDeliveryClients = ({
 			github: createDryRunGitHubClient(log),
 			deploy: createDryRunDeployClient(log),
 			artifacts: artifactsBucket
-				? createS3ArtifactStore(artifactsBucket, region)
+				? createS3ArtifactStore(artifactsBucket, region, artifactsScope)
 				: createDryRunArtifactStore('mf-artifacts-dry-run', log),
 			prose: process.env.ANTHROPIC_API_KEY
 				? createLiveProseWriter({ model: workerModel })
@@ -188,7 +199,7 @@ export const createLiveDeliveryClients = ({
 					})
 		})(),
 		artifacts: artifactsBucket
-			? createS3ArtifactStore(artifactsBucket, region)
+			? createS3ArtifactStore(artifactsBucket, region, artifactsScope)
 			: {
 					kind: 'none',
 					bucket: '',

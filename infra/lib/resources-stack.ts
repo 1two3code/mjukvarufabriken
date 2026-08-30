@@ -11,7 +11,7 @@ import {
 	LogDrivers,
 	OperatingSystemFamily,
 } from 'aws-cdk-lib/aws-ecs'
-import { ManagedPolicy, PolicyStatement, Role, ServicePrincipal } from 'aws-cdk-lib/aws-iam'
+import { ArnPrincipal, ManagedPolicy, PolicyStatement, Role, ServicePrincipal } from 'aws-cdk-lib/aws-iam'
 import { Code, Function as LambdaFunction, Runtime } from 'aws-cdk-lib/aws-lambda'
 import { Provider } from 'aws-cdk-lib/custom-resources'
 import { LogGroup, RetentionDays } from 'aws-cdk-lib/aws-logs'
@@ -66,6 +66,13 @@ export class ResourcesStack extends Stack {
 	/** ECS cluster for build jobs (M3) */
 	readonly jobsCluster: Cluster
 	readonly jobTaskDefinition: FargateTaskDefinition
+	/**
+	 * Assumed per-job by the job task role (never granted S3 directly) with an inline session
+	 * policy the job process builds from its own `JOB_ID`, narrowing this role's own
+	 * `deliverables/*` + `delivery-source/*` ceiling down to that one job's prefix/key
+	 * (M3 hardening #1 — see the job task role MARK below).
+	 */
+	readonly jobArtifactsRole: Role
 	readonly jobSecurityGroup: SecurityGroup
 	/** ECR repository the delivery pushes built customer images to (M5, ECS Express) */
 	readonly deliverablesRepository: Repository
@@ -261,6 +268,18 @@ export class ResourcesStack extends Stack {
 			},
 		})
 
+		// M3 hardening #1: the job task role itself gets no S3 permission (below). It may only
+		// `sts:AssumeRole` into this role, whose OWN ceiling is `deliverables/*` + `delivery-source/*`
+		// — apps/job then narrows that further with an inline session policy built from its own
+		// `JOB_ID` (`ARTIFACTS_ROLE_ARN`, packages/harness/src/job/delivery/artifacts.ts), so one
+		// job's credentials can put objects only under its own prefix/key, never another job's.
+		this.jobArtifactsRole = new Role(this, 'JobArtifactsRole', {
+			roleName: `mf-job-artifacts-${environment.name}`,
+			assumedBy: new ArnPrincipal(this.jobTaskDefinition.taskRole.roleArn),
+			description: 'Per-job S3 uploads, session-policy-scoped by the job to its own prefix/key',
+			maxSessionDuration: Duration.hours(1),
+		})
+
 		// Egress allowlist sidecar: tinyproxy, FilterDefaultDeny, domains in apps/job/proxy/filter
 		// (npm, GitHub, Anthropic). Shares localhost with the job container (awsvpc).
 		const proxyPort = 8888
@@ -376,6 +395,9 @@ export class ResourcesStack extends Stack {
 			'169.254.170.2',
 			'169.254.169.254',
 			`secretsmanager.${this.region}.amazonaws.com`,
+			// sts:AssumeRole into jobArtifactsRole (M3 hardening #1) — same direct-to-AWS-API bypass
+			// as Secrets Manager above, never a customer-reachable host.
+			`sts.${this.region}.amazonaws.com`,
 			`${this.artifactsBucket.bucketName}.s3.${this.region}.amazonaws.com`,
 			`${this.artifactsBucket.bucketName}.s3.amazonaws.com`,
 			`ecs.${this.region}.amazonaws.com`,
@@ -388,6 +410,9 @@ export class ResourcesStack extends Stack {
 			environment: {
 				ENV: environment.name,
 				ARTIFACTS_BUCKET: this.artifactsBucket.bucketName,
+				// M3 hardening #1: role the job assumes (session-policy-scoped to its own JOB_ID) to
+				// upload — the task role itself has no S3 permission (see the job task role MARK below)
+				ARTIFACTS_ROLE_ARN: this.jobArtifactsRole.roleArn,
 				ANTHROPIC_API_KEY_SECRET_ARN: this.secrets['anthropic-api-key'].secretArn,
 				// M5 delivery: GitHub App installation tokens (repo push) + ECS Express preview + bundle
 				GITHUB_APP_PRIVATE_KEY_SECRET_ARN: this.secrets['github-app-key'].secretArn,
@@ -426,7 +451,11 @@ export class ResourcesStack extends Stack {
 		//     GitHub App (TODO-EXTERNAL), so the org token is BACK for v1. apps/job reads it once at
 		//     start-up and strips it from the environment the sandbox (workers, npm scripts) sees;
 		//     it is still reachable by code running in the job process — accepted until the App exists.
-		//   s3:PutObject*/Abort* on the artifacts bucket       — upload deliverables (never read/list/delete)
+		//   sts:AssumeRole on jobArtifactsRole only            — that role (not this one) carries
+		//     s3:PutObject*/Abort* on the artifacts bucket, ceiling-scoped to deliverables/* +
+		//     delivery-source/*; apps/job narrows it further per job with an inline session policy
+		//     built from its own JOB_ID (M3 hardening #1 — a job can put objects only under its own
+		//     prefix/key, never another job's; versioning still keeps any prior copy either way).
 		//   codebuild:StartBuild/BatchGetBuilds on the project — M5: build + push the customer image to ECR.
 		//     Resource-scoped to the one delivery project, so the job can start no other build.
 		//   ecs:CreateExpressGatewayService/DescribeExpressGatewayService — M5: preview service from that
@@ -438,13 +467,14 @@ export class ResourcesStack extends Stack {
 		// token (RunTask override), so there is no database grant and no 5432 rule any more
 		// (docs/M3-REVIEW.md #18). Never: Stripe keys, the auth signing key, ecr:* directly (CodeBuild
 		// pushes) or logs:* (the execution role writes logs). Secrets reach the container as ARNs.
-		//
-		// KNOWN GAP (PLAN.md, "M3 hardening"): PutObject is bucket-wide, so a job can overwrite
-		// (not read) another job's deliverable — versioning keeps the previous copy. Goes away
-		// when uploads move behind the same per-job endpoint (M5 delivery).
 		this.secrets['anthropic-api-key'].grantRead(this.jobTaskDefinition.taskRole)
 		this.secrets['github-app-key'].grantRead(this.jobTaskDefinition.taskRole)
-		this.artifactsBucket.grantPut(this.jobTaskDefinition.taskRole)
+		// jobArtifactsRole's own ceiling — the runtime session policy (apps/job) narrows it to one
+		// job's prefix/key; grantPut, not grantWrite, so even a full job's worth of access can
+		// upload but never delete or overwrite-by-delete.
+		this.artifactsBucket.grantPut(this.jobArtifactsRole, 'deliverables/*')
+		this.artifactsBucket.grantPut(this.jobArtifactsRole, 'delivery-source/*')
+		this.jobArtifactsRole.grantAssumeRole(this.jobTaskDefinition.taskRole)
 		// CodeBuild: resource-scoped to the one delivery project (no tag fence needed).
 		this.jobTaskDefinition.taskRole.addToPrincipalPolicy(
 			new PolicyStatement({

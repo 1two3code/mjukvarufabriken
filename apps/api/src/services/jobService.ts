@@ -84,7 +84,9 @@ declare module 'fastify' {
 			/**
 			 * Status/tokens/plan/gates/urls write. Status only moves forward (`StatusRegression`
 			 * otherwise); a terminal status revokes the token; the killed-guard of `db.jobs.update`
-			 * keeps usage, plan and gates of a killed job but never its reason
+			 * keeps usage, plan and gates of a killed job but never its reason. Publishes the
+			 * `JobsFailed`/`JobTokensUsed` CloudWatch metrics the ops-stack alarms read (M3
+			 * hardening #2) — from this validated write, never the container's raw log lines.
 			 */
 			reportUpdate: (job: Job, update: JobReportUpdate) => Promise<JobReportUpdateResponse>
 		}
@@ -230,7 +232,7 @@ const keepOnKilledRow = ({ tokensUsed, usage, costUsd, plan, gates }: JobUpdate)
 })
 
 const plugin: FastifyPluginAsync = async app => {
-	const { db, ecs, s3, specService } = app
+	const { db, ecs, metrics, s3, specService } = app
 
 	/** The model prices the job bills at: those in effect at its order's creation (else now) */
 	const pricesForJob = async (job: Job) => {
@@ -519,7 +521,17 @@ const plugin: FastifyPluginAsync = async app => {
 				...(terminal && { reportTokenHash: null }),
 			}
 			const row = await db.jobs.update(job.id, write)
-			if (row) return { status: row.status, killed: row.status === 'killed' }
+			// Tamper-proof alarm metrics (M3 hardening #2): this write already passed the
+			// forward-only status check and Zod validation, so — unlike the container's raw log
+			// lines a customer build script can also print — a spoofed spike or a hidden failure
+			// isn't possible here.
+			if (update.tokensUsed !== undefined) {
+				await metrics.recordJobTokensUsed(job.id, update.tokensUsed)
+			}
+			if (row) {
+				if (row.status === 'failed') await metrics.recordJobFailed(job.id)
+				return { status: row.status, killed: row.status === 'killed' }
+			}
 			// Status write refused: the admin killed the job. Usage, plan and gates still land;
 			// the reason and the timestamps of the kill stay as the admin wrote them.
 			const rest = keepOnKilledRow(write)
@@ -535,6 +547,7 @@ export default fp(plugin, {
 		'#internal/db',
 		'#internal/ecs',
 		'#internal/email',
+		'#internal/metrics',
 		'#internal/s3',
 		'#internal/specService',
 	],
