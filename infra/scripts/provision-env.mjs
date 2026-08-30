@@ -16,6 +16,7 @@
 // (mjukvaruhuset.se) needs the root zone to live in the env account — see PHOENIX.md "root-zone
 // ownership" — and is refused here until that decision is wired.
 
+/* global process, console, URL */
 import { execFileSync } from 'node:child_process'
 import { writeFileSync } from 'node:fs'
 
@@ -97,7 +98,7 @@ if (parentZoneId) {
 	})
 	try {
 		awsWrite(['route53', 'change-resource-record-sets', '--hosted-zone-id', parentZoneId, '--change-batch', batch])
-	} catch (e) {
+	} catch {
 		log(`  ! could not write to parent zone (different account?) — add this NS delegation by hand:`)
 		nsRecords.forEach(v => log(`      ${subdomain}. NS ${v}`))
 	}
