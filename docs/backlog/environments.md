@@ -30,6 +30,9 @@ Phased: first **qa + live**, then full **dev / qa / live**.
     build. It also turns the customer's ad-hoc requests into captured requirements the factory can
     build against — so v0.1 → v0.2 is a real spec, not a re-guess. Ties to the spec engine
     (`@mf/harness` planner) consuming the brief, and to per-customer project memory.
+    **Detailed design for the escalation mechanism itself (the "Send to mjukvaruhuset" button, the
+    scope boundary, the new harness build-against-existing-repo mode): see
+    [dev-escalation.md](dev-escalation.md).**
 - **qa** — a release-candidate mirror of live. Changes promoted from dev land here; the QA gates
   (M4) run against it before it can go to live. "qa and live are the same most of the time."
 - **live** — production, the URL the customer's users hit. Promotion is dev → qa → live.
