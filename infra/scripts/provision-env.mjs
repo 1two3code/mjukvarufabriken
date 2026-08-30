@@ -164,6 +164,11 @@ if (APPLY) {
 }
 gh(['variable', 'set', 'AWS_ACCOUNT_ID', '--env', env, '--repo', REPO, '--body', account])
 gh(['variable', 'set', 'AWS_REGION', '--env', env, '--repo', REPO, '--body', region])
+// The per-env infra identity lib/config.ts reads (deploy-environment.yml passes them as MF_*).
+gh(['variable', 'set', 'MF_HOSTED_ZONE_ID', '--env', env, '--repo', REPO, '--body', zoneId])
+gh(['variable', 'set', 'MF_HOSTED_ZONE_NAME', '--env', env, '--repo', REPO, '--body', subdomain])
+gh(['variable', 'set', 'MF_CLOUDFRONT_CERT_ARN', '--env', env, '--repo', REPO, '--body', cloudFrontCertArn])
+gh(['variable', 'set', 'MF_API_CERT_ARN', '--env', env, '--repo', REPO, '--body', apiCertArn])
 gh(['secret', 'set', 'AWS_DEPLOY_ROLE_ARN', '--env', env, '--repo', REPO, '--body', deployRoleArn])
 
 // MARK: P6 — publish per-env infra values (consumed by config once item 1 lands)

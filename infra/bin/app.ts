@@ -25,7 +25,12 @@ const githubDeploy = new GithubDeployStack(app, 'github-deploy', {
 })
 Tags.of(githubDeploy).add('Service', config.serviceName)
 
+// A deploy targets one env: `MF_ENV=<name>` builds only that env's stacks, so an un-namespaced
+// `MF_*` value applies to it (lib/config.ts) and synth needs only that env's `dist/<env>` assets.
+// Unset (CI's offline synth check) builds every env from the committed config, as before.
+const onlyEnv = process.env.MF_ENV
 for (const environment of config.environments) {
+	if (onlyEnv && environment.name !== onlyEnv) continue
 	const env = environment.account
 		? { account: environment.account, region: environment.region }
 		: undefined

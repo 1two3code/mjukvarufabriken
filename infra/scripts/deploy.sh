@@ -14,6 +14,11 @@ case "$env" in
 dev | qa | live) ;;
 *) echo "unknown env '$env' (expected dev|qa|live)" >&2; exit 1 ;;
 esac
+# Build only this env's stacks (lib/config.ts reads the un-namespaced MF_* below for it; synth then
+# needs only apps/*/dist/$env).
+export MF_ENV="$env"
+# Per-env infra values (cert ARNs, hosted-zone id, account) written by scripts/provision-env — optional.
+if [ -f "./.env.$env" ]; then set -a; . "./.env.$env"; set +a; fi
 # Only the AWS_* lines — the root .env also holds api secrets the deploy has no use for.
 set -a; eval "$(grep -E '^AWS_[A-Z_]+=' ../.env || true)"; set +a
 export CDK_DEFAULT_ACCOUNT=$(aws sts get-caller-identity --query Account --output text)
