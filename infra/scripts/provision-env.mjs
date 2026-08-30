@@ -82,8 +82,8 @@ if (ASSUME) {
 		AWS_ACCESS_KEY_ID: creds.AccessKeyId,
 		AWS_SECRET_ACCESS_KEY: creds.SecretAccessKey,
 		AWS_SESSION_TOKEN: creds.SessionToken,
-		AWS_PROFILE: '',
 	}
+	delete targetEnv.AWS_PROFILE // an empty AWS_PROFILE reads as a profile named "" — must be unset
 }
 const aws = (cmdArgs, opts = {}) =>
 	sh('aws', [...cmdArgs, '--output', 'json', ...(opts.region ? ['--region', opts.region] : [])], opts.env ?? targetEnv)
@@ -160,8 +160,16 @@ const ensureCert = (certRegion, primaryDomain, sans, label) => {
 	}
 	// DNS validation records → upsert into the subdomain zone
 	if (zoneId !== '<new-zone-id>') {
-		const desc = awsJson(['acm', 'describe-certificate', '--certificate-arn', arn], { region: certRegion }).Certificate
-		const options = desc.DomainValidationOptions || []
+		// A JUST-requested cert has null ResourceRecords for a few seconds — poll until ACM populates
+		// them, or the records never get added (the bug that left qa PENDING forever).
+		let options = []
+		for (let attempt = 0; attempt < 15; attempt++) {
+			options =
+				awsJson(['acm', 'describe-certificate', '--certificate-arn', arn], { region: certRegion }).Certificate
+					.DomainValidationOptions || []
+			if (options.length && options.every(o => o.ResourceRecord)) break
+			execFileSync('sleep', ['2'])
+		}
 		const seen = new Set()
 		for (const o of options) {
 			const rr = o.ResourceRecord
@@ -171,12 +179,13 @@ const ensureCert = (certRegion, primaryDomain, sans, label) => {
 			awsWrite(['route53', 'change-resource-record-sets', '--hosted-zone-id', zoneId, '--change-batch', batch])
 		}
 		if (APPLY) {
-			log(`  waiting for validation (ISSUED)…`)
+			log(`  ${seen.size} validation record(s) in place; waiting for ISSUED…`)
 			try {
-				sh('aws', ['acm', 'wait', 'certificate-validated', '--certificate-arn', arn, '--region', certRegion])
+				// targetEnv: the cert lives in the target account, so the waiter must use its creds.
+				sh('aws', ['acm', 'wait', 'certificate-validated', '--certificate-arn', arn, '--region', certRegion], targetEnv)
 				log(`  ISSUED`)
 			} catch {
-				log(`  ! not yet ISSUED — re-run once the NS delegation has propagated`)
+				log(`  ! not ISSUED within the wait window — records are in place, ACM validates on its own; re-run to confirm`)
 			}
 		}
 	}
