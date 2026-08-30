@@ -153,6 +153,7 @@ try {
 
 	const deliveryClients = createLiveDeliveryClients({
 		...config.delivery,
+		jobId,
 		workerModel: config.workerModel,
 	})
 	// Record seam (off unless `MF_CASSETTE`/`--record <dir>`): wrap the planner client and the Agent

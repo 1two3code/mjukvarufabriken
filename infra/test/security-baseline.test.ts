@@ -71,7 +71,7 @@ describe('security baseline', () => {
 				}
 			})
 
-			it('grants the job task role only the Anthropic/GitHub secrets, artifact writes, CodeBuild + ECS Express previews — no database', () => {
+			it('grants the job task role only the Anthropic/GitHub secrets, an artifacts-role assume, CodeBuild + ECS Express previews — no database, no direct S3', () => {
 				const policies = Object.values(resources.findResources('AWS::IAM::Policy'))
 				const jobPolicy = policies.find(p =>
 					JSON.stringify(p.Properties).includes('JobTaskDefinitionTaskRole')
@@ -83,19 +83,16 @@ describe('security baseline', () => {
 					}
 				).PolicyDocument.Statement
 				const actions = statements.flatMap(s => (Array.isArray(s.Action) ? s.Action : [s.Action]))
-				// grantPut, not grantWrite: a job may upload but never delete or overwrite-by-delete.
+				// No s3:* here — M3 hardening #1: the task role only assumes jobArtifactsRole (below),
+				// which carries the scoped s3:PutObject*/Abort*; a session policy built from JOB_ID
+				// narrows that further to the one job's own prefix/key at runtime (apps/job).
 				// CodeBuild builds + pushes the image; ECS Express creates/inspects the preview service.
 				assert.deepEqual(
 					new Set(actions),
 					new Set([
 						'secretsmanager:GetSecretValue',
 						'secretsmanager:DescribeSecret',
-						's3:PutObject',
-						's3:PutObjectLegalHold',
-						's3:PutObjectRetention',
-						's3:PutObjectTagging',
-						's3:PutObjectVersionTagging',
-						's3:Abort*',
+						'sts:AssumeRole',
 						'codebuild:StartBuild',
 						'codebuild:BatchGetBuilds',
 						'ecs:CreateExpressGatewayService',
@@ -103,6 +100,20 @@ describe('security baseline', () => {
 						'ecs:DescribeExpressGatewayService',
 						'iam:PassRole',
 					])
+				)
+				const byActions = (action: string) =>
+					statements.find(s => JSON.stringify(s.Action).includes(action)) as
+						{ Resource?: unknown; Condition?: unknown } | undefined
+				// sts:AssumeRole is scoped to exactly jobArtifactsRole, never '*' or any other role
+				const assumeRole = byActions('sts:AssumeRole')
+				assert.ok(assumeRole, 'sts:AssumeRole statement')
+				assert.ok(
+					JSON.stringify(assumeRole.Resource).includes('JobArtifactsRole'),
+					'sts:AssumeRole must target jobArtifactsRole'
+				)
+				assert.ok(
+					!JSON.stringify(assumeRole.Resource).includes('"*"'),
+					'sts:AssumeRole must not be account/role-wide'
 				)
 				// Two secrets only — the Anthropic key and (M5) the GitHub token; never the RDS master
 				// secret, Stripe or the auth signing key
@@ -120,9 +131,6 @@ describe('security baseline', () => {
 				)
 				// The job never touches ECR directly — CodeBuild does the build + push
 				assert.ok(!JSON.stringify(actions).includes('ecr:'), 'job role must not call ECR directly')
-				const byActions = (action: string) =>
-					statements.find(s => JSON.stringify(s.Action).includes(action)) as
-						{ Resource?: unknown; Condition: unknown } | undefined
 				// ECS Express: only services tagged `Service=mf-delivery` (created by the job itself)
 				assert.deepEqual(byActions('ecs:CreateExpressGatewayService')?.Condition, {
 					StringEquals: { 'aws:RequestTag/Service': 'mf-delivery' },
@@ -156,6 +164,60 @@ describe('security baseline', () => {
 						'PassRole must be scoped to specific roles'
 					)
 				}
+			})
+
+			it('scopes jobArtifactsRole to deliverables/* + delivery-source/* only, assumable only by the job task role (M3 hardening #1)', () => {
+				const roles = Object.values(resources.findResources('AWS::IAM::Role')) as {
+					Properties: { RoleName?: string; AssumeRolePolicyDocument?: unknown }
+				}[]
+				const artifactsRole = roles.find(r => r.Properties.RoleName === `mf-job-artifacts-${env}`)
+				assert.ok(artifactsRole, 'jobArtifactsRole')
+				assert.ok(
+					JSON.stringify(artifactsRole.Properties.AssumeRolePolicyDocument).includes(
+						'JobTaskDefinitionTaskRole'
+					),
+					'jobArtifactsRole must trust only the job task role'
+				)
+				assert.ok(
+					!/ecs-tasks\.amazonaws\.com|ecs\.amazonaws\.com/.test(
+						JSON.stringify(artifactsRole.Properties.AssumeRolePolicyDocument)
+					),
+					'jobArtifactsRole must not be directly assumable by an ECS service principal'
+				)
+				// Keyed by logical id (not JSON.stringify-includes — the job task role's own policy
+				// also mentions "JobArtifactsRole" in its sts:AssumeRole Resource ARN)
+				const artifactsPolicy = Object.entries(resources.findResources('AWS::IAM::Policy')).find(
+					([logicalId]) => logicalId.startsWith('JobArtifactsRoleDefaultPolicy')
+				)?.[1]
+				assert.ok(artifactsPolicy, 'jobArtifactsRole policy')
+				const statements = (
+					artifactsPolicy.Properties as {
+						PolicyDocument: { Statement: { Action: unknown; Resource?: unknown }[] }
+					}
+				).PolicyDocument.Statement
+				const actions = statements.flatMap(s => (Array.isArray(s.Action) ? s.Action : [s.Action]))
+				// Same grantPut action set as before — upload only, never delete or overwrite-by-delete
+				assert.deepEqual(
+					new Set(actions),
+					new Set([
+						's3:PutObject',
+						's3:PutObjectLegalHold',
+						's3:PutObjectRetention',
+						's3:PutObjectTagging',
+						's3:PutObjectVersionTagging',
+						's3:Abort*',
+					])
+				)
+				// Ceiling is the two delivery prefixes, never the bucket root/wildcard — the per-job
+				// narrowing to deliverables/<jobId>/* + delivery-source/<jobId>.zip happens at runtime
+				// via the session policy the job builds from its own JOB_ID.
+				const resourceStrings = JSON.stringify(statements.flatMap(s => s.Resource))
+				assert.ok(resourceStrings.includes('deliverables/*'))
+				assert.ok(resourceStrings.includes('delivery-source/*'))
+				assert.ok(
+					!/"\*"|"arn:aws:s3:::[^/"]+"/.test(resourceStrings),
+					'jobArtifactsRole must not have bucket-root or bucket-wide access'
+				)
 			})
 
 			it('gives the ECS Express preview roles only their managed policies (no inline grants)', () => {
@@ -213,6 +275,24 @@ describe('security baseline', () => {
 					.flatMap(c => c.Environment ?? [])
 					.map(e => e.Name)
 				assert.ok(apiEnv.includes('JOB_API_URL') && apiEnv.includes('JOB_NO_PROXY'))
+			})
+
+			it('scopes the api task role’s cloudwatch:PutMetricData to its own mf/<env> namespace (M3 hardening #2)', () => {
+				const policies = Object.values(web.findResources('AWS::IAM::Policy'))
+				const apiPolicy = policies.find(p => JSON.stringify(p.Properties).includes('ApiTaskDefTaskRole'))
+				assert.ok(apiPolicy, 'api task role policy')
+				const statements = (
+					apiPolicy.Properties as {
+						PolicyDocument: { Statement: { Action: unknown; Condition?: unknown }[] }
+					}
+				).PolicyDocument.Statement
+				const putMetric = statements.find(
+					s => JSON.stringify(s.Action).includes('cloudwatch:PutMetricData')
+				) as { Condition?: { StringEquals?: Record<string, unknown> } } | undefined
+				assert.ok(putMetric, 'cloudwatch:PutMetricData statement')
+				assert.deepEqual(putMetric?.Condition, {
+					StringEquals: { 'cloudwatch:namespace': `mf/${env}` },
+				})
 			})
 
 			it('sets the CloudFront security headers', () => {

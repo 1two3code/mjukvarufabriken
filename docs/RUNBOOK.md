@@ -123,21 +123,26 @@ All alarms e-mail `adminEmails` through `mf-alerts-<env>` (and again on OK). Thr
 
 ### jobs-failed
 
-A job logged `event failed` (the orchestrator gave up) or `job crashed` (the task died: SIGTERM,
-OOM, unhandled rejection, seed/DB error) in the last 5 minutes.
-First: find the job (`filter message in ["event failed", "job crashed"]` in `/mf/<env>/jobs`)
-and read its `reason`.
-Common for `event failed`: budget exhausted (`tokensUsed` near the job limit), a gate that never
-went green, proxy 403 on a domain the build needed, worker timeouts. The job row keeps `plan` +
-`error` for the portal. Common for `job crashed`: OOM (`aws ecs describe-tasks` → `stoppedReason`),
-a kill from the api (SIGTERM), Secrets Manager / Postgres unreachable at start-up.
+A job's status write landed as `failed` in the last 5 minutes — the `mf/<env>` `JobsFailed`
+CloudWatch metric the api publishes from its own trusted, Zod-validated `jobService.reportUpdate`
+write (`apps/api/src/plugins/metrics.ts`), not a job container log line (M3 hardening #2: those are
+shared with the customer's own build script output, which could otherwise spoof or hide this
+alarm). First: find the job (admin jobs list, or `select * from jobs where status = 'failed' order
+by "finishedAt" desc` — the metric carries no job id, so the row is the source of truth) and read
+its `reason`. The job's own `/mf/<env>/jobs` log stream (`filter jobId = "<id>"`) still has the
+narrative: `event failed` (the orchestrator gave up — budget exhausted near the job limit, a gate
+that never went green, proxy 403 on a domain the build needed, worker timeouts; the job row keeps
+`plan` + `error` for the portal) or `job crashed` (the task died: OOM — `aws ecs describe-tasks` →
+`stoppedReason` — a kill from the api/SIGTERM, Secrets Manager / Postgres unreachable at start-up).
 
 ### job-token-burn
 
-A single job finished having used more than `alerts.jobTokensThreshold` tokens (20 M default).
-First: which job (`filter message = "job finished" | sort tokensUsed desc`), then its plan — a
-runaway retry loop in one step is the usual cause. Consider lowering the per-job budget in the
-harness for that spec size.
+A single job's reported `tokensUsed` (the `mf/<env>` `JobTokensUsed` metric, same trusted write as
+above — fires as the running total crosses the line, not only once the job finishes) went over
+`alerts.jobTokensThreshold` tokens (20 M default). First: which job (`select id, "tokensUsed" from
+jobs where "tokensUsed" > <threshold> order by "tokensUsed" desc`), then its plan — a runaway retry
+loop in one step is the usual cause. Consider lowering the per-job budget in the harness for that
+spec size.
 
 ### api-5xx
 

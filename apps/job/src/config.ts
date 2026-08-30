@@ -44,6 +44,11 @@ export type JobConfig = {
 		previewAuth?: { issuer: string; jwksUrl: string; audience: string }
 		/** `ARTIFACTS_BUCKET` — bundle + SPA build destination */
 		artifactsBucket?: string
+		/**
+		 * `ARTIFACTS_ROLE_ARN` — role this job assumes (session-policy-scoped to its own prefix/key
+		 * via `jobId`) to upload; the task role itself has no S3 permission (M3 hardening #1)
+		 */
+		artifactsRoleArn?: string
 		/** `DELIVERY_DRY_RUN=1`: log the GitHub / ECS Express / S3 calls instead of making them */
 		dryRun: boolean
 	}
@@ -163,6 +168,7 @@ export const loadConfig = async (argv: string[]): Promise<JobConfig> => {
 			cluster: process.env.ECS_CLUSTER || undefined,
 			previewAuth: previewAuthFromEnv(),
 			artifactsBucket: process.env.ARTIFACTS_BUCKET || undefined,
+			artifactsRoleArn: process.env.ARTIFACTS_ROLE_ARN || undefined,
 			dryRun: ['1', 'true'].includes(process.env.DELIVERY_DRY_RUN ?? ''),
 		},
 	}

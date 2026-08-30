@@ -11,7 +11,6 @@ import {
 import { SnsAction } from 'aws-cdk-lib/aws-cloudwatch-actions'
 import { HttpCodeElb, HttpCodeTarget } from 'aws-cdk-lib/aws-elasticloadbalancingv2'
 import { Effect, PolicyStatement, ServicePrincipal } from 'aws-cdk-lib/aws-iam'
-import { FilterPattern, MetricFilter } from 'aws-cdk-lib/aws-logs'
 import { Topic } from 'aws-cdk-lib/aws-sns'
 import { EmailSubscription } from 'aws-cdk-lib/aws-sns-subscriptions'
 
@@ -78,28 +77,23 @@ export class OpsStack extends Stack {
 			return alarm
 		}
 
-		// MARK: Build jobs — metric filters over the JSON log lines written by apps/job:
-		// `{"message":"event failed",...}` (the orchestrator gave up), `{"message":"job crashed",...}`
-		// (SIGTERM / unhandled rejection / thrown outside the orchestrator — that path bypasses
-		// `emit`, so no `event failed` line) and `{"message":"job finished","tokensUsed":N,...}`.
-		// Customer build scripts write to the same log stream, so these lines can be spoofed; the
-		// real fix is api-side job reporting (PLAN.md, M3 hardening).
-		const failedJobs = new MetricFilter(this, 'FailedJobsFilter', {
-			logGroup: resources.jobLogGroup,
-			filterPattern: FilterPattern.any(
-				FilterPattern.stringValue('$.message', '=', 'event failed'),
-				FilterPattern.stringValue('$.message', '=', 'job crashed')
-			),
-			metricNamespace: namespace,
+		// MARK: Build jobs — custom metrics the api publishes from its own trusted, Zod-validated
+		// job report ingestion (`apps/api/src/plugins/metrics.ts`, called from `jobService.reportUpdate`
+		// only once a status/token write actually lands), never from the JSON log lines apps/job
+		// writes: those are shared with the customer's own build script output, which could print
+		// the same "event failed"/"job crashed"/tokensUsed shape to spoof or hide either alarm
+		// (M3 hardening #2 — previously a `MetricFilter` over `resources.jobLogGroup`).
+		const failedJobs = new Metric({
+			namespace,
 			metricName: 'JobsFailed',
-			metricValue: '1',
+			statistic: Stats.SUM,
+			period,
 		})
 		createAlarm(
 			new Alarm(this, 'FailedJobsAlarm', {
 				alarmName: `mf-${environment.name}-jobs-failed`,
-				alarmDescription:
-					'A build job logged "event failed" or "job crashed" (docs/RUNBOOK.md#jobs-failed)',
-				metric: failedJobs.metric({ statistic: Stats.SUM, period }),
+				alarmDescription: 'A build job status write landed as failed (docs/RUNBOOK.md#jobs-failed)',
+				metric: failedJobs,
 				threshold: 1,
 				evaluationPeriods: 1,
 				comparisonOperator: ComparisonOperator.GREATER_THAN_OR_EQUAL_TO_THRESHOLD,
@@ -107,18 +101,17 @@ export class OpsStack extends Stack {
 			})
 		)
 
-		const jobTokens = new MetricFilter(this, 'JobTokensFilter', {
-			logGroup: resources.jobLogGroup,
-			filterPattern: FilterPattern.stringValue('$.message', '=', 'job finished'),
-			metricNamespace: namespace,
+		const jobTokens = new Metric({
+			namespace,
 			metricName: 'JobTokensUsed',
-			metricValue: '$.tokensUsed',
+			statistic: Stats.MAXIMUM,
+			period,
 		})
 		createAlarm(
 			new Alarm(this, 'JobTokenBurnAlarm', {
 				alarmName: `mf-${environment.name}-job-token-burn`,
 				alarmDescription: `A single job used more than ${alerts.jobTokensThreshold.toLocaleString('en-US')} tokens (docs/RUNBOOK.md#job-token-burn)`,
-				metric: jobTokens.metric({ statistic: Stats.MAXIMUM, period }),
+				metric: jobTokens,
 				threshold: alerts.jobTokensThreshold,
 				evaluationPeriods: 1,
 				comparisonOperator: ComparisonOperator.GREATER_THAN_THRESHOLD,

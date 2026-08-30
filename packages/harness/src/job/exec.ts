@@ -34,11 +34,13 @@ export type ExecOptions = {
  * Environment keys that must never reach the model-driven sandbox (worker shell, repo scripts):
  * database credentials, secret ARNs, the ECS task-role credential endpoint and other AWS config,
  * the ECS Express / CodeBuild / ECR delivery config (M5), the GitHub token / App private key
- * (GITHUB_APP_*) and the per-job api reporting token (`JOB_TOKEN`, exchanged at start-up but still
- * in the task environment — a worker could otherwise forge job events).
+ * (GITHUB_APP_*), the per-job api reporting token (`JOB_TOKEN`, exchanged at start-up but still
+ * in the task environment — a worker could otherwise forge job events) and the artifacts-role ARN
+ * (`ARTIFACTS_ROLE_ARN`, M3 hardening #1 — knowing it is harmless without the task-role
+ * credentials this same strip already removes, but it names an internal role, not a tool input).
  */
 const secretEnvKey =
-	/^(DATABASE_|AWS_|ECS_|EXPRESS_|CODEBUILD_|ECR_|GITHUB_TOKEN$|GITHUB_APP_|JOB_TOKEN$|ARTIFACTS_BUCKET$)|_SECRET_ARN$/
+	/^(DATABASE_|AWS_|ECS_|EXPRESS_|CODEBUILD_|ECR_|GITHUB_TOKEN$|GITHUB_APP_|JOB_TOKEN$|ARTIFACTS_BUCKET$|ARTIFACTS_ROLE_ARN$)|_SECRET_ARN$/
 
 /**
  * Git's repository-location variables. Git exports these to hooks (and `git` sets them for its

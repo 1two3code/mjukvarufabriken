@@ -13,6 +13,7 @@ import errorHandlingPlugin from '#/plugins/errorHandling.ts'
 import githubOAuthPlugin from '#/plugins/githubOAuth.ts'
 import jobSweeperPlugin from '#/plugins/jobSweeper.ts'
 import lifecycleSweeperPlugin from '#/plugins/lifecycleSweeper.ts'
+import metricsPlugin from '#/plugins/metrics.ts'
 import orgPlugin from '#/plugins/org.ts'
 import prunerPlugin from '#/plugins/pruner.ts'
 import s3Plugin from '#/plugins/s3.ts'
@@ -64,6 +65,7 @@ export async function createServer({ logLevel }: Options = {}): Promise<FastifyI
 		.register(dbPlugin)
 		.register(ecsPlugin)
 		.register(s3Plugin)
+		.register(metricsPlugin)
 		.register(anthropicPlugin)
 		.register(authKeysPlugin)
 		.register(emailPlugin)

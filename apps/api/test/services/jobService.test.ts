@@ -480,6 +480,27 @@ describe('Job Service', () => {
 			expect(result).toEqual({ status: 'verifying', killed: false })
 		})
 
+		it('Publishes the tamper-proof JobTokensUsed metric from this validated write, never a log line', async () => {
+			await app.jobService.reportUpdate(job(), { status: 'verifying', tokensUsed: 10 })
+
+			expect(app.metrics.recordJobTokensUsed).toHaveBeenCalledWith('job-1', 10)
+			expect(app.metrics.recordJobFailed).not.toHaveBeenCalled()
+		})
+
+		it('Publishes the tamper-proof JobsFailed metric only once the status actually lands as failed', async () => {
+			await app.jobService.reportUpdate(job(), { status: 'failed', reason: 'boom' })
+
+			expect(app.metrics.recordJobFailed).toHaveBeenCalledWith('job-1')
+		})
+
+		it('Does not publish JobsFailed when a failed write is refused (the row was already killed)', async () => {
+			vi.spyOn(app.db.jobs, 'update').mockResolvedValue(undefined)
+
+			await app.jobService.reportUpdate(job(), { status: 'failed', reason: 'boom' })
+
+			expect(app.metrics.recordJobFailed).not.toHaveBeenCalled()
+		})
+
 		it('Prices reported usage at the model prices in effect when the order was created', async () => {
 			// The order was created before the (only) seed price rows apply → no prices → fallback
 			// (Sonnet list) tier; then a cheaper Sonnet row dated before the order takes over.
