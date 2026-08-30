@@ -149,6 +149,36 @@ Hasse's idea: an admin page tracking real cost vs. revenue per customer (mock cu
 - [ ] Revenue model per customer: build fee + hosting + SLA + further dev + resident tokens×1.5 — shape depends on where the pricing-under-revision note above lands, so this waits on that.
 - [ ] Admin UI: extends `/admin`/`/admin/resident` with a per-customer margin view + an aggregate P&L over time; mock customers to start so the shape is visible before any real order exists.
 
+### Side quest: dedicated dev server — captured 2026-08-30, NOT started
+Move the whole working setup (repo, Claude Code sessions, local Postgres, deploys) from Hasse's
+work laptop (WSL) to an always-on Ubuntu server: frees the laptop's resources during work hours,
+lets long runs (overnight ultracode waves, Fargate babysitting, resident experiments) survive the
+laptop being off, and unties the factory from one person's machine. Deliberately a side quest —
+nothing app-related blocks on it. Modest requirements: the heavy lifting is Anthropic's and AWS's;
+the box needs Node 24 + Docker + a few CLIs (8 GB RAM is comfortable; builds and `npm test` are
+the peak load).
+- [ ] Base install: Node 24.15 (`.nvmrc`; via nvm), Docker + compose plugin, git, `gh` CLI,
+  AWS CLI v2, Claude Code. Clone the repo, `npm ci` (+ `templates/web`, `infra*` prefixes per
+  CLAUDE.md), `docker compose up -d postgres`, `npm test` green = environment proven.
+- [ ] Credentials/state to migrate (nothing is in git, by design): root `.env` (AWS keys, secrets
+  — copy over SSH, never through a paste service), `gh auth login` (device flow, no PAT),
+  `claude` login, git author config, the GitHub App `.pem` currently sitting in the repo root
+  (move it INTO `.env`-style ignored storage or Secrets Manager while at it — it should not stay
+  a loose file), `~/.claude/projects/...` memory dir if session memory should follow.
+- [ ] Access + always-on ergonomics: SSH (key-only, no password auth), `tmux` (or the Claude Code
+  desktop/web "Remote Control" pairing) so sessions persist across disconnects; decide whether
+  the laptop then runs sessions AT ALL or only SSHes in (two machines running sessions
+  concurrently is fine — the worktree + PR flow already assumes it).
+- [ ] Security floor for an always-on box with prod-capable AWS keys: ufw default-deny inbound
+  except SSH, unattended-upgrades on, disk encryption if physically accessible; consider swapping
+  the long-lived `hasse` IAM keys in `.env` for `aws sso`/short-lived credentials on this box —
+  an always-on machine raises the value of stealing them.
+- [ ] Migrate the recurring/background bits currently tied to the laptop: any cron/scheduled
+  Claude runs, the babysit/monitor loops, TOKENS.md `/cost` habit. Verify one full build-job
+  (`npm run job:dev -- <id>`) and one `deploy.sh dev` from the server.
+- [ ] (Optional, later) if the server is beefy enough: move local docker `--profile job` testing
+  there too, and let the laptop become a thin client entirely.
+
 ## Open questions (answer inline)
 1. Company/brand name on site while AB is pending — "Mjukvaruhuset" as trade name OK?
   - Turns out "mjukvaruhuset.se" was free so I just poached that instead.
