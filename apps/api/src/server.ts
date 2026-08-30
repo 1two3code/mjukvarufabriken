@@ -24,6 +24,7 @@ import contactService from '#/services/contactService.ts'
 import itemService from '#/services/itemService.ts'
 import iterationBriefService from '#/services/iterationBriefService.ts'
 import jobService from '#/services/jobService.ts'
+import marginService from '#/services/marginService.ts'
 import orderService from '#/services/orderService.ts'
 import paymentService from '#/services/paymentService.ts'
 import residentService from '#/services/residentService.ts'
@@ -83,6 +84,7 @@ export async function createServer({ logLevel }: Options = {}): Promise<FastifyI
 		.register(iterationBriefService)
 		.register(accountService)
 		.register(paymentService)
+		.register(marginService)
 
 		// Background schedulers depending on services
 		.register(lifecycleSweeperPlugin)

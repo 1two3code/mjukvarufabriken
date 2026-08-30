@@ -556,6 +556,28 @@ export const createMemoryRepositories = (): MemoryRepositories => {
 			forgetPaymentEvent: async eventId => {
 				paymentEvents.delete(eventId)
 			},
+
+			listActiveOrgIds: async () => [
+				...new Set(
+					[...orders.values()]
+						.map(entry => entry.order)
+						.filter(
+							order =>
+								order.lifecycle === 'active' && order.status !== 'cancelled' && order.orgId !== ''
+						)
+						.map(order => order.orgId)
+				),
+			],
+			sumPaidPaymentsByOrg: async () => {
+				const totals = new Map<string, number>()
+				for (const payment of payments.values()) {
+					if (payment.status !== 'paid') continue
+					const orgId = orders.get(payment.orderId)?.order.orgId
+					if (orgId === undefined) continue
+					totals.set(orgId, (totals.get(orgId) ?? 0) + payment.amountSek)
+				}
+				return [...totals.entries()].map(([orgId, amountSek]) => ({ orgId, amountSek }))
+			},
 		},
 
 		deployedServices: {

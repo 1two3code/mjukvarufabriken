@@ -345,6 +345,29 @@ export const forgetPaymentEvent = async (db: Db, eventId: string) => {
 	await db.sql`delete from payment_events where id = ${eventId}`
 }
 
+// MARK: Margin (M12)
+
+/** Distinct orgs with a non-cancelled order still in the `active` deprovisioning lifecycle */
+export const listActiveOrgIds = async (db: Db): Promise<string[]> => {
+	const rows = await db.sql<{ org_id: string }[]>`
+		select distinct org_id from orders
+		where lifecycle = 'active' and status <> 'cancelled' and org_id <> ''`
+	return rows.map(row => row.org_id)
+}
+
+/** Per-org sum of paid payments (`deposit` + `balance`), ex moms */
+export const sumPaidPaymentsByOrg = async (
+	db: Db
+): Promise<{ orgId: string; amountSek: number }[]> => {
+	const rows = await db.sql<{ org_id: string; amount_sek: number | string }[]>`
+		select o.org_id, sum(p.amount_sek) as amount_sek
+		from payments p
+		join orders o on o.id = p.order_id
+		where p.status = 'paid'
+		group by o.org_id`
+	return rows.map(row => ({ orgId: row.org_id, amountSek: Number(row.amount_sek) }))
+}
+
 export const createOrdersRepository = (db: Db): OrdersRepository => ({
 	get: orderId => getOrder(db, orderId),
 	list: filter => listOrders(db, filter),
@@ -366,4 +389,6 @@ export const createOrdersRepository = (db: Db): OrdersRepository => ({
 	markPaymentPaid: (id, paid) => markPaymentPaid(db, id, paid),
 	recordPaymentEvent: (eventId, type) => recordPaymentEvent(db, eventId, type),
 	forgetPaymentEvent: eventId => forgetPaymentEvent(db, eventId),
+	listActiveOrgIds: () => listActiveOrgIds(db),
+	sumPaidPaymentsByOrg: () => sumPaidPaymentsByOrg(db),
 })
