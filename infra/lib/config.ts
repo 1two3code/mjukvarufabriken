@@ -89,8 +89,18 @@ type Config = {
 
 // No account numbers in git. Region defaults to Stockholm; without an account the stacks stay
 // environment-agnostic so `cdk synth` runs offline.
-const account = process.env.CDK_DEFAULT_ACCOUNT
-const region = account ? (process.env.CDK_DEFAULT_REGION ?? 'eu-north-1') : undefined
+//
+// Per-env infra identity (account, region, cert ARNs, hosted zone) is read from the environment
+// when present — so a freshly provisioned account needs no source edit. `infra/scripts/provision-env`
+// writes these `MF_*` keys to a git-ignored `infra/.env.<env>` (sourced by deploy.sh) and to the
+// env's GitHub environment (Phoenix, docs/PHOENIX.md). Because a deploy builds ONE env at a time
+// (bin/app.ts gates on `MF_ENV`), an un-namespaced `MF_*` applies to that env; the committed literals
+// are the fallback, so offline `cdk synth` and the dev deploy are unchanged.
+// `||`, not `??`: an unset GitHub Actions `${{ vars.X }}` renders as an empty string, which must
+// fall through to the committed literal — not override it with "".
+const fromEnv = (key: string, fallback: string) => process.env[`MF_${key}`] || fallback
+const account = process.env.MF_ACCOUNT || process.env.CDK_DEFAULT_ACCOUNT
+const region = account ? process.env.MF_REGION || process.env.CDK_DEFAULT_REGION || 'eu-north-1' : undefined
 
 const auth = { audience: 'mjukvaruhuset' }
 const emailFrom = 'noreply@mjukvaruhuset.se'
@@ -119,13 +129,17 @@ export const config: Config = {
 				siteDomainName: 'dev.mjukvaruhuset.se',
 				portalDomainName: 'portal.dev.mjukvaruhuset.se',
 				apiDomainName: 'api.dev.mjukvaruhuset.se',
-				hostedZoneId: 'Z002863610X79ZE1B3K8F',
-				hostedZoneName: 'mjukvaruhuset.se',
+				hostedZoneId: fromEnv('HOSTED_ZONE_ID', 'Z002863610X79ZE1B3K8F'),
+				hostedZoneName: fromEnv('HOSTED_ZONE_NAME', 'mjukvaruhuset.se'),
 				// Issued 2026-08-26 via `aws acm request-certificate`, DNS-validated in the hosted zone
-				cloudFrontCertificateArn:
-					'arn:aws:acm:us-east-1:814967776290:certificate/093f6dc9-f3e2-4a9e-8f49-d9de89cb3248',
-				apiCertificateArn:
-					'arn:aws:acm:eu-north-1:814967776290:certificate/97331410-b5f7-4193-994e-59a9618b2091',
+				cloudFrontCertificateArn: fromEnv(
+					'CLOUDFRONT_CERT_ARN',
+					'arn:aws:acm:us-east-1:814967776290:certificate/093f6dc9-f3e2-4a9e-8f49-d9de89cb3248'
+				),
+				apiCertificateArn: fromEnv(
+					'API_CERT_ARN',
+					'arn:aws:acm:eu-north-1:814967776290:certificate/97331410-b5f7-4193-994e-59a9618b2091'
+				),
 			},
 			// db.t4g.micro ≈ 15 USD/month; smallest burstable Postgres instance
 			database: {
@@ -158,17 +172,22 @@ export const config: Config = {
 				siteDomainName: 'qa.mjukvaruhuset.se',
 				portalDomainName: 'portal.qa.mjukvaruhuset.se',
 				apiDomainName: 'api.qa.mjukvaruhuset.se',
-				// Same hosted zone as dev/live — qa.* records live in the mjukvaruhuset.se zone
-				hostedZoneId: 'Z002863610X79ZE1B3K8F',
-				hostedZoneName: 'mjukvaruhuset.se',
-				// TODO-EXTERNAL: issue the qa ACM certificates (CloudFront cert in us-east-1, api cert
-				// in eu-north-1) covering qa.mjukvaruhuset.se / portal.qa… / api.qa… and paste the
-				// ARNs here. The placeholders below let `cdk synth` run offline but a real deploy
-				// fails closed until the certs exist (CloudFront/ALB reject an unknown ARN).
-				cloudFrontCertificateArn:
-					'arn:aws:acm:us-east-1:814967776290:certificate/PENDING-QA-CLOUDFRONT-CERT',
-				apiCertificateArn:
-					'arn:aws:acm:eu-north-1:814967776290:certificate/PENDING-QA-API-CERT',
+				// Defaults to the shared mjukvaruhuset.se zone; `provision-env` sets MF_HOSTED_ZONE_ID to
+				// a delegated qa.mjukvaruhuset.se zone in the qa account (docs/PHOENIX.md).
+				hostedZoneId: fromEnv('HOSTED_ZONE_ID', 'Z002863610X79ZE1B3K8F'),
+				hostedZoneName: fromEnv('HOSTED_ZONE_NAME', 'mjukvaruhuset.se'),
+				// `provision-env` issues the qa ACM certs (CloudFront us-east-1 + api eu-north-1) and
+				// sets MF_CLOUDFRONT_CERT_ARN / MF_API_CERT_ARN. The PENDING fallbacks below let
+				// `cdk synth` run offline; a real deploy without the env vars fails closed (CloudFront/
+				// ALB reject an unknown ARN) — set them via `infra/.env.qa` / the qa GitHub environment.
+				cloudFrontCertificateArn: fromEnv(
+					'CLOUDFRONT_CERT_ARN',
+					'arn:aws:acm:us-east-1:814967776290:certificate/PENDING-QA-CLOUDFRONT-CERT'
+				),
+				apiCertificateArn: fromEnv(
+					'API_CERT_ARN',
+					'arn:aws:acm:eu-north-1:814967776290:certificate/PENDING-QA-API-CERT'
+				),
 			},
 			// db.t4g.micro ≈ 15 USD/month; mirrors dev — qa is a rehearsal, not production traffic
 			database: {

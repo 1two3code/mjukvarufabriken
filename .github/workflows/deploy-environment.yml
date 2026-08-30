@@ -25,6 +25,16 @@ jobs:
     env:
       CDK_DEFAULT_ACCOUNT: ${{ vars.AWS_ACCOUNT_ID }}
       CDK_DEFAULT_REGION: ${{ vars.AWS_REGION }}
+      # Per-env infra identity written to this GitHub environment by scripts/provision-env (Phoenix,
+      # docs/PHOENIX.md). Build only this env; an unset var renders as "" and lib/config.ts falls
+      # back to the committed literal, so an env without these set (e.g. dev) is unchanged.
+      MF_ENV: ${{ inputs.environment }}
+      MF_ACCOUNT: ${{ vars.AWS_ACCOUNT_ID }}
+      MF_REGION: ${{ vars.AWS_REGION }}
+      MF_HOSTED_ZONE_ID: ${{ vars.MF_HOSTED_ZONE_ID }}
+      MF_HOSTED_ZONE_NAME: ${{ vars.MF_HOSTED_ZONE_NAME }}
+      MF_CLOUDFRONT_CERT_ARN: ${{ vars.MF_CLOUDFRONT_CERT_ARN }}
+      MF_API_CERT_ARN: ${{ vars.MF_API_CERT_ARN }}
     steps:
       - uses: actions/checkout@v7
 
