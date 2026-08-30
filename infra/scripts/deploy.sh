@@ -14,6 +14,11 @@ case "$env" in
 dev | qa | live) ;;
 *) echo "unknown env '$env' (expected dev|qa|live)" >&2; exit 1 ;;
 esac
+# live-only domain guard (hardening audit 2026-08-30, finding B1): without a domain, live's SES
+# identity/grant never get created even though email.transport is 'ses', and live has no
+# githubOAuth fallback — magic-link sign-in silently fails and the sole admin can never sign in
+# to a "successfully" deployed live. Fails fast, before any AWS calls.
+if [ "$env" = "live" ]; then npx tsx scripts/check-live-domain.ts; fi
 # Optional --assume-role: assume OrganizationAccountAccessRole in the env's account (MF_ACCOUNT) so a
 # local deploy can target a SEPARATE member account. Stripped from the stack list.
 assume_role=
