@@ -15,6 +15,7 @@ import { createDeployedServicesRepository } from './deployedServices.ts'
 import { createJobsRepository } from './jobs.ts'
 import { createModelPricesRepository } from './modelPrices.ts'
 import { createOrdersRepository } from './orders.ts'
+import { createPricingTiersRepository } from './pricingTiers.ts'
 import { createResidentRepository } from './resident.ts'
 import { createRateLimitsRepository } from './rateLimits.ts'
 import { createUsersRepository } from './users.ts'
@@ -30,6 +31,7 @@ export * from './memory.ts'
 export * from './migrate.ts'
 export * from './modelPrices.ts'
 export * from './orders.ts'
+export * from './pricingTiers.ts'
 export * from './rateLimits.ts'
 export * from './repositories.ts'
 export * from './resident.ts'
@@ -65,7 +67,7 @@ export const sslMode = (connectionString: string, env = process.env): SslMode =>
 	const override = env.DATABASE_SSL?.trim()
 	if (override === 'disable') return false
 	if (override === 'verify-full' || override === 'require') return override
-	let host = ''
+	let host: string
 	try {
 		host = new URL(connectionString).hostname
 	} catch {
@@ -136,6 +138,7 @@ export const connectionStringFromSecret = (secret: DatabaseSecret) => {
 export const createPostgresRepositories = (db: Db): Repositories => ({
 	jobs: createJobsRepository(db),
 	modelPrices: createModelPricesRepository(db),
+	pricingTiers: createPricingTiersRepository(db),
 	iterationBrief: createIterationBriefRepository(db),
 	orders: createOrdersRepository(db),
 	deployedServices: createDeployedServicesRepository(db),
