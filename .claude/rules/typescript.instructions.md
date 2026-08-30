@@ -24,10 +24,10 @@ import { EntityNotFound } from '../../lib/entityError.ts'  // relative parent
 
 ## Error handling
 
-Use `tryCatch()` / `tryCatchSync()` from `@template/utils/function` when you need to **inspect or handle the specific error**. The tuple `[error, result]` pattern keeps the happy path at the top indentation level.
+Use `tryCatch()` / `tryCatchSync()` from `@mf/utils/function` when you need to **inspect or handle the specific error**. The tuple `[error, result]` pattern keeps the happy path at the top indentation level.
 
 ```typescript
-import { tryCatch } from '@template/utils/function'
+import { tryCatch } from '@mf/utils/function'
 
 const [error, item] = await tryCatch(itemService.get(request.params.id))
 if (error) return reply.error(error instanceof EntityNotFound ? 404 : 500, error)

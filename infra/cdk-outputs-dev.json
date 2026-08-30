@@ -1,0 +1,5 @@
+{
+  "github-deploy": {
+    "DeployRoleArn": "arn:aws:iam::814967776290:role/mf-github-deploy"
+  }
+}

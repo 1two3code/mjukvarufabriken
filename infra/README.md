@@ -1,21 +1,67 @@
 # infra
 
-AWS CDK app for the template. It is **not** an npm workspace (CDK's Docker asset bundling and `npx` inline scripts behave better without hoisted `node_modules`), so install and run it separately:
+AWS CDK app for mjukvaruhuset.se. It is **not** an npm workspace (CDK's Docker asset bundling and `npx` inline scripts behave better without hoisted `node_modules`), so install and run it separately:
 
 ```shell
 npm i --prefix infra
-npm run build                    # the web stack uploads apps/app/dist/<env>
+npm run build                    # the web stack uploads apps/site/dist/<env> and apps/portal/dist/<env>
 cd infra && npx cdk synth
+npm test --prefix infra          # template assertions (alarms, security baseline, backups) — no build needed
 ```
 
 ## Stacks (per environment in `lib/config.ts`)
 
 | Stack | Contents |
 |---|---|
-| `resources-<env>` | VPC (2 AZs, 1 NAT), DynamoDB `items` table (+ `status` GSI), private encrypted attachments bucket, optional OpenSearch domain (`enableOpenSearch`). Exports `vpc-id`, `dynamo-items`, `s3-attachments`, `opensearch-endpoint`. |
-| `web-<env>` | **App**: private S3 bucket + CloudFront (OAC, SPA fallback, security headers). **API**: ECS Fargate behind an ALB from `apps/api/Dockerfile`, health check `/health`, task role granted access to the resources above, env vars `ITEMS_TABLE`, `ATTACHMENTS_BUCKET`, `OPENSEARCH_ENDPOINT`. Optional custom domains + Route 53 records. |
+| `resources-<env>` | VPC (2 AZs, public + private-with-NAT + isolated subnets, **1 NAT gateway**), RDS **Postgres 17** (`mf` database, credentials generated into Secrets Manager, isolated subnets), `artifacts` bucket (versioned, private, lifecycle: abort multipart after 7 d, expire old versions 14 d dev / 90 d live), six Secrets Manager placeholders (below), SES `EmailIdentity` for the hosted-zone domain with DKIM + MAIL FROM records in Route 53 (only with `domain` config), ECS cluster `mf-jobs-<env>` + Fargate task definition `mf-job-<env>` for build jobs (M3; placeholder `node:24-alpine` image, 2 vCPU / 4 GB, logs 14 d). Exports `vpc-id`, `rds-endpoint`, `rds-secret-arn`, `s3-artifacts`, `ecs-jobs-cluster-arn`, `ecs-job-task-definition-arn`, `ecs-job-security-group-id`. |
+| `ops-<env>` | Alerting (M9), deployed last: SNS topic `mf-alerts-<env>` (e-mail to `adminEmails`, confirm the subscription), CloudWatch alarms — failed jobs + per-job token burn (metric filters on `/mf/<env>/jobs`), api 5xx + unhealthy targets (ALB), RDS CPU/storage/memory, NAT egress (hourly threshold + anomaly band) — and an AWS Budgets monthly cost budget (`alerts.monthlyBudgetUsd`, 80 % actual / 100 % forecast) filtered on the `Environment` tag. Thresholds in `config.alerts`. What each alarm means: `docs/RUNBOOK.md`. |
+| `mf-<env>` | **Site + Portal**: one private S3 bucket + CloudFront each (OAC, SPA fallback, security headers). **API**: ECS Fargate behind an ALB from `apps/api/Dockerfile` in the private (NAT) subnets, health check `/health`, security-group ingress to Postgres :5432, env vars `AUTH_ISSUER` (= api URL), `AUTH_AUDIENCE`, `AUTH_JWT_PRIVATE_KEY_SECRET_ARN`, `AUTH_ADMIN_EMAILS`, `AUTH_EMAIL_FROM`, `EMAIL_TRANSPORT`, `DATABASE_SECRET_ARN`, `ARTIFACTS_BUCKET`, `JOBS_CLUSTER_ARN`, `JOB_TASK_DEFINITION_ARN`, `JOB_SUBNET_IDS`, `JOB_SECURITY_GROUP_ID`, `STRIPE_*_SECRET_ARN`, `GITHUB_OAUTH_CLIENT_SECRET_SECRET_ARN` (+ `GITHUB_OAUTH_CLIENT_ID` when `githubOAuth` is configured). Task role: read db + auth-key + Anthropic + Stripe + GitHub OAuth secrets, read/write artifacts, `ses:SendEmail` on the domain identity, `ecs:RunTask/DescribeTasks/StopTask` scoped to the jobs cluster + `iam:PassRole` for the job roles. Optional custom domains + Route 53 records. |
+
+Sizing per environment lives in `lib/config.ts` (`database`, `jobs`, `alerts`): dev = `db.t4g.micro` 20 GB, 7-day automated backups, DESTROY; live = `db.t4g.small`, 30-day backups, deletion protection + final snapshot on removal. Multi-AZ is off in both for now. Logs: `/mf/<env>/api` (14 d dev / 30 d live) and `/mf/<env>/jobs` (14 d).
+
+The template's generic attachments bucket, DynamoDB table and OpenSearch option were removed — the project uses Postgres, and all job deliverables (repo zips, docs, test reports) go into the single `artifacts` bucket.
+
+**ECS Express Mode** is the delivery target for *customer* apps (M5): the harness builds the customer image (via the `mf-delivery-build-<env>` CodeBuild project → the `mf-deliverables-<env>` ECR repo) and creates an Express service per job at build time. The resources stack provides the ECR repo, the CodeBuild project, the Express execution + infrastructure roles and the `/mf/<env>/express` log group; the services themselves are created at runtime, not in these stacks.
+
+**Job task egress** is currently allow-all; the M3 egress allowlist (npm, GitHub, Anthropic only) is a marked `TODO` on `JobSecurityGroup` in `lib/resources-stack.ts`. The job task role can only read the Anthropic/GitHub secrets and write to the artifacts bucket.
 
 Nothing pre-existing is required in the account except a CDK bootstrap (`npx cdk bootstrap aws://<account>/<region>`).
+
+## Secrets
+
+`resources-<env>` creates placeholders with a random dummy value. Fill them after the first deploy (never commit values):
+
+```shell
+export ENV=dev   # or live
+aws secretsmanager put-secret-value --secret-id mf/$ENV/anthropic-api-key     --secret-string 'sk-ant-...'
+aws secretsmanager put-secret-value --secret-id mf/$ENV/auth-jwt-private-key  --secret-string "$(node scripts/gen-auth-key.mjs)"   # from the repo root
+aws secretsmanager put-secret-value --secret-id mf/$ENV/github-token          --secret-string 'ghp_...'
+aws secretsmanager put-secret-value --secret-id mf/$ENV/github-oauth-client-secret --secret-string '...'   # "Sign in with GitHub" OAuth App; client id → config.ts githubOAuth
+aws secretsmanager put-secret-value --secret-id mf/$ENV/stripe-secret-key     --secret-string 'sk_test_...'
+aws secretsmanager put-secret-value --secret-id mf/$ENV/stripe-webhook-secret --secret-string 'whsec_...'
+```
+
+`auth-jwt-private-key` is the Ed25519 private JWK the api signs access tokens with (the public key is served on `https://<api>/.well-known/jwks.json`). Without it the api boots with an **ephemeral** key and logs a warning — every token dies on restart. Rotating the key signs everyone out.
+
+`github-token` is read by build jobs (M5 delivery: create `mjukvaruhuset/<repo>`, push, invite the customer) — a classic token with `repo` + `admin:org`, or a fine-grained one with contents/administration write on the org. ECS Express previews need no GitHub connection (CodeBuild builds the image from the delivery's S3 source zip); the job passes the `mf-express-execution-<env>` and `mf-express-infra-<env>` roles (`express-execution-role-arn` / `express-infrastructure-role-arn` outputs) to every service it creates.
+
+The Postgres secret (`rds-secret-arn` output) is generated by RDS and needs no manual step; read it with `aws secretsmanager get-secret-value --secret-id <arn>`.
+
+## Auth + email
+
+The api is its own token issuer (magic-link sign-in, EdDSA access tokens, opaque refresh tokens; in-memory store until Postgres). Per environment in `lib/config.ts`: `auth.issuer` (defaults to the api URL), `auth.audience`, `adminEmails` (sign in as `admin`), `email.transport` + `email.from`.
+
+- `email.transport: 'log'` (dev today) — the api does not send anything; the magic link is written to the api log (`/ecs/...` log group, filter on `log transport`). Sign in on dev by copying it from CloudWatch.
+- `email.transport: 'ses'` (live) — `SendEmail` through the `EmailIdentity` created for the hosted-zone domain. The account is in the SES sandbox until production access is granted (TODO-EXTERNAL); in the sandbox only verified recipient addresses receive mail.
+
+## Cost (dev, idle)
+
+- NAT gateway: ≈ 35 USD/month (1 per environment; both private subnets share it)
+- RDS `db.t4g.micro` + 20 GB gp3: ≈ 15 USD/month
+- ALB: ≈ 20 USD/month; Fargate api task (0.5 vCPU / 1 GB): ≈ 15 USD/month
+- S3, Secrets Manager (6 × 0.40 USD), CloudFront: a few USD
+
+Tear a dev environment down with `npx cdk destroy mf-dev resources-dev` (everything in dev is DESTROY / auto-delete).
 
 ## Custom domains (optional)
 
@@ -26,7 +72,20 @@ Set `domain` on an environment: two ACM certificates you issue up front (the Clo
 ```shell
 export CDK_DEFAULT_ACCOUNT=<account> CDK_DEFAULT_REGION=<region>
 npm run build
-cd infra && npx cdk bootstrap && npx cdk deploy resources-dev web-dev
+cd infra && npx cdk bootstrap && npx cdk deploy resources-dev   # 1. resources (RDS takes ~10 min)
+# 2. fill the secrets (above)
+npx cdk deploy mf-dev                                           # 3. site + portal + api
+npx cdk deploy ops-dev                                          # 4. alarms + budget (confirm the SNS e-mail)
 ```
 
-Then point `VITE_API_URL` in `apps/app/.env.dev` at the `ApiUrl` output and redeploy `web-dev`. The GitHub Actions `deploy` workflow automates this (see `.github/workflows/deploy.yml`).
+Then point `VITE_API_URL` in `apps/portal/.env.dev` (and `apps/site/.env.dev`) at the `ApiUrl` output and redeploy `mf-dev`. The GitHub Actions `deploy` workflow automates this (see `.github/workflows/deploy.yml`).
+
+## Deployed environments
+
+| env | deployed | site | portal | api |
+|---|---|---|---|---|
+| dev | 2026-08-26 | https://dev.mjukvaruhuset.se | https://portal.dev.mjukvaruhuset.se | https://api.dev.mjukvaruhuset.se |
+
+Deploy with `infra/scripts/deploy.sh <env> [stacks]` (reads AWS creds from the root `.env`); with no stacks given it deploys `resources-<env>`, `mf-<env>` and `ops-<env>` in that order, the same as the `deploy` workflow.
+
+Both SPA distributions forward `/bff/*` to the api ALB, so the apps use `VITE_API_URL=/bff` in every mode (locally Vite proxies `/bff` to `:5174`). ACM certs for dev were requested with `aws acm request-certificate` (us-east-1 for CloudFront, eu-north-1 for the ALB) and DNS-validated in the `mjukvaruhuset.se` hosted zone; ARNs live in `lib/config.ts`. For `live`, repeat with `mjukvaruhuset.se` + `portal.mjukvaruhuset.se` and `api.mjukvaruhuset.se`.

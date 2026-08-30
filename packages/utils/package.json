@@ -1,5 +1,5 @@
 {
-  "name": "@template/utils",
+  "name": "@mf/utils",
   "version": "0.1.0",
   "description": "Pure, sharable utility functions",
   "private": true,

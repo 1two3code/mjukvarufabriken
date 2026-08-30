@@ -3,12 +3,11 @@ import { fileURLToPath } from 'node:url'
 
 import autoload from '@fastify/autoload'
 
-import { registerSpa } from '#/lib/spa.ts'
 import { createServer } from './server.ts'
 
 import type { LogLevel } from 'fastify'
 
-const { ADDRESS = 'localhost', PORT = '5174', SPA_DIR } = process.env
+const { ADDRESS = 'localhost', PORT = '5174' } = process.env
 
 const logLevel = process.env.LOG_LEVEL as LogLevel
 const server = await createServer({ logLevel })
@@ -20,12 +19,11 @@ server.register(autoload, {
 	ignorePattern: /^.*(?:types|utils).ts$/,
 })
 
-// Register health check endpoint
-server.get('/health', { logLevel: 'silent' }, async () => ({ message: 'OK' }))
-
-// Single-container delivery: this service also serves the built SPA at "/" so the deployed
-// URL shows the website. Headless (no SPA_DIR) for local dev and our CDN-fronted deploy.
-if (SPA_DIR) await registerSpa(server, SPA_DIR)
+// Register health check endpoint: 503 when a configured database is unusable (migrations failed)
+server.get('/health', { logLevel: 'silent' }, async (_request, reply) => {
+	if (server.db.error) return reply.code(503).send({ message: 'DEGRADED', db: server.db.error })
+	return { message: 'OK' }
+})
 
 try {
 	await server.listen({ host: ADDRESS, port: Number(PORT) })

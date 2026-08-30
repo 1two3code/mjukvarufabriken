@@ -2,7 +2,7 @@ import { EntityNotFound } from '#/lib/entityError.ts'
 import updateItem from '#/routes/bff/items/updateItem.ts'
 
 import type { FastifyInstance } from 'fastify'
-import type { ItemMutation } from '@template/models'
+import type { ItemMutation } from '@mf/models'
 
 describe('PATCH /bff/items/:id route', () => {
 	let app: FastifyInstance

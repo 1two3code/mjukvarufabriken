@@ -16,7 +16,7 @@ Never create a new `createApi()` instance. Import the shared `appApi` from `#/ap
 ```typescript
 import { appApi } from '#/app/api.ts'
 
-import type { Entity, EntityMutation } from '@template/models'
+import type { Entity, EntityMutation } from '@mf/models'
 
 export const entityApiSlice = appApi
   .enhanceEndpoints({ addTagTypes: ['entity'] })

@@ -37,7 +37,15 @@ CLAUDE.local.md
 # Environment variables
 .env*
 
-# Include non-critical envs for the app and the api example
-!apps/app/.env*
-apps/app/.env*local
+# Include non-critical envs for the SPAs and the api example
+!apps/site/.env*
+apps/site/.env*local
+!apps/portal/.env*
+apps/portal/.env*local
 !apps/api/.env.example
+
+# The golden template is tracked in full (including its example env files)
+!templates/web/**
+
+# Secrets — GitHub App private keys, certs (never commit)
+*.pem

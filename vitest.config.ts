@@ -6,9 +6,30 @@ export default defineConfig({
 		coverage: {
 			provider: 'v8',
 			reporter: ['text', 'lcov'],
-			include: ['apps/api/src/**/*.ts', 'packages/utils/src/**/*.ts'],
+			include: [
+				'apps/api/src/**/*.ts',
+				'packages/utils/src/**/*.ts',
+				'packages/harness/src/**/*.ts',
+				'packages/db/src/**/*.ts',
+				'apps/job/src/**/*.ts',
+				'packages/resident/src/**/*.ts',
+				'packages/org/src/**/*.ts',
+			],
 			exclude: ['**/*index.ts', '**/*server.ts', '**/*types.ts', '**/__mocks__/*'],
+			// Enforced by `npm run coverage` (CI). Measured 2026-08-27: lines 88 % / functions 81 % /
+			// branches 76 % — the bar is deliberately modest so a refactor never fails on coverage alone.
+			thresholds: { lines: 60 },
 		},
-		projects: ['apps/api', 'packages/utils'],
+		projects: [
+			'apps/api',
+			'apps/site',
+			'apps/portal',
+			'apps/job',
+			'packages/utils',
+			'packages/harness',
+			'packages/db',
+			'packages/resident',
+			'packages/org',
+		],
 	},
 })

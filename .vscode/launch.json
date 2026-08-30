@@ -6,16 +6,16 @@
       "request": "launch",
       "name": "Debug API",
       "runtimeExecutable": "npm",
-      "runtimeArgs": ["-w", "@template/api", "run", "start:dev"],
+      "runtimeArgs": ["-w", "@mf/api", "run", "start:dev"],
       "sourceMaps": true,
       "console": "integratedTerminal"
     },
     {
       "type": "node",
       "request": "launch",
-      "name": "Debug App",
+      "name": "Debug Portal",
       "runtimeExecutable": "npm",
-      "runtimeArgs": ["-w", "@template/app", "run", "start:dev"],
+      "runtimeArgs": ["-w", "@mf/portal", "run", "start:dev"],
       "sourceMaps": true,
       "console": "integratedTerminal"
     },
@@ -24,13 +24,13 @@
       "request": "launch",
       "name": "Chrome debug",
       "url": "http://localhost:5173",
-      "webRoot": "${workspaceFolder}/apps/app"
+      "webRoot": "${workspaceFolder}/apps/portal"
     }
   ],
   "compounds": [
     {
       "name": "Debug Full-Stack",
-      "configurations": ["Debug API", "Debug App", "Chrome debug"]
+      "configurations": ["Debug API", "Debug Portal", "Chrome debug"]
     }
   ]
 }

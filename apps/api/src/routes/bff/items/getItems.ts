@@ -1,4 +1,4 @@
-import { ItemQuerySchemas, ItemSchema } from '@template/models'
+import { ItemQuerySchemas, ItemSchema } from '@mf/models'
 
 import type { FastifyContextConfig } from 'fastify'
 import type { FastifyPluginAsyncZod } from 'fastify-type-provider-zod'

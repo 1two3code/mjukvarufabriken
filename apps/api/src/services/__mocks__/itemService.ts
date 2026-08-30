@@ -1,9 +1,9 @@
 import fp from 'fastify-plugin'
-import { mergeDeep } from '@template/utils/object'
+import { mergeDeep } from '@mf/utils/object'
 
 import type { FastifyInstance, FastifyPluginAsync } from 'fastify'
 import type { PartialDeep } from 'type-fest'
-import type { Item } from '@template/models'
+import type { Item } from '@mf/models'
 
 const defaultItem: Item = {
 	id: 'item-1',

@@ -1,8 +1,8 @@
 import fp from 'fastify-plugin'
-import { includesAllPermissions } from '@template/access-control'
+import { includesAllPermissions } from '@mf/access-control'
 
 import type { FastifyPluginAsync } from 'fastify'
-import type { Permission } from '@template/access-control'
+import type { Permission } from '@mf/access-control'
 
 declare module 'fastify' {
 	interface FastifyContextConfig {

@@ -13,7 +13,7 @@ Route files export a default `FastifyPluginAsyncZod` function. Define a `schema`
 
 ```typescript
 import { z } from 'zod'
-import { UserSchema } from '@template/models'
+import { UserSchema } from '@mf/models'
 
 import type { FastifyPluginAsyncZod } from 'fastify-type-provider-zod'
 

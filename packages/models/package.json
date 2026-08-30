@@ -1,5 +1,5 @@
 {
-  "name": "@template/models",
+  "name": "@mf/models",
   "version": "0.1.0",
   "description": "Shared entity models (Zod schemas + inferred types)",
   "private": true,
@@ -12,7 +12,7 @@
     ".": "./index.ts"
   },
   "dependencies": {
-    "@template/access-control": "*",
+    "@mf/access-control": "*",
     "zod": "^4.4.3"
   }
 }

@@ -2,7 +2,7 @@ import { EntityNotFound } from '#/lib/entityError.ts'
 import getItem from '#/routes/bff/items/getItem.ts'
 
 import type { FastifyInstance } from 'fastify'
-import type { Item } from '@template/models'
+import type { Item } from '@mf/models'
 
 describe('GET /bff/items/:id route', () => {
 	let app: FastifyInstance

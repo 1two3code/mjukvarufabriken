@@ -1,5 +1,5 @@
 {
-  "name": "@template/access-control",
+  "name": "@mf/access-control",
   "version": "0.1.0",
   "description": "Role-based access control",
   "private": true,

@@ -1,5 +1,5 @@
 import { z } from 'zod'
-import { ItemMutationSchemas } from '@template/models'
+import { ItemMutationSchemas } from '@mf/models'
 
 import type { FastifyContextConfig } from 'fastify'
 import type { FastifyPluginAsyncZod } from 'fastify-type-provider-zod'

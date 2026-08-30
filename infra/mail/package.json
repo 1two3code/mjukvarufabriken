@@ -1,0 +1,23 @@
+{
+  "name": "infra-mail",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "description": "CDK app deployed ONCE, alongside infra/org: inbound MX + SES receiving for mjukvaruhuset.se, forwarded by Lambda to a real inbox",
+  "scripts": {
+    "synth": "cdk synth",
+    "deploy": "cdk deploy",
+    "lint": "tsc --noEmit",
+    "test": "node --import tsx --test test/*.test.ts"
+  },
+  "dependencies": {
+    "aws-cdk-lib": "^2.260.0",
+    "constructs": "^10.6.0",
+    "tsx": "^4.19.4"
+  },
+  "devDependencies": {
+    "@types/node": "^24.12.4",
+    "aws-cdk": "^2.1100.0",
+    "typescript": "^5.9.3"
+  }
+}

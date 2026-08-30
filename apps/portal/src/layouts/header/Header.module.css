@@ -1,0 +1,45 @@
+.header {
+	display: flex;
+	gap: var(--spacing-base);
+	align-items: center;
+
+	height: var(--header-height);
+	padding: 0 var(--spacing-base);
+
+	background: var(--content-background);
+	box-shadow: var(--box-shadow);
+}
+
+.brand {
+	font-size: var(--font-size-l);
+	font-weight: 700;
+	color: var(--brand-500);
+	text-transform: uppercase;
+}
+
+.navigation {
+	display: flex;
+	flex: 1;
+	gap: var(--spacing-s);
+}
+
+.right {
+	display: flex;
+	gap: var(--spacing-s);
+	align-items: center;
+}
+
+.user {
+	display: flex;
+	flex-direction: column;
+	align-items: flex-end;
+	color: var(--secondary-text-color);
+}
+
+.userName {
+	font-size: var(--font-size-s);
+}
+
+.orgName {
+	composes: composable-caption-font from global;
+}

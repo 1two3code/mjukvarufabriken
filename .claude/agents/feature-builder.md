@@ -39,7 +39,7 @@ Do **NOT** proceed until the user explicitly confirms.
 1. Track every plan step in the todo list.
 2. Implement in the order above so each layer compiles against the previous one.
 3. Re-read the governing rules file before writing code in a new area.
-4. After each workspace is touched, run its lint: `npm run lint -w @template/<workspace>`.
+4. After each workspace is touched, run its lint: `npm run lint -w @mf/<workspace>`.
 5. Run `npm test` before finishing. Fix failures; do not skip or weaken tests.
 
 ### Step 4 — Summary

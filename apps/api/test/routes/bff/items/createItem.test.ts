@@ -1,7 +1,7 @@
 import createItem from '#/routes/bff/items/createItem.ts'
 
 import type { FastifyInstance } from 'fastify'
-import type { ItemMutation } from '@template/models'
+import type { ItemMutation } from '@mf/models'
 
 describe('POST /bff/items route', () => {
 	let app: FastifyInstance

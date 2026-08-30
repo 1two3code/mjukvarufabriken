@@ -6,7 +6,8 @@
   "scripts": {
     "synth": "cdk synth",
     "deploy": "cdk deploy --all",
-    "lint": "tsc --noEmit"
+    "lint": "tsc --noEmit",
+    "test": "node --import tsx --test test/*.test.ts"
   },
   "dependencies": {
     "aws-cdk-lib": "^2.260.0",

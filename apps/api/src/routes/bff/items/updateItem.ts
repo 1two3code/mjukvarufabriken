@@ -1,6 +1,6 @@
 import { z } from 'zod'
-import { ItemMutationSchemas } from '@template/models'
-import { tryCatch } from '@template/utils/function'
+import { ItemMutationSchemas } from '@mf/models'
+import { tryCatch } from '@mf/utils/function'
 
 import { EntityNotFound } from '#/lib/entityError.ts'
 

@@ -1,0 +1,103 @@
+/* MARK: Hero */
+.hero {
+	display: flex;
+	flex-direction: column;
+	gap: var(--spacing-s);
+
+	max-width: 80rem;
+	padding-top: var(--spacing-m);
+
+	@media (width <= 40rem) {
+		padding-top: 0;
+	}
+}
+
+.eyebrow {
+	composes: composable-subheader-font from global;
+	color: var(--brand-500);
+}
+
+.title {
+	font-size: 5.2rem;
+	line-height: 1.1;
+	letter-spacing: -0.02em;
+
+	@media (width <= 40rem) {
+		font-size: 3.6rem;
+	}
+}
+
+.lead {
+	max-width: 64rem;
+	font-size: var(--font-size-l);
+	line-height: 1.5;
+	color: var(--secondary-text-color);
+}
+
+.actions {
+	display: flex;
+	flex-wrap: wrap;
+	gap: var(--spacing-s);
+	padding-top: var(--spacing-xs);
+}
+
+/* MARK: Sizes */
+.price {
+	font-size: var(--font-size-l);
+	font-weight: 700;
+	color: var(--brand-500);
+}
+
+.note {
+	max-width: 72rem;
+	font-size: var(--font-size-s);
+	line-height: 1.5;
+	color: var(--secondary-text-color);
+}
+
+/* MARK: How it is built */
+.list {
+	display: grid;
+	grid-template-columns: repeat(2, 1fr);
+	gap: var(--spacing-base);
+	list-style: none;
+
+	@media (width <= 40rem) {
+		grid-template-columns: 1fr;
+	}
+}
+
+.listItem {
+	display: flex;
+	flex-direction: column;
+	gap: var(--spacing-xxs);
+
+	padding-left: var(--spacing-s);
+	border-left: 3px solid var(--brand-500);
+
+	line-height: 1.5;
+}
+
+/* MARK: Closing CTA */
+.cta {
+	display: flex;
+	flex-direction: column;
+	gap: var(--spacing-s);
+	align-items: flex-start;
+
+	padding: var(--spacing-l);
+	border-radius: var(--border-radius-base);
+
+	color: var(--inverted-text-color);
+
+	background: var(--inverted-background);
+
+	.lead {
+		color: inherit;
+		opacity: 0.85;
+	}
+
+	@media (width <= 40rem) {
+		padding: var(--spacing-base);
+	}
+}

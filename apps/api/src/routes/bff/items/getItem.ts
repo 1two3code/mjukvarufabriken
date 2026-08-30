@@ -1,6 +1,6 @@
 import { z } from 'zod'
-import { ItemSchema } from '@template/models'
-import { tryCatch } from '@template/utils/function'
+import { ItemSchema } from '@mf/models'
+import { tryCatch } from '@mf/utils/function'
 
 import { EntityNotFound } from '#/lib/entityError.ts'
 

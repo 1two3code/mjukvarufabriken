@@ -1,8 +1,8 @@
 import fp from 'fastify-plugin'
-import { isObject } from '@template/utils/object'
+import { isObject } from '@mf/utils/object'
 
 import type { FastifyPluginAsync } from 'fastify'
-import type { ApiError } from '@template/models'
+import type { ApiError } from '@mf/models'
 
 type ErrorDetails = string | Error | Record<string, unknown>
 

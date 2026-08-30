@@ -1,0 +1,77 @@
+/* MARK: Layout */
+.stepper {
+	display: grid;
+	grid-template-columns: repeat(6, minmax(0, 1fr));
+	gap: var(--spacing-xxs);
+
+	margin: 0;
+	padding: 0;
+
+	list-style: none;
+}
+
+.step {
+	display: flex;
+	gap: var(--spacing-xs);
+	align-items: center;
+
+	padding: var(--spacing-xs);
+	border-top: 0.3rem solid var(--divider-color);
+
+	color: var(--secondary-text-color);
+}
+
+.index {
+	composes: composable-caption-font from global;
+
+	display: inline-flex;
+	align-items: center;
+	justify-content: center;
+
+	width: 2rem;
+	height: 2rem;
+	border-radius: 50%;
+
+	color: var(--inverted-text-color);
+
+	background: var(--secondary-text-color);
+}
+
+.title {
+	font-size: var(--font-size-s);
+}
+
+/* MARK: States */
+.done {
+	border-top-color: var(--success);
+	color: var(--primary-text-color);
+
+	& .index {
+		background: var(--success);
+	}
+}
+
+.current {
+	border-top-color: var(--info);
+	font-weight: 700;
+	color: var(--primary-text-color);
+
+	& .index {
+		background: var(--info);
+	}
+}
+
+.upcoming {
+	opacity: 0.8;
+}
+
+.cancelled {
+	border-top-color: var(--error);
+	text-decoration: line-through;
+}
+
+@media (width <= 900px) {
+	.stepper {
+		grid-template-columns: repeat(3, minmax(0, 1fr));
+	}
+}

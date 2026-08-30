@@ -1,12 +1,12 @@
-# @template/models
+# @mf/models
 
 Entity models shared between the app and the api, built with [Zod](https://zod.dev).
 
 ## Usage
 
 ```typescript
-import { ItemSchema } from '@template/models'
-import type { Item } from '@template/models'
+import { ItemSchema } from '@mf/models'
+import type { Item } from '@mf/models'
 ```
 
 ## Layout

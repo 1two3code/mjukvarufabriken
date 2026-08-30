@@ -1,14 +1,20 @@
 name: Deploy
 
-# Deploys on every push to main: dev first, then live (gate live with a required reviewer on the
-# `live` GitHub environment). Authenticates to AWS with OIDC — no long-lived keys.
+# Deploys dev on every push to main. qa and live are MANUAL (workflow_dispatch) until their GitHub
+# environments are configured — once they are, and `live` has a required reviewer, chain them back
+# onto push (see the `if:` lines below). Authenticates to AWS with OIDC — no long-lived keys.
 #
-# Per environment (Settings → Environments → dev / live) configure:
-#   secret  AWS_DEPLOY_ROLE_ARN   IAM role trusted by GitHub's OIDC provider, with CDK deploy rights
+# Per environment (Settings → Environments → dev / qa / live) configure:
+#   secret  AWS_DEPLOY_ROLE_ARN   the `mf-github-deploy` role (infra `github-deploy` stack output
+#                                 DeployRoleArn; trusts `repo:<owner>/<name>:environment:<env>`)
 #   var     AWS_REGION            e.g. eu-north-1
 #   var     AWS_ACCOUNT_ID        the account the environment lives in
+# (dev was wired 2026-08-30 with `gh variable set … --env dev` / `gh secret set … --env dev`.)
 #
-# One-time: `npx cdk bootstrap aws://<account>/<region>` in each account.
+# Bootstrap: the deploy role can only assume the existing CDK bootstrap roles and read the
+# CDKToolkit stack — a NEW account/region is bootstrapped once by hand (`cdk bootstrap
+# aws://<account>/<region>` and `.../us-east-1` for the budget stack) with admin credentials;
+# deploy-environment.yml then finds CDKToolkit and skips the bootstrap step.
 
 on:
   push:
@@ -18,7 +24,7 @@ on:
       environment:
         description: Environment to deploy
         type: choice
-        options: [dev, live]
+        options: [dev, qa, live]
         default: dev
 
 permissions:
@@ -36,10 +42,21 @@ jobs:
       environment: dev
     secrets: inherit
 
-  live:
+  qa:
     needs: [dev]
-    # Runs after dev on push, or alone on a manual live dispatch (dev skipped). A failed dev blocks live.
-    if: always() && !failure() && !cancelled() && (github.event_name == 'push' || inputs.environment == 'live')
+    # Manual only for now (the qa GitHub environment has no AWS binding yet). To chain it after
+    # dev on push again: `(github.event_name == 'push' || inputs.environment == 'qa')`.
+    if: always() && !failure() && !cancelled() && inputs.environment == 'qa'
+    uses: ./.github/workflows/deploy-environment.yml
+    with:
+      environment: qa
+    secrets: inherit
+
+  live:
+    needs: [qa]
+    # Manual only for now — and keep it that way until the `live` environment has a required
+    # reviewer. To chain after qa on push: `(github.event_name == 'push' || inputs.environment == 'live')`.
+    if: always() && !failure() && !cancelled() && inputs.environment == 'live'
     uses: ./.github/workflows/deploy-environment.yml
     with:
       environment: live
