@@ -146,7 +146,12 @@ try {
 	const started = await setStatus({ status: 'planning', startedAt: new Date().toISOString() })
 	if (started.killed) throw new Error('job was killed before it started')
 	log('seeding repo', { jobId, templateDir: config.templateDir, workDir: config.workDir })
-	const repoDir = await seedRepo(config.templateDir, config.workDir, jobId)
+	const repoDir = await seedRepo(
+		config.templateDir,
+		config.workDir,
+		jobId,
+		appNameOf(job.spec.goal)
+	)
 	await reporter.update({ repositoryUrl: `file://${repoDir}` })
 	// The review gate diffs everything the workers did against this commit
 	const seedCommit = (await exec('git', ['rev-parse', 'HEAD'], { cwd: repoDir })).stdout.trim()

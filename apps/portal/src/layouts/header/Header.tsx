@@ -38,9 +38,6 @@ export function Header() {
 				<Has permissions={['job:admin']}>
 					<HeaderLink label={t('page.admin.title')} to="/admin" />
 				</Has>
-				<Has permissions={['item:read']}>
-					<HeaderLink label={t('page.items.title')} to="/items" />
-				</Has>
 			</nav>
 			<div className={styles.right}>
 				<ThemeToggle />

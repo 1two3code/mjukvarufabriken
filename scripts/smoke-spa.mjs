@@ -223,8 +223,6 @@ const residentUsage = {
 	},
 }
 
-const items = [{ id: 'smoke-item', name: 'Smoke item', status: 'active', createdAt: now }]
-
 /** GET fixtures per `/bff` path (query string stripped); anything else is a loud 404 */
 const bff = {
 	'/bff/session': session,
@@ -248,7 +246,6 @@ const bff = {
 	[`/bff/jobs/${jobId}`]: job,
 	[`/bff/jobs/${jobId}/events`]: jobEvents,
 	[`/bff/jobs/${jobId}/deliverables`]: deliverables,
-	'/bff/items': items,
 	'/bff/admin/jobs': [job],
 	'/bff/admin/orders': [order],
 	'/bff/admin/orgs': [session.org],

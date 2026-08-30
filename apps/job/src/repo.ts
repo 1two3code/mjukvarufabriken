@@ -1,4 +1,4 @@
-import { cp, mkdir, readdir, rm, stat, writeFile } from 'node:fs/promises'
+import { cp, mkdir, readdir, readFile, rm, stat, writeFile } from 'node:fs/promises'
 import { join } from 'node:path'
 
 import { exec, git } from '@mf/harness'
@@ -31,13 +31,44 @@ const exists = (path: string) =>
 		() => false
 	)
 
+const escapeHtml = (text: string) =>
+	text.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;').replace(/"/g, '&quot;')
+
+/**
+ * Every customer build seeds from the golden template's literal `<title>Template</title>` /
+ * `Monorepo web template` description (`templates/web`, never edited in place per CLAUDE.md).
+ * Left untouched, the delivered SPA ships that placeholder verbatim (seen: the guestbook dogfood
+ * delivery, TOKENS.md 2026-08-30). Replaced here, deterministically, with the spec's actual app
+ * name — a no-op if `apps/app/index.html` is missing (fake templates in tests) or has no
+ * recognisable `<title>`/description to replace.
+ */
+const applyAppTitle = async (repoDir: string, appName: string) => {
+	const indexPath = join(repoDir, 'apps', 'app', 'index.html')
+	if (!(await exists(indexPath))) return
+	const escaped = escapeHtml(appName)
+	const html = await readFile(indexPath, 'utf8')
+	const titled = html
+		.replace(/<title>[^<]*<\/title>/, () => `<title>${escaped}</title>`)
+		.replace(
+			/(<meta name="description" content=")[^"]*(" \/>)/,
+			(_m, open, close) => `${open}${escaped}${close}`
+		)
+	await writeFile(indexPath, titled)
+}
+
 /**
  * Seeds `<workDir>/repo` from the baked-in golden template: copy (node_modules included when
- * the image pre-installed them), `git init -b main`, one initial commit, and `npm i` only if
- * the template ships without node_modules. Nothing customer-specific is baked into the image —
- * the spec arrives via Postgres at runtime.
+ * the image pre-installed them), rewrite the SPA's `<title>`/description with the spec's app name
+ * when given one, `git init -b main`, one initial commit, and `npm i` only if the template ships
+ * without node_modules. Nothing customer-specific is baked into the image — the spec arrives via
+ * Postgres at runtime.
  */
-export const seedRepo = async (templateDir: string, workDir: string, jobId: string) => {
+export const seedRepo = async (
+	templateDir: string,
+	workDir: string,
+	jobId: string,
+	appName?: string
+) => {
 	const repoDir = join(workDir, 'repo')
 	const gitDir = join(templateDir, '.git')
 	// Clear the contents, not the dir itself: in the container `/work` is a node-owned dir whose
@@ -58,6 +89,7 @@ export const seedRepo = async (templateDir: string, workDir: string, jobId: stri
 	if (!(await exists(join(repoDir, '.gitignore')))) {
 		await writeFile(join(repoDir, '.gitignore'), defaultGitignore)
 	}
+	if (appName) await applyAppTitle(repoDir, appName)
 
 	const env = gitIdentity
 	await git(['init', '-q', '-b', 'main'], { cwd: repoDir, env })

@@ -23,7 +23,6 @@ import stripePlugin from '#/plugins/stripe.ts'
 import accountService from '#/services/accountService.ts'
 import authService from '#/services/authService.ts'
 import contactService from '#/services/contactService.ts'
-import itemService from '#/services/itemService.ts'
 import iterationBriefService from '#/services/iterationBriefService.ts'
 import jobService from '#/services/jobService.ts'
 import marginService from '#/services/marginService.ts'
@@ -77,7 +76,6 @@ export async function createServer({ logLevel }: Options = {}): Promise<FastifyI
 		.register(jobSweeperPlugin)
 
 		// Services
-		.register(itemService)
 		.register(specService)
 		.register(jobService)
 		.register(userService)

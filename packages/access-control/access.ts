@@ -7,16 +7,6 @@ export type Access = Record<Role, Permission[]>
  * Defined application access control
  */
 export const access: Access = {
-	admin: [
-		'item:read',
-		'item:write',
-		'item:delete',
-		'spec:read',
-		'spec:write',
-		'job:read',
-		'job:write',
-		'job:admin',
-		'user:all',
-	],
-	user: ['item:read', 'item:write', 'spec:read', 'spec:write', 'job:read', 'job:write'],
+	admin: ['spec:read', 'spec:write', 'job:read', 'job:write', 'job:admin', 'user:all'],
+	user: ['spec:read', 'spec:write', 'job:read', 'job:write'],
 } as const
