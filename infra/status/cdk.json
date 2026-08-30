@@ -1,0 +1,16 @@
+{
+  "app": "npx tsx bin/app.ts",
+  "watch": {
+    "include": ["**"],
+    "exclude": ["README.md", "**/*.json", "node_modules", "cdk.out"]
+  },
+  "context": {
+    "hostedZoneId": "",
+    "hostedZoneName": "",
+    "domainName": "",
+    "certificateArn": "",
+    "vpcId": "",
+    "availabilityZones": "",
+    "publicSubnetIds": ""
+  }
+}
