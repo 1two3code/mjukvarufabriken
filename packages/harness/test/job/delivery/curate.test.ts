@@ -2,7 +2,11 @@ import { mkdir, mkdtemp, readdir, readFile, rm, writeFile } from 'node:fs/promis
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 
-import { curateWorkflows, customerCiWorkflow } from '#job/delivery/curate.ts'
+import {
+	curateWorkflows,
+	customerCiWorkflow,
+	stripInternalGitArtifacts,
+} from '#job/delivery/curate.ts'
 
 const workflowsOf = (repoDir: string) => join(repoDir, '.github', 'workflows')
 
@@ -90,5 +94,42 @@ describe('curateWorkflows', () => {
 		expect(outcome.removed).toEqual(['ci.yml'])
 		expect(await readdir(workflowsOf(repoDir))).toEqual(['ci.yml'])
 		expect(await readFile(join(workflowsOf(repoDir), 'ci.yml'), 'utf8')).toBe(customerCiWorkflow)
+	})
+})
+
+describe('stripInternalGitArtifacts', () => {
+	let root: string
+	let repoDir: string
+	beforeEach(async () => {
+		root = await mkdtemp(join(tmpdir(), 'mf-gitartifacts-'))
+		repoDir = join(root, 'repo')
+		await mkdir(repoDir, { recursive: true })
+	})
+	afterEach(() => rm(root, { recursive: true, force: true }))
+
+	it('Removes stranded git-recovery dirs but keeps .git, .github and .gitignore', async () => {
+		// Arrange — the real repo dir, a legit .github dir + .gitignore, and two leftovers
+		await mkdir(join(repoDir, '.git', 'objects'), { recursive: true })
+		await mkdir(join(repoDir, '.github', 'workflows'), { recursive: true })
+		await mkdir(join(repoDir, '.git-broken', 'refs'), { recursive: true })
+		await mkdir(join(repoDir, '.git.bak'), { recursive: true })
+		await mkdir(join(repoDir, '.git.orig'), { recursive: true })
+		await mkdir(join(repoDir, 'src'), { recursive: true })
+		await writeFile(join(repoDir, '.gitignore'), 'node_modules\n')
+		await writeFile(join(repoDir, '.gitattributes'), '* text=auto\n')
+
+		// Act
+		const removed = await stripInternalGitArtifacts(repoDir)
+
+		// Assert — only the leftovers went; the real git dir and all .git* config stayed
+		expect(removed).toEqual(['.git-broken', '.git.bak', '.git.orig'])
+		const left = (await readdir(repoDir)).sort()
+		expect(left).toEqual(['.git', '.gitattributes', '.github', '.gitignore', 'src'])
+	})
+
+	it('Is a no-op (empty result) when there are no leftovers', async () => {
+		await mkdir(join(repoDir, '.git'), { recursive: true })
+		await writeFile(join(repoDir, '.gitignore'), '')
+		expect(await stripInternalGitArtifacts(repoDir)).toEqual([])
 	})
 })

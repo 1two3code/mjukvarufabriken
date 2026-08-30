@@ -51,6 +51,32 @@ jobs:
         run: npm run build
 `
 
+/**
+ * Internal git-recovery leftovers a build can strand in the worktree (`.git-broken`, `.git.bak`,
+ * `.git.orig`, `.git-rewrite`, …). They are ordinary directories — not the special `.git` — so the
+ * delivery's `git add -A` would otherwise commit them into the customer repo (seen: job 486113ca
+ * shipped `.git-broken/` + `.git.bak/`, ~4.7 MB of internal git objects). The `[.-]` after `.git`
+ * matches only these artifacts, never `.github` / `.gitignore` / `.gitattributes` (whose next char
+ * is a letter). Never matches the real `.git` itself.
+ */
+const isGitArtifactDir = (name: string) => /^\.git[.-]/.test(name)
+
+/**
+ * Removes stranded internal git-recovery directories from the repo root before the delivery
+ * commit, so they never reach the pushed repo or `repo.zip`. Returns the names removed (sorted).
+ */
+export const stripInternalGitArtifacts = async (repoDir: string): Promise<string[]> => {
+	const entries = await readdir(repoDir, { withFileTypes: true })
+	const removed: string[] = []
+	for (const entry of entries) {
+		if (entry.isDirectory() && isGitArtifactDir(entry.name)) {
+			await rm(join(repoDir, entry.name), { recursive: true, force: true })
+			removed.push(entry.name)
+		}
+	}
+	return removed.sort()
+}
+
 /** Files under `.github/workflows` are GitHub Actions definitions iff they end in `.yml` / `.yaml` */
 const isWorkflowFile = (name: string) => name.endsWith('.yml') || name.endsWith('.yaml')
 
