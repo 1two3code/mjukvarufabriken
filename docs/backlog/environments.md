@@ -53,31 +53,41 @@ The one-shot build is the on-ramp, not the destination.
   server (edit source → HMR) rather than a full rebuild each time.
 - The **harness worker/gate code** is reused for promotion (qa gates before live).
 
-## Phasing (proposed — confirm before building)
+## Phasing (REORDERED 2026-08-30 with Hasse — dev comes first, not qa+live; see PLAN.md M11)
 1. **Platform qa** (small, concrete): add `qa` to our config — domains `qa.mjukvaruhuset.se` /
    `api.qa…` / `portal.qa…`, stacks `resources-qa` / `mf-qa` / `ops-qa` / `budget-qa`, deploy
-   pipeline dev → qa → live. Purely our infra.
-2. **Customer live + qa from delivery**: delivery stands up two Express services (qa, live) instead
-   of one, wires a promote (qa → live) action into the portal, runs the gates against qa on promote.
-3. **Customer dev + resident LLM**: a per-customer hosted dev server (live-updating) + the resident
-   LLM connected to it, with a chat surface (portal or the customer's own). Live aesthetic edits →
-   HMR; "promote to qa" packages the change and runs it through qa → live.
+   pipeline dev → qa → live. Purely our infra. — DONE (wave 9/10).
+2. **Customer `dev` only**: a per-customer hosted dev server (live-updating) + the resident LLM
+   (M8 sandboxing reused: monthly cap, pause/resume-as-kill-switch, per-day audit log) connected to
+   it. Always-on, mjukvaruhuset pays for it. No qa/live promotion yet — for now, a customer order
+   only ever reaches their `dev`.
+3. **Customer `qa` + `live`**: delivery stands up two more Express services, and a **portal** action
+   promotes `dev → qa → live` (not raw git/PR — a UI flow; needs portal user roles first, today it's
+   just admin vs plain user). Customer pays for qa + live from here on.
 4. **Metering/billing** for the always-on dev env + resident LLM (resident mode = tokens × 1.5 +
-   monthly fee is already decided) — per-environment cost visibility.
+   monthly fee is already decided) — per-environment cost visibility. Also noted: the dev-env LLM
+   helper itself should scale to near-zero when idle, unlike the always-on dev server — later, not
+   blocking phase 2.
 
 ## Open decisions to lock (Hasse's calls)
 - **Whose account? — RESOLVED 2026-08-28:** an AWS **Organization** vends one member account per
   customer; we operate it (assume-role), the customer can graduate by moving the account out. The
   three envs (dev/qa/live) are separate stacks inside that one account for v1. See the Decisions
   section of PLAN.md and the build brief [org-accounts.md](org-accounts.md).
-- **Cost model for always-on dev + qa per customer.** Three ECS services (shared ALB helps) + a
-  resident LLM per customer is real monthly cost. Need a per-customer pricing/cap tied to the
-  resident monthly fee. Scale-to-zero for idle dev/qa?
+- **Cost model — RESOLVED 2026-08-30:** dev is always-on (Fargate-style) and mjukvaruhuset pays for
+  it, part of what's sold. qa + live are customer-paid, only built in phase 3. The dev-env LLM
+  helper scaling to near-zero when idle is noted for later, separate from the dev server itself.
 - **"Live update" mechanism.** A running Vite dev server with HMR that the LLM edits (fast, feels
   live, but a dev server isn't production-grade) vs. rebuild-and-redeploy each change (slower,
   production-parity). Likely: HMR dev server for the *dev* env, real build/deploy for qa/live.
-- **Promotion model.** Git branches per env (dev/qa/live) + PRs, or image promotion (build once,
-  deploy the same image to qa then live)? Image promotion is cleaner for parity.
+- **Promotion model — RESOLVED 2026-08-30:** a portal UI action, not a raw git/PR flow. Requires
+  portal user roles/permissions first (who on the customer's side may promote) — not yet designed.
+- **Sandboxing for the dev-env LLM — RESOLVED 2026-08-30:** reuses `@mf/resident`'s (M8) cap/
+  pause/audit machinery. One difference: resident is PR-gated (targets a real `main`); the dev-env
+  LLM edits directly, since `dev` is the explicitly low-stakes environment — the phase-3 portal
+  promotion is what stands in for resident's PR gate on the way to qa/live. Still open: what
+  restricts *what* it's allowed to touch (business logic/auth/data) — the reused machinery bounds
+  blast radius and spend, not scope.
 - **Who is the resident LLM's identity/keys?** Resident v1 = customer's own Anthropic key. Same here?
 
 ## Where this lands in the plan
