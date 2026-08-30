@@ -81,8 +81,8 @@ export async function createServer({ logLevel }: Options = {}): Promise<FastifyI
 		.register(orderService)
 		.register(residentService)
 		.register(iterationBriefService)
-		.register(paymentService)
 		.register(accountService)
+		.register(paymentService)
 
 		// Background schedulers depending on services
 		.register(lifecycleSweeperPlugin)

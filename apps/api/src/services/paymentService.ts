@@ -147,6 +147,7 @@ const plugin: FastifyPluginAsync = async app => {
 		jobService,
 		userService,
 		residentService,
+		accountService,
 		secrets,
 		email,
 	} = app
@@ -234,6 +235,15 @@ const plugin: FastifyPluginAsync = async app => {
 		} catch (error) {
 			app.log.error({ err: error, orderId }, 'Deposit paid but the build could not be started')
 		}
+		// Fire-and-forget: real AWS account creation can take minutes (polled), so this must not
+		// hold up the webhook response. Deliberately triggered here rather than at delivery time —
+		// the build itself takes tens of minutes, plenty of lead time for the account to be ready
+		// before delivery needs it. Idempotent and safe to retry (no-ops once an account is
+		// recorded, or while PROVISION_CUSTOMER_ACCOUNTS is off); a failure here is an admin
+		// follow-up (retry via the same admin endpoint), not a reason to fail the build.
+		accountService.provisionCustomerAccount(orgId).catch(error => {
+			app.log.error({ err: error, orgId }, 'Deposit paid but the AWS account could not be provisioned')
+		})
 	}
 
 	const handleEvent = async (event: PaymentEvent): Promise<WebhookResult> => {
@@ -457,5 +467,6 @@ export default fp(plugin, {
 		'#internal/jobService',
 		'#internal/userService',
 		'#internal/residentService',
+		'#internal/accountService',
 	],
 })

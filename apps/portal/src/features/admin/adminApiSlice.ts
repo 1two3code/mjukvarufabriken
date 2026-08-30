@@ -1,6 +1,6 @@
 import { ApiCaching, appApi } from '#/app/api.ts'
 
-import type { Job, ModelPriceRow, NewModelPrice, Order, Org } from '@mf/models'
+import type { Job, ModelPriceRow, NewModelPrice, Order, Org, ProvisionAccountResponse } from '@mf/models'
 
 export const adminApiSlice = appApi
 	.enhanceEndpoints({ addTagTypes: ['adminJobs', 'adminOrders', 'adminOrgs', 'modelPrices'] })
@@ -31,6 +31,10 @@ export const adminApiSlice = appApi
 				query: jobId => ({ url: `/admin/jobs/${jobId}/kill`, method: 'POST' }),
 				invalidatesTags: ['adminJobs'],
 			}),
+			provisionAccount: build.mutation<ProvisionAccountResponse, string>({
+				query: orgId => ({ url: `/admin/orgs/${orgId}/provision-account`, method: 'POST' }),
+				invalidatesTags: ['adminOrgs'],
+			}),
 		}),
 	})
 
@@ -41,4 +45,5 @@ export const {
 	useGetModelPricesQuery,
 	useAddModelPriceMutation,
 	useKillAdminJobMutation,
+	useProvisionAccountMutation,
 } = adminApiSlice
