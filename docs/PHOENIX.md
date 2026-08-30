@@ -61,9 +61,11 @@ Result: after provisioning a fresh account you never touch `config.ts`.
 node infra/scripts/provision-account.mjs qa            # dry-run: shows the plan
 node infra/scripts/provision-account.mjs qa --apply    # → prints the account id + mf-github-deploy role arn
 
-# 2. zone + certs + GitHub env   [P4–P7]  (dry-run by default)
-infra/scripts/provision-env qa --account <acct> --parent-zone-id <root-zone> --deploy-role-arn <arn>
-infra/scripts/provision-env qa ... --apply        # after reviewing the dry-run plan
+# 2. zone + certs + GitHub env   [P4–P7]  — also from the MANAGEMENT account, via --assume-role
+#    (no profile switch: it assumes OrganizationAccountAccessRole in the new account for you)
+node infra/scripts/provision-env.mjs qa --assume-role --account <acct> \
+  --deploy-role-arn arn:aws:iam::<acct>:role/mf-github-deploy --parent-zone-id Z002863610X79ZE1B3K8F
+node infra/scripts/provision-env.mjs qa --assume-role ... --apply    # after reviewing the plan
 
 # 3. deploy   [P8]
 infra/scripts/deploy.sh qa                          # or push/dispatch the deploy workflow

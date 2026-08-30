@@ -4,13 +4,18 @@
 //
 //   node infra/scripts/provision-env.mjs qa \
 //     --account 111122223333 --deploy-role-arn arn:aws:iam::111122223333:role/mf-github-deploy \
-//     [--parent-zone-id Z0ROOT] [--region eu-north-1] [--reviewer <github-user-id>] [--apply]
+//     [--assume-role] [--parent-zone-id Z0ROOT] [--region eu-north-1] [--reviewer <id>] [--apply]
 //
-// Preconditions: you are authenticated to the TARGET env account (the one whose id you pass as
-// --account); `gh` is authenticated for the repo. The script refuses to run if the caller's AWS
-// account does not match --account (the wrong-account footgun). Certs validate against the env's
-// OWN subdomain zone, so the zone must be delegated from the root (P4 does the delegation record
-// when --parent-zone-id is given and reachable; otherwise it prints the NS records to add by hand).
+// Auth: either authenticate to the TARGET env account yourself, OR pass `--assume-role` to run as
+// your MANAGEMENT account and have the script assume `OrganizationAccountAccessRole` in --account
+// for the target-account work (the same role provision-account created). Without --assume-role the
+// script refuses to run if the caller's account != --account (the wrong-account footgun); with it,
+// the assume proves access. `gh` is authenticated for the repo regardless.
+//
+// Cross-account note: the target-account calls (zone, certs) use --account's creds; the NS
+// DELEGATION into --parent-zone-id keeps your ORIGINAL creds, because the root zone lives in the
+// management account today — so `--assume-role` still writes the delegation. Certs validate against
+// the env's own subdomain zone; without --parent-zone-id the NS records are printed to add by hand.
 //
 // LIMITATIONS (v1): handles a SUBDOMAIN env (qa → qa.mjukvaruhuset.se). The `live` APEX
 // (mjukvaruhuset.se) needs the root zone to live in the env account — see PHOENIX.md "root-zone
@@ -31,6 +36,7 @@ const flag = name => {
 	return i >= 0 && i + 1 < args.length ? args[i + 1] : undefined
 }
 const APPLY = args.includes('--apply')
+const ASSUME = args.includes('--assume-role')
 const account = flag('account')
 const region = flag('region') || 'eu-north-1'
 const deployRoleArn = flag('deploy-role-arn')
@@ -54,19 +60,47 @@ function fail(msg) {
 const log = (...m) => console.log(...m)
 const plan = m => log(`  ${APPLY ? 'APPLY' : 'PLAN '} ${m}`)
 
-// MARK: shell helpers (call the aws / gh CLIs; JSON out)
-const sh = (cmd, cmdArgs) => execFileSync(cmd, cmdArgs, { encoding: 'utf8' }).trim()
-const aws = (cmdArgs, opts = {}) => sh('aws', [...cmdArgs, '--output', 'json', ...(opts.region ? ['--region', opts.region] : [])])
+// MARK: shell helpers (call the aws / gh CLIs; JSON out). `env` overrides the process env (creds).
+const sh = (cmd, cmdArgs, env) => execFileSync(cmd, cmdArgs, { encoding: 'utf8', ...(env ? { env } : {}) }).trim()
+
+// `--assume-role`: run as the management account and assume OrganizationAccountAccessRole into the
+// target account for its own calls (zone, certs). `rootEnv` (undefined = original creds) is used for
+// the NS delegation into the parent/root zone, which lives in the management account today.
+let targetEnv // undefined → original process env
+if (ASSUME) {
+	const roleArn = `arn:aws:iam::${account}:role/OrganizationAccountAccessRole`
+	let creds
+	try {
+		creds = JSON.parse(
+			sh('aws', ['sts', 'assume-role', '--role-arn', roleArn, '--role-session-name', 'mf-provision-env', '--output', 'json'])
+		).Credentials
+	} catch (e) {
+		fail(`could not assume ${roleArn} — is ${account} an Organizations-created member account, and are you the management account? (${e.message})`)
+	}
+	targetEnv = {
+		...process.env,
+		AWS_ACCESS_KEY_ID: creds.AccessKeyId,
+		AWS_SECRET_ACCESS_KEY: creds.SecretAccessKey,
+		AWS_SESSION_TOKEN: creds.SessionToken,
+		AWS_PROFILE: '',
+	}
+}
+const aws = (cmdArgs, opts = {}) =>
+	sh('aws', [...cmdArgs, '--output', 'json', ...(opts.region ? ['--region', opts.region] : [])], opts.env ?? targetEnv)
 const awsJson = (cmdArgs, opts) => JSON.parse(aws(cmdArgs, opts) || 'null')
 // In dry-run, mutating aws calls are printed, not run.
 const awsWrite = (cmdArgs, opts) => (APPLY ? awsJson(cmdArgs, opts) : (plan(`aws ${cmdArgs.join(' ')}${opts?.region ? ' --region ' + opts.region : ''}`), null))
 
-// MARK: account guard
+// MARK: account guard — the (possibly assumed) identity must be the target account
 const callerAccount = awsJson(['sts', 'get-caller-identity']).Account
 if (callerAccount !== account) {
-	fail(`caller account ${callerAccount} != --account ${account}. Authenticate to the ${env} account first (wrong-account guard).`)
+	fail(
+		ASSUME
+			? `assumed identity is ${callerAccount}, not --account ${account} (unexpected)`
+			: `caller account ${callerAccount} != --account ${account}. Authenticate to the ${env} account, or pass --assume-role from the management account.`
+	)
 }
-log(`✓ authenticated to the ${env} account ${account}`)
+log(`✓ ${ASSUME ? 'assumed OrganizationAccountAccessRole in' : 'authenticated to'} the ${env} account ${account}`)
 
 // MARK: P4 — subdomain hosted zone + NS delegation
 log(`\n[P4] hosted zone ${subdomain}`)
@@ -97,7 +131,8 @@ if (parentZoneId) {
 		Changes: [{ Action: 'UPSERT', ResourceRecordSet: { Name: subdomain, Type: 'NS', TTL: 300, ResourceRecords: nsRecords.length ? nsRecords.map(v => ({ Value: v })) : [{ Value: '<ns>' }] } }],
 	})
 	try {
-		awsWrite(['route53', 'change-resource-record-sets', '--hosted-zone-id', parentZoneId, '--change-batch', batch])
+		// The root zone lives in the management account — use the ORIGINAL creds, not the assumed target.
+		awsWrite(['route53', 'change-resource-record-sets', '--hosted-zone-id', parentZoneId, '--change-batch', batch], { env: process.env })
 	} catch {
 		log(`  ! could not write to parent zone (different account?) — add this NS delegation by hand:`)
 		nsRecords.forEach(v => log(`      ${subdomain}. NS ${v}`))
