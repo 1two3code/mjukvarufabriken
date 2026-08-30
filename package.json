@@ -1,1 +1,42 @@
-{"name":"t"}
+{
+  "name": "template-web",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "start:dev": "npm run start:dev -w @template/app & npm run start:dev -w @template/api & wait",
+    "build": "npm run build --workspaces --if-present",
+    "smoke": "node scripts/smoke-spa.mjs app",
+    "version:patch": "npm version patch --workspaces --include-workspace-root --no-git-tag-version",
+    "version:minor": "npm version minor --workspaces --include-workspace-root --no-git-tag-version",
+    "lint": "npm run lint --workspaces --if-present",
+    "test": "vitest run",
+    "coverage": "vitest run --coverage --reporter=dot",
+    "clean": "find . -maxdepth 3 -name 'package-lock.json' -exec rm -r {} \\;; find . -maxdepth 3 -name 'node_modules' -prune -exec rm -rf {} \\;; npm run clean:output",
+    "clean:output": "rm -rf apps/app/dist; find . -maxdepth 3 -name 'coverage' -prune -exec rm -rf {} \\;; find . -maxdepth 3 -name 'cdk.out' -prune -exec rm -rf {} \\;",
+    "upgrade": "npx npm-check-updates --workspaces --target semver -u; npm i",
+    "prepare": "husky"
+  },
+  "workspaces": [
+    "apps/*",
+    "packages/*"
+  ],
+  "devDependencies": {
+    "@eslint/js": "^9.39.4",
+    "@ianvs/prettier-plugin-sort-imports": "^4.7.1",
+    "@types/node": "^24.12.4",
+    "@typescript/native-preview": "^7.0.0-dev.20260707.2",
+    "@vitest/coverage-v8": "^4.1.7",
+    "eslint": "^9.39.4",
+    "eslint-config-prettier": "^10.1.8",
+    "husky": "^9.1.7",
+    "prettier": "^3.8.3",
+    "type-fest": "^5.6.0",
+    "typescript": "^6.0.3",
+    "typescript-eslint": "^8.59.4",
+    "vitest": "^4.1.7"
+  },
+  "engines": {
+    "node": ">=24.14"
+  }
+}
