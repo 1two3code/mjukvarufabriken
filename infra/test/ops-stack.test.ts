@@ -60,23 +60,17 @@ describe('OpsStack', () => {
 		ops.resourceCountIs('AWS::SNS::TopicPolicy', 1)
 	})
 
-	it('derives failed-job and token-burn metrics from the job log lines', () => {
-		// Both the orchestrator's `event failed` and the crash path's `job crashed` (SIGTERM,
-		// unhandled rejection) count as a failed job
-		ops.hasResourceProperties('AWS::Logs::MetricFilter', {
-			FilterPattern: '{ ($.message = "event failed") || ($.message = "job crashed") }',
-			MetricTransformations: [
-				Match.objectLike({ MetricName: 'JobsFailed', MetricNamespace: 'mf/dev', MetricValue: '1' }),
-			],
-		})
-		ops.hasResourceProperties('AWS::Logs::MetricFilter', {
-			FilterPattern: '{ $.message = "job finished" }',
-			MetricTransformations: [
-				Match.objectLike({ MetricName: 'JobTokensUsed', MetricValue: '$.tokensUsed' }),
-			],
-		})
+	it('derives failed-job and token-burn metrics from the api’s own mf/dev custom metrics, not job log lines (M3 hardening #2)', () => {
+		// No more log-line pattern matching — a customer's own build script output shares that
+		// log stream and could otherwise spoof/hide either alarm.
+		assert.equal(
+			Object.keys(ops.findResources('AWS::Logs::MetricFilter')).length,
+			0,
+			'no MetricFilter should read the job log group any more'
+		)
 		ops.hasResourceProperties('AWS::CloudWatch::Alarm', {
 			AlarmName: 'mf-dev-jobs-failed',
+			Namespace: 'mf/dev',
 			MetricName: 'JobsFailed',
 			Statistic: 'Sum',
 			Period: 300,
@@ -85,6 +79,7 @@ describe('OpsStack', () => {
 		})
 		ops.hasResourceProperties('AWS::CloudWatch::Alarm', {
 			AlarmName: 'mf-dev-job-token-burn',
+			Namespace: 'mf/dev',
 			MetricName: 'JobTokensUsed',
 			Statistic: 'Maximum',
 			Threshold: environment.alerts.jobTokensThreshold,

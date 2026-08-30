@@ -192,6 +192,9 @@ export class WebStack extends Stack {
 					STRIPE_WEBHOOK_SECRET_SECRET_ARN: resources.secrets['stripe-webhook-secret'].secretArn,
 					GITHUB_OAUTH_CLIENT_SECRET_SECRET_ARN:
 						resources.secrets['github-oauth-client-secret'].secretArn,
+					// Error tracking (M9 follow-up): empty placeholder until a Sentry project exists
+					// (TODO-EXTERNAL) — the api's `sentry` plugin decorates an inert client until then
+					SENTRY_DSN_SECRET_ARN: resources.secrets['sentry-dsn'].secretArn,
 					// The client id is public; only with it does the api enable the GitHub sign-in routes
 					...(environment.githubOAuth && {
 						GITHUB_OAUTH_CLIENT_ID: environment.githubOAuth.clientId,
@@ -235,11 +238,15 @@ export class WebStack extends Stack {
 		//   ... on auth-jwt-private-key                         — signs access tokens (EdDSA issuer)
 		//   ... on stripe-secret-key / stripe-webhook-secret    — checkout + webhook verification (M6)
 		//   ... on github-oauth-client-secret                  — "Sign in with GitHub" code exchange (M6)
+		//   ... on sentry-dsn                                  — error tracking (SaaS, free tier)
 		//   s3 read/write on the artifacts bucket               — presigned deliverable downloads, uploads
 		//   ses:SendEmail on the domain identity                — magic-link mail (only with a domain)
 		//   ecs:RunTask (job family, jobs cluster only)         — start a build job
 		//   ecs:DescribeTasks/StopTask/ListTasks (jobs cluster) — job status + admin kill switch
 		//   iam:PassRole on the job task + execution roles      — required by RunTask
+		//   cloudwatch:PutMetricData (mf/<env> namespace only)  — tamper-proof jobs-failed/job-token-burn
+		//     alarms (M3 hardening #2, infra/lib/ops-stack.ts), published from the trusted job report
+		//     write, not the job container's own log lines
 		// Not granted: github-app-key raw (only via the delivery secret grant), logs:* (execution role), any
 		// wildcard on secrets or buckets.
 		const taskRole = api.taskDefinition.taskRole
@@ -249,6 +256,7 @@ export class WebStack extends Stack {
 		resources.secrets['stripe-secret-key'].grantRead(taskRole)
 		resources.secrets['stripe-webhook-secret'].grantRead(taskRole)
 		resources.secrets['github-oauth-client-secret'].grantRead(taskRole)
+		resources.secrets['sentry-dsn'].grantRead(taskRole)
 		resources.artifactsBucket.grantReadWrite(taskRole)
 
 		// Magic-link emails. With a verified domain identity the grant is scoped to it; without one
@@ -295,6 +303,19 @@ export class WebStack extends Stack {
 		)
 		jobTaskDefinition.taskRole.grantPassRole(taskRole)
 		jobTaskDefinition.obtainExecutionRole().grantPassRole(taskRole)
+
+		// Tamper-proof alarm metrics (M3 hardening #2, infra/lib/ops-stack.ts): the api publishes
+		// JobsFailed/JobTokensUsed from its own trusted, Zod-validated job report ingestion — never
+		// from the build container's raw log lines, which a customer's build script can also print.
+		// PutMetricData has no ARN to scope (Resource must be '*'); the namespace condition is the
+		// only fence CloudWatch offers, so the api can publish only into its own `mf/<env>` namespace.
+		taskRole.addToPrincipalPolicy(
+			new PolicyStatement({
+				actions: ['cloudwatch:PutMetricData'],
+				resources: ['*'],
+				conditions: { StringEquals: { 'cloudwatch:namespace': `mf/${environment.name}` } },
+			})
+		)
 
 		// MARK: DNS
 		// MARK: Same-origin API — CloudFront forwards /bff/* on both SPAs to the ALB (no CORS needed)

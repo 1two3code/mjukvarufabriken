@@ -45,6 +45,7 @@ describe('exec', () => {
 			AWS_REGION: 'eu-north-1',
 			ECS_CONTAINER_METADATA_URI_V4: 'http://169.254.170.2/v4',
 			ARTIFACTS_BUCKET: 'mf-artifacts',
+			ARTIFACTS_ROLE_ARN: 'arn:iam:job-artifacts',
 			ECR_REPOSITORY_URI: 'acct.dkr.ecr.eu-north-1.amazonaws.com/mf-deliverables-dev',
 			CODEBUILD_PROJECT: 'mf-delivery-build-dev',
 			EXPRESS_EXECUTION_ROLE_ARN: 'arn:iam:express-exec',

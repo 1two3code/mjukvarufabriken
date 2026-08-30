@@ -252,6 +252,7 @@ const bff = {
 	'/bff/admin/jobs': [job],
 	'/bff/admin/orders': [order],
 	'/bff/admin/orgs': [session.org],
+	'/bff/admin/model-prices': [],
 	'/bff/admin/resident/installations': [installation],
 	'/bff/admin/resident/usage': [residentUsage],
 }

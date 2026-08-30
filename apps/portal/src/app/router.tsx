@@ -2,7 +2,10 @@ import { createBrowserRouter } from 'react-router-dom'
 
 import { ProtectedLayout } from '#/layouts/templates/ProtectedLayout.tsx'
 import { PublicLayout } from '#/layouts/templates/PublicLayout.tsx'
-import { AdminPage } from '#/pages/AdminPage.tsx'
+import { AdminCustomersPage } from '#/pages/AdminCustomersPage.tsx'
+import { AdminJobsPage } from '#/pages/AdminJobsPage.tsx'
+import { AdminOverviewPage } from '#/pages/AdminOverviewPage.tsx'
+import { AdminPricingPage } from '#/pages/AdminPricingPage.tsx'
 import { AdminResidentPage } from '#/pages/AdminResidentPage.tsx'
 import { AuthCallbackPage } from '#/pages/AuthCallbackPage.tsx'
 import { GithubCallbackPage } from '#/pages/GithubCallbackPage.tsx'
@@ -33,8 +36,12 @@ export const router = createBrowserRouter([
 			{ path: '/items', element: <ItemsPage /> },
 			{ path: '/orders', element: <OrdersPage /> },
 			{ path: '/orders/:orderId', element: <OrderPage /> },
-			{ path: '/admin', element: <AdminPage /> },
+			{ path: '/admin', element: <AdminOverviewPage /> },
+			{ path: '/admin/jobs', element: <AdminJobsPage /> },
+			{ path: '/admin/customers', element: <AdminCustomersPage /> },
 			{ path: '/admin/resident', element: <AdminResidentPage /> },
+			{ path: '/admin/pricing', element: <AdminPricingPage /> },
+			// /admin/margin (M12, when built): per-customer margin + aggregate P&L over time
 			{ path: '/orders/:orderId/spec', element: <SpecPage /> },
 			{ path: '/orders/:orderId/job', element: <JobPage /> },
 		],

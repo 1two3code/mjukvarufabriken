@@ -2,10 +2,11 @@ import styles from './AdminResidentPage.module.css'
 
 import { useState } from 'react'
 import { useTranslation } from 'react-i18next'
-import { Link, Navigate } from 'react-router-dom'
+import { Navigate } from 'react-router-dom'
 
 import { usePermission } from '#/hooks/usePermission.ts'
 import { useToast } from '#/hooks/useToast.ts'
+import { AdminNav } from '#/features/admin/AdminNav.tsx'
 import {
 	useBillResidentMonthMutation,
 	useGetResidentInstallationsQuery,
@@ -60,10 +61,8 @@ export function AdminResidentPage() {
 	return (
 		<>
 			<h1>{t('page.adminResident.title')}</h1>
-			<p className={styles.intro}>
-				{t('page.adminResident.intro')}{' '}
-				<Link to="/admin">{t('page.adminResident.backToAdmin')}</Link>
-			</p>
+			<AdminNav />
+			<p className={styles.intro}>{t('page.adminResident.intro')}</p>
 
 			<div className={styles.toolbar}>
 				<label className={styles.filter}>

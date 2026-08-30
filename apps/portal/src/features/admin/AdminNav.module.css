@@ -1,0 +1,30 @@
+.nav {
+	display: flex;
+	flex-wrap: wrap;
+	gap: var(--spacing-xs);
+
+	margin-top: var(--spacing-s);
+	padding-bottom: var(--spacing-s);
+	border-bottom: var(--border-width-xs) solid var(--divider-color);
+}
+
+.link {
+	padding: var(--spacing-xxs) var(--spacing-s);
+	border-radius: var(--border-radius-xs);
+
+	font-size: var(--font-size-s);
+	font-weight: 700;
+	color: var(--secondary-text-color);
+	text-transform: uppercase;
+
+	transition: color 200ms ease;
+
+	&:hover {
+		color: var(--primary-text-color);
+	}
+}
+
+.active {
+	color: var(--primary-text-color);
+	background: var(--base-background);
+}

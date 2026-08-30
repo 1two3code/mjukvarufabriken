@@ -65,6 +65,7 @@ describe('Secrets plugin (secrets)', () => {
 			emailFrom: 'hello@example.com',
 			anthropicApiKey: 'sk-ant-env',
 			specModel: 'claude-opus-5',
+			sentryDsn: undefined,
 			residentInstallations: { 'acme-shop': 'tok-a', 'beta-crm': 'tok:b' },
 			residentBilling: { meterEvent: 'resident_usage_usd_cents', priceId: 'price_123' },
 			provisionAccounts: false,
@@ -180,6 +181,33 @@ describe('Secrets plugin (secrets)', () => {
 		// Assert
 		expect(json.secrets.anthropicApiKey).toBe('sk-ant-json')
 		expect(placeholder.secrets.anthropicApiKey).toBeUndefined()
+	})
+
+	it('Leaves the Sentry DSN undefined when neither env nor ARN is set', async () => {
+		// Arrange
+		stubRequiredEnv()
+
+		// Act
+		const app = await createTestApp({ skipMock: '#/plugins/secrets.ts' })
+
+		// Assert
+		expect(app.secrets.sentryDsn).toBeUndefined()
+	})
+
+	it('Resolves the Sentry DSN from Secrets Manager via SENTRY_DSN_SECRET_ARN', async () => {
+		// Arrange
+		stubRequiredEnv()
+		vi.stubEnv('SENTRY_DSN_SECRET_ARN', 'arn:aws:secretsmanager:eu-north-1:1:secret:sentry')
+		sendMock.mockResolvedValue({ SecretString: 'https://public@o0.ingest.sentry.io/1' })
+
+		// Act
+		const app = await createTestApp({ skipMock: '#/plugins/secrets.ts' })
+
+		// Assert
+		expect(sendMock).toHaveBeenCalledWith({
+			input: { SecretId: 'arn:aws:secretsmanager:eu-north-1:1:secret:sentry' },
+		})
+		expect(app.secrets.sentryDsn).toBe('https://public@o0.ingest.sentry.io/1')
 	})
 
 	it('Boots without a key when Secrets Manager fails', async () => {

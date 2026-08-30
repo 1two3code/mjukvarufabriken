@@ -61,6 +61,7 @@ const mockPlugin: FastifyPluginAsync = async app => {
 		rateLimits: memory.rateLimits,
 		iterationBrief: memory.iterationBrief,
 		modelPrices: memory.modelPrices,
+		pricingTiers: memory.pricingTiers,
 		jobs: {
 			insert: vi.fn(job => Promise.resolve(createMockJob({ ...job, id: 'job-1' }))),
 			get: vi.fn((id: string) => Promise.resolve(createMockJob({ id }))),

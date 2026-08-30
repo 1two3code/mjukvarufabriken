@@ -14,6 +14,7 @@ const mockPlugin: FastifyPluginAsync = async app => {
 		emailTransport: 'log',
 		emailFrom: 'noreply@example.com',
 		anthropicApiKey: 'sk-ant-test',
+		sentryDsn: 'https://public@o0.ingest.sentry.io/1',
 		residentInstallations: { 'acme-shop': 'installation-token' },
 		githubOauth: { clientId: 'gh-client-id', clientSecret: 'gh-client-secret' },
 		residentBilling: { meterEvent: 'resident_usage_usd_cents', priceId: 'price_resident' },

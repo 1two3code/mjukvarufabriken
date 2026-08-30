@@ -6,6 +6,8 @@ interface ImportMetaEnv {
 	readonly VITE_API_URL: string
 	readonly VITE_APP_TITLE: string
 	readonly VITE_PORTAL_URL: string
+	/** SaaS Sentry (free tier) DSN. Empty until a Sentry project exists — `Sentry.init` no-ops. */
+	readonly VITE_SENTRY_DSN?: string
 }
 
 interface ImportMeta {
