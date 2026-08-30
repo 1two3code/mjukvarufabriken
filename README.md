@@ -1,1 +1,7 @@
-# built by a failed job
+# Template
+
+Template intro.
+
+## Commands
+
+npm i
