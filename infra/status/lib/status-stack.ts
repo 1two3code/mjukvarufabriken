@@ -139,6 +139,10 @@ export class StatusStack extends Stack {
 			domainName: config.domainName,
 		})
 		this.service.targetGroup.configureHealthCheck({ path: '/', interval: Duration.seconds(30) })
+		// EFS+Fargate race: without this, CloudFormation can create the ECS service before the
+		// mount targets finish transitioning to 'available', and the task fails to mount on first
+		// boot (ResourceInitializationError / NFS mount timeout).
+		this.service.service.node.addDependency(fileSystem.mountTargetsAvailable)
 		// Mount-target security group: NFS (2049) from the task only.
 		fileSystem.connections.allowDefaultPortFrom(this.service.service)
 
