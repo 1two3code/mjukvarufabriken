@@ -73,9 +73,42 @@ jobs:
           npm audit --audit-level=high --prefix infra/org
           npm audit --audit-level=high --prefix infra/mail
 
+      # Container image scanning (M9 follow-up): npm audit above only covers JS dependency
+      # advisories in package.json — it says nothing about OS-package CVEs baked into the actual
+      # api/job container images, which matters since apps/job runs untrusted customer workloads
+      # and apps/api holds real secrets. The deploy pipeline's own image build (a CDK asset —
+      # infra/lib/{web-stack,resources-stack}.ts, not a plain `docker build`) is deliberately NOT
+      # duplicated here; these builds exist only to give Trivy something to scan and are never
+      # pushed anywhere. Allowed to fail for now, same reasoning as npm audit above — OS
+      # advisories shouldn't block every PR until triaged. Drop `continue-on-error` once the
+      # baseline is clean.
+      - name: Build images for scanning
+        run: |
+          docker build -f apps/api/Dockerfile -t mf-api:ci-scan .
+          docker build -f apps/job/Dockerfile -t mf-job:ci-scan .
+
+      - name: Scan api image (high+)
+        uses: aquasecurity/trivy-action@0.28.0
+        continue-on-error: true
+        with:
+          image-ref: mf-api:ci-scan
+          severity: HIGH,CRITICAL
+          exit-code: '1'
+          format: table
+
+      - name: Scan job image (high+)
+        uses: aquasecurity/trivy-action@0.28.0
+        continue-on-error: true
+        with:
+          image-ref: mf-job:ci-scan
+          severity: HIGH,CRITICAL
+          exit-code: '1'
+          format: table
+
       # Coverage thresholds (lines ≥ 60 %) are enforced by vitest.config.ts; the run fails below
-      # the bar. Docker image builds (apps/job, apps/api) are deliberately NOT part of CI — the
-      # deploy workflow builds them once through CDK assets.
+      # the bar. Docker image builds (apps/job, apps/api) for deploy are deliberately NOT part of
+      # CI — the deploy workflow builds those separately through CDK assets; the scan-only builds
+      # above are unrelated and never reach a registry.
       - name: Test (with coverage)
         env:
           # Opts packages/db migrations.test.ts into the `postgres` service above; it resets this
