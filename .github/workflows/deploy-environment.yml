@@ -26,9 +26,9 @@ jobs:
       CDK_DEFAULT_ACCOUNT: ${{ vars.AWS_ACCOUNT_ID }}
       CDK_DEFAULT_REGION: ${{ vars.AWS_REGION }}
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
 
-      - uses: actions/setup-node@v4
+      - uses: actions/setup-node@v7
         with:
           node-version-file: .nvmrc
           cache: npm
@@ -44,7 +44,7 @@ jobs:
       - name: Build SPAs
         run: npm run build
 
-      - uses: aws-actions/configure-aws-credentials@v4
+      - uses: aws-actions/configure-aws-credentials@v6
         with:
           role-to-assume: ${{ secrets.AWS_DEPLOY_ROLE_ARN }}
           aws-region: ${{ vars.AWS_REGION }}
