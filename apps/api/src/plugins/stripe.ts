@@ -271,9 +271,19 @@ const plugin: FastifyPluginAsync = async app => {
 		}
 	}
 
-	const secretKey = await resolveSecret('STRIPE_SECRET_KEY', secrets.infra.stripeSecretKeySecretArn)
+	// The CDK placeholder for these secrets is a random 32-char string (README "Secrets") — never
+	// empty, so a plain `!secretKey` check can't tell "not yet filled in" from "a real key". Shape-
+	// checking the Stripe prefix closes that hole (hardening audit 2026-08-30, finding E1): an
+	// un-filled `live` secret now hits the same `required in live` throw as a genuinely missing one,
+	// instead of silently booting the real Stripe client on 32 junk characters.
+	const rawSecretKey = await resolveSecret(
+		'STRIPE_SECRET_KEY',
+		secrets.infra.stripeSecretKeySecretArn
+	)
+	const secretKey = rawSecretKey && /^sk_(test|live)_/.test(rawSecretKey) ? rawSecretKey : undefined
 	if (!secretKey) {
 		if (secrets.env === 'live') throw new Error('STRIPE_SECRET_KEY is required in live')
+		if (rawSecretKey) app.log.warn('STRIPE_SECRET_KEY does not look like a Stripe key — ignoring it')
 		app.log.warn(
 			'STRIPE_SECRET_KEY not set — using the FAKE payment provider: checkout marks payments paid immediately, no money moves'
 		)
@@ -281,11 +291,19 @@ const plugin: FastifyPluginAsync = async app => {
 		return
 	}
 
-	const webhookSecret = await resolveSecret(
+	const rawWebhookSecret = await resolveSecret(
 		'STRIPE_WEBHOOK_SECRET',
 		secrets.infra.stripeWebhookSecretSecretArn
 	)
-	if (!webhookSecret) app.log.warn('STRIPE_WEBHOOK_SECRET not set — webhooks will be rejected')
+	const webhookSecret =
+		rawWebhookSecret && rawWebhookSecret.startsWith('whsec_') ? rawWebhookSecret : undefined
+	if (!webhookSecret) {
+		app.log.warn(
+			rawWebhookSecret
+				? 'STRIPE_WEBHOOK_SECRET does not look like a Stripe webhook secret — ignoring it, webhooks will be rejected'
+				: 'STRIPE_WEBHOOK_SECRET not set — webhooks will be rejected'
+		)
+	}
 	// fetch client: one HTTP path for Node ≥ 18 (and interceptable by the test network mock)
 	const stripe = new Stripe(secretKey, {
 		maxNetworkRetries: 2,
