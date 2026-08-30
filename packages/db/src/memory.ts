@@ -21,6 +21,7 @@ import type {
 	OrderStatus,
 	Org,
 	Payment,
+	PricingTierRow,
 	ResidentInstallation,
 	ResidentUsageRecord,
 	ResidentUsageReport,
@@ -78,6 +79,8 @@ export type MemoryRepositories = Repositories & {
 export const createMemoryRepositories = (): MemoryRepositories => {
 	const jobs = new Map<string, Job>()
 	const modelPrices: ModelPriceRow[] = defaultModelPriceRows()
+	/** Unseeded — no default pricing tiers, unlike the model-price list-price seed */
+	const pricingTiers: PricingTierRow[] = []
 	const events: JobEvent[] = []
 	/** report token hash → job id (the hash is never part of the `Job` model) */
 	const reportTokens = new Map<string, string>()
@@ -295,6 +298,36 @@ export const createMemoryRepositories = (): MemoryRepositories => {
 				return clone(row)
 			},
 			effectiveAt: async at => pricesEffectiveAt(modelPrices, at),
+		},
+		pricingTiers: {
+			list: async () =>
+				[...pricingTiers]
+					.sort(
+						(a, b) =>
+							b.effectiveFrom.localeCompare(a.effectiveFrom) || a.tierKey.localeCompare(b.tierKey)
+					)
+					.map(clone),
+			insert: async tier => {
+				const effectiveFrom = new Date(tier.effectiveFrom ?? now()).toISOString()
+				if (
+					pricingTiers.some(
+						row => row.tierKey === tier.tierKey && row.effectiveFrom === effectiveFrom
+					)
+				)
+					{throw new UniqueViolation('pricing_tiers_tier_key_effective_from_key')}
+				const row: PricingTierRow = {
+					id: `tier-${pricingTiers.length + 1}`,
+					tierKey: tier.tierKey,
+					name: tier.name,
+					price: tier.price,
+					currency: tier.currency,
+					description: tier.description,
+					effectiveFrom,
+					createdAt: now(),
+				}
+				pricingTiers.push(row)
+				return clone(row)
+			},
 		},
 		jobs: {
 			insert: async job => {

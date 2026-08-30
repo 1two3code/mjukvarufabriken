@@ -19,6 +19,8 @@ import type {
 	OrderStatus,
 	Org,
 	Payment,
+	NewPricingTier,
+	PricingTierRow,
 	ResidentInstallation,
 	ResidentUsageRecord,
 	ResidentUsageReport,
@@ -391,9 +393,24 @@ export type ModelPricesRepository = {
 	effectiveAt: (at: Date) => Promise<ModelPrices>
 }
 
+// MARK: Pricing tiers (customer-facing offer)
+
+/**
+ * The operator-editable pricing-tier table (migration 0019). Append-only, same shape as
+ * `ModelPricesRepository`: a new row for a `tierKey` takes effect from its `effectiveFrom` on.
+ * Shape only — nothing in the app reads this yet (PLAN.md "Pricing v1" is under revision).
+ */
+export type PricingTiersRepository = {
+	/** Every row, newest `effectiveFrom` first — the admin's full history */
+	list: () => Promise<PricingTierRow[]>
+	/** Adds a row (`effectiveFrom` defaults to now); rejects with `code: '23505'` on an exact duplicate */
+	insert: (tier: NewPricingTier) => Promise<PricingTierRow>
+}
+
 export type Repositories = {
 	jobs: JobsRepository
 	modelPrices: ModelPricesRepository
+	pricingTiers: PricingTiersRepository
 	orders: OrdersRepository
 	deployedServices: DeployedServicesRepository
 	users: UsersRepository
