@@ -3,11 +3,27 @@ import { App, Tags } from 'aws-cdk-lib'
 import { config } from '../lib/config.ts'
 import { createRelativePath } from '../lib/helpers.ts'
 import { BudgetStack } from '../lib/budget-stack.ts'
+import { GithubDeployStack } from '../lib/github-deploy-stack.ts'
 import { OpsStack } from '../lib/ops-stack.ts'
 import { ResourcesStack } from '../lib/resources-stack.ts'
 import { WebStack } from '../lib/web-stack.ts'
 
 const app = new App()
+
+// Once per ACCOUNT, not per environment: the GitHub OIDC provider + the role deploy.yml assumes.
+// Deployed by hand the first time (`infra/scripts/deploy.sh dev github-deploy`) — it is what
+// makes every later CI deploy possible. Region-agnostic apart from the bootstrap roles it may
+// assume (eu-north-1 for the stacks, us-east-1 for the budget stack).
+const firstEnvironment = config.environments[0]
+const githubDeploy = new GithubDeployStack(app, 'github-deploy', {
+	env: firstEnvironment?.account
+		? { account: firstEnvironment.account, region: firstEnvironment.region }
+		: undefined,
+	repository: config.githubRepository,
+	environments: config.environments.map(environment => environment.name),
+	regions: [firstEnvironment?.region ?? process.env.CDK_DEFAULT_REGION ?? 'eu-north-1', 'us-east-1'],
+})
+Tags.of(githubDeploy).add('Service', config.serviceName)
 
 for (const environment of config.environments) {
 	const env = environment.account

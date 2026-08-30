@@ -1,12 +1,5 @@
 {
-  "mf-dev": {
-    "ApiLoadBalancerDNSB0038DD0": "mf-dev-ApiLB-kU4OO4hSzwOB-551124632.eu-north-1.elb.amazonaws.com",
-    "ExportsOutputRefApiLBPublicListener5142AAA5C03EE7DF": "arn:aws:elasticloadbalancing:eu-north-1:814967776290:listener/app/mf-dev-ApiLB-kU4OO4hSzwOB/fcb3489ebfa3341a/08343ed14c26e3a2",
-    "ApiUrl": "https://api.dev.mjukvaruhuset.se",
-    "ExportsOutputFnGetAttApiLB8D4BD609LoadBalancerFullNameF5E92A13": "app/mf-dev-ApiLB-kU4OO4hSzwOB/fcb3489ebfa3341a",
-    "PortalUrl": "https://portal.dev.mjukvaruhuset.se",
-    "ApiServiceURL135D4FCA": "https://mf-dev-ApiLB-kU4OO4hSzwOB-551124632.eu-north-1.elb.amazonaws.com",
-    "SiteUrl": "https://dev.mjukvaruhuset.se",
-    "ExportsOutputFnGetAttApiLBPublicListenerECSGroup45FF926ATargetGroupFullName325E2E8F": "targetgroup/mf-dev-ApiLB-KFMZHBOGHELW/a7a67213c6fef925"
+  "github-deploy": {
+    "DeployRoleArn": "arn:aws:iam::814967776290:role/mf-github-deploy"
   }
 }

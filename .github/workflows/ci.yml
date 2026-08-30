@@ -43,10 +43,15 @@ jobs:
             infra/resident/package-lock.json
             infra/org/package-lock.json
             infra/mail/package-lock.json
+            templates/web/package-lock.json
 
+      # templates/web is the golden template the build-job harness seeds customer repos from; the
+      # offline build-job e2e (packages/harness test/job/e2e.offline.test.ts) hard-links its
+      # node_modules and runs the seeded repo's real lint/test, so it must be installed here too.
       - name: Install
         run: |
           npm ci
+          npm ci --prefix templates/web
           npm ci --prefix infra
           npm ci --prefix infra/resident
           npm ci --prefix infra/org

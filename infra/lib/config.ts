@@ -82,6 +82,8 @@ export type EnvironmentConfig = {
 
 type Config = {
 	serviceName: string
+	/** `owner/name` of the GitHub repository whose Actions deploy (github-deploy stack trust) */
+	githubRepository: string
 	environments: EnvironmentConfig[]
 }
 
@@ -95,6 +97,7 @@ const emailFrom = 'noreply@mjukvaruhuset.se'
 
 export const config: Config = {
 	serviceName: 'mf',
+	githubRepository: '1two3code/mjukvarufabriken',
 	environments: [
 		{
 			name: 'dev',
