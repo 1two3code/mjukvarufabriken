@@ -72,9 +72,31 @@ describe('seedRepo', () => {
 		// Assert: title + description carry the (HTML-escaped) app name, nothing else changed
 		const html = await readFile(join(repoDir, 'apps', 'app', 'index.html'), 'utf8')
 		expect(html).toContain('<title>Kringlan Bageri &amp; Café</title>')
-		expect(html).toContain(
-			'<meta name="description" content="Kringlan Bageri &amp; Café" />'
+		expect(html).toContain('<meta name="description" content="Kringlan Bageri &amp; Café" />')
+	})
+
+	it('Treats $-sequences in the app name as literal text, not replacement patterns', async () => {
+		// Arrange: an app name containing $$, $1, $2 — all special to String.replace's
+		// string-replacement form (which the fix must not use), and $1/$2 double as this
+		// description regex's own capture-group indices, the sharpest failure mode
+		const template = join(root, 'template')
+		await mkdir(join(template, 'apps', 'app'), { recursive: true })
+		await writeFile(join(template, 'package.json'), '{"name":"t"}')
+		await writeFile(
+			join(template, 'apps', 'app', 'index.html'),
+			'<!doctype html>\n<html>\n<head>\n<title>Template</title>\n' +
+				'<meta name="description" content="Monorepo web template" />\n</head>\n<body></body>\n</html>\n'
 		)
+		const workDir = join(root, 'work')
+		const appName = 'A $5 footlong $$ $1 $2 tracker'
+
+		// Act
+		const repoDir = await seedRepo(template, workDir, 'job-dollar', appName)
+
+		// Assert: the literal app name lands verbatim, untouched by $-substitution
+		const html = await readFile(join(repoDir, 'apps', 'app', 'index.html'), 'utf8')
+		expect(html).toContain(`<title>${appName}</title>`)
+		expect(html).toContain(`<meta name="description" content="${appName}" />`)
 	})
 
 	it('Leaves the seed untouched when no app name is given, or apps/app/index.html is absent', async () => {

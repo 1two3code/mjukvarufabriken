@@ -48,8 +48,11 @@ const applyAppTitle = async (repoDir: string, appName: string) => {
 	const escaped = escapeHtml(appName)
 	const html = await readFile(indexPath, 'utf8')
 	const titled = html
-		.replace(/<title>[^<]*<\/title>/, `<title>${escaped}</title>`)
-		.replace(/(<meta name="description" content=")[^"]*(" \/>)/, `$1${escaped}$2`)
+		.replace(/<title>[^<]*<\/title>/, () => `<title>${escaped}</title>`)
+		.replace(
+			/(<meta name="description" content=")[^"]*(" \/>)/,
+			(_m, open, close) => `${open}${escaped}${close}`
+		)
 	await writeFile(indexPath, titled)
 }
 
