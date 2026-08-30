@@ -295,6 +295,39 @@ describe('memory repositories', () => {
 			await expect(repos.orders.recordPaymentEvent('evt_1', 't')).resolves.toBe(true)
 			await expect(repos.orders.recordPaymentEvent('evt_1', 't')).resolves.toBe(false)
 		})
+
+		it('Lists active orgs and sums paid payments per org (M12 margin)', async () => {
+			await repos.orders.insert({ id: 'o1', orgId: 'a', name: 'x' })
+			await repos.orders.insert({ id: 'o2', orgId: 'b', name: 'x' })
+			await repos.orders.transition('o2', ['drafting'], 'cancelled')
+			await repos.orders.insert({ id: 'o3', orgId: 'c', name: 'x' })
+			await repos.orders.setLifecycle('o3', ['active'], 'suspended')
+
+			// Only org "a" has a non-cancelled order still in the active lifecycle
+			expect(await repos.orders.listActiveOrgIds()).toEqual(['a'])
+
+			const paid = await repos.orders.insertPayment({
+				orderId: 'o1',
+				kind: 'deposit',
+				provider: 'fake',
+				amountSek: 7_500,
+				vatSek: 1_875,
+				totalSek: 9_375,
+				sessionId: 'fake_1',
+			})
+			await repos.orders.markPaymentPaid(paid.id, {})
+			await repos.orders.insertPayment({
+				orderId: 'o2',
+				kind: 'deposit',
+				provider: 'fake',
+				amountSek: 5_000,
+				vatSek: 1_250,
+				totalSek: 6_250,
+				sessionId: 'fake_2',
+			}) // left pending — excluded from the sum
+
+			expect(await repos.orders.sumPaidPaymentsByOrg()).toEqual([{ orgId: 'a', amountSek: 7_500 }])
+		})
 	})
 
 	describe('users', () => {

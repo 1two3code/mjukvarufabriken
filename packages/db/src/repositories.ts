@@ -131,6 +131,18 @@ export type OrdersRepository = {
 	recordPaymentEvent: (eventId: string, type: string) => Promise<boolean>
 	/** Drops a recorded event id so a redelivery is processed again (the apply step failed) */
 	forgetPaymentEvent: (eventId: string) => Promise<void>
+
+	// MARK: Margin (M12)
+	/**
+	 * Distinct orgs with a non-cancelled order still in the `active` deprovisioning lifecycle —
+	 * the phase-1 infra cost allocation's divisor (M12 margin calculator, PLAN.md)
+	 */
+	listActiveOrgIds: () => Promise<string[]>
+	/**
+	 * Per-org sum of paid payments (`deposit` + `balance`), ex moms — the "build fee" revenue
+	 * line of the M12 margin calculator
+	 */
+	sumPaidPaymentsByOrg: () => Promise<{ orgId: string; amountSek: number }[]>
 }
 
 export type NewUser = {
