@@ -4,7 +4,11 @@ import {
 } from '@aws-sdk/client-ecs'
 
 import { previewServiceName } from '#job/delivery/deliver.ts'
-import { createEcsExpressDeployClient, customerTagValue } from '#job/delivery/ecsExpress.ts'
+import {
+	createEcsExpressDeployClient,
+	customerTagValue,
+	isFenceableSlug,
+} from '#job/delivery/ecsExpress.ts'
 import { createFakeImageBuilder } from '#job/delivery/imageBuild.ts'
 
 import type { EcsClientLike } from '#job/delivery/ecsExpressClient.ts'
@@ -435,6 +439,23 @@ describe('ECS Express deploy client', () => {
 		const long = customerTagValue(`mf-11111111-${'a'.repeat(60)}`)
 		expect(long.length).toBe(40)
 		expect(long.endsWith('-')).toBe(false)
+	})
+
+	it('isFenceableSlug matches @mf/org SlugSchema (2–40, lowercase, no edge hyphen)', () => {
+		expect(isFenceableSlug('gym')).toBe(true)
+		expect(isFenceableSlug('a-b-c-486113ca')).toBe(true)
+		expect(isFenceableSlug('x')).toBe(false) // too short
+		expect(isFenceableSlug('-lead')).toBe(false)
+		expect(isFenceableSlug('trail-')).toBe(false)
+		expect(isFenceableSlug('UPPER')).toBe(false)
+		expect(isFenceableSlug('a'.repeat(41))).toBe(false)
+	})
+
+	it('customerTagValue ALWAYS yields a fenceable slug — even for degenerate names', () => {
+		// The delivery must never mint an un-teardownable Customer tag (the mf-familyhub orphan).
+		for (const name of ['mf-11111111-', 'mf-11111111-!!!', '!!!', 'mf-abcdef12-My_App!!', 'mf-11111111-a']) {
+			expect(isFenceableSlug(customerTagValue(name))).toBe(true)
+		}
 	})
 
 	it('Preserves the trailing job-id discriminator when the app name is long (fence stays job-unique)', () => {

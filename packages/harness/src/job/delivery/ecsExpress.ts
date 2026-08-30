@@ -53,9 +53,19 @@ export const customerTagValue = (serviceName: string): string => {
 	const slug = jobId
 		? `${jobId[1].slice(0, 40 - jobId[2].length - 1).replace(/-+$/g, '')}-${jobId[2]}`
 		: normalised.slice(0, 40).replace(/-+$/g, '')
-	// @mf/org SlugSchema requires ≥2 chars; pad a degenerate slug so the fence stays parseable.
-	return slug.length >= 2 ? slug : `mf-${slug}`.slice(0, 40)
+	// @mf/org SlugSchema requires ≥2 chars AND no trailing hyphen; pad a degenerate slug (and strip
+	// the trailing hyphen `mf-` would leave) so the fence tag always parses back through SlugSchema.
+	return slug.length >= 2 ? slug : `mf-${slug}`.slice(0, 40).replace(/-+$/g, '')
 }
+
+/**
+ * Whether a value is a usable `Customer=<slug>` fence — the same shape @mf/org SlugSchema accepts
+ * and `deprovision` parses the tag back through (2–40 chars, lowercase alphanumeric, internal
+ * hyphens, no leading/trailing hyphen). A service tagged with anything else is un-teardownable by a
+ * fenced deprovision, so delivery refuses to stand it up (see `deployFromRepo`).
+ */
+export const isFenceableSlug = (value: string): boolean =>
+	value.length >= 2 && value.length <= 40 && /^[a-z0-9]([a-z0-9-]*[a-z0-9])?$/.test(value)
 
 const previewAuthEnv = (auth?: PreviewAuth) =>
 	auth
@@ -229,6 +239,16 @@ export const createEcsExpressDeployClient = ({
 	return {
 		deployFromRepo: async ({ serviceName, source, env, signal }) => {
 			const name = expressServiceName(serviceName)
+			// Fail closed BEFORE building/standing anything up: a service that cannot carry a valid
+			// `Customer=<slug>` fence is un-teardownable by a fenced deprovision (an orphan on the
+			// account, seen with mf-familyhub). No unfenceable service is ever delivered.
+			const customerTag = customerTagValue(name)
+			if (!isFenceableSlug(customerTag)) {
+				throw new Error(
+					`delivery: refusing to deploy '${name}' — its Customer fence tag ` +
+						`'${customerTag}' is not a valid deprovision slug; the service would be un-teardownable`
+				)
+			}
 			const { imageUri } = await imageBuilder.build({ imageTag: name, source, signal })
 			if (signal?.aborted) throw abortError()
 			// `clientToken` is not yet in the installed SDK's request type (post-cutoff API), but the
@@ -246,7 +266,7 @@ export const createEcsExpressDeployClient = ({
 				// fence @mf/org deprovision REQUIRES to scope a real suspend/teardown to one customer.
 				tags: [
 					{ key: 'Service', value: 'mf-delivery' },
-					{ key: 'Customer', value: customerTagValue(name) },
+					{ key: 'Customer', value: customerTag },
 				],
 				primaryContainer: {
 					image: imageUri,
@@ -270,7 +290,7 @@ export const createEcsExpressDeployClient = ({
 				service: {
 					serviceName: name,
 					serviceArn: service.serviceArn,
-					customerTag: customerTagValue(name),
+					customerTag,
 					image: imageUri,
 					config,
 				},
