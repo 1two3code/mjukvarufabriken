@@ -43,6 +43,7 @@ jobs:
             infra/resident/package-lock.json
             infra/org/package-lock.json
             infra/mail/package-lock.json
+            infra/status/package-lock.json
             templates/web/package-lock.json
 
       # templates/web is the golden template the build-job harness seeds customer repos from; the
@@ -56,6 +57,7 @@ jobs:
           npm ci --prefix infra/resident
           npm ci --prefix infra/org
           npm ci --prefix infra/mail
+          npm ci --prefix infra/status
 
       - name: Lint
         run: npm run lint
@@ -72,6 +74,7 @@ jobs:
           npm audit --audit-level=high --prefix infra/resident
           npm audit --audit-level=high --prefix infra/org
           npm audit --audit-level=high --prefix infra/mail
+          npm audit --audit-level=high --prefix infra/status
 
       # Coverage thresholds (lines ≥ 60 %) are enforced by vitest.config.ts; the run fails below
       # the bar. Docker image builds (apps/job, apps/api) are deliberately NOT part of CI — the
@@ -124,6 +127,16 @@ jobs:
       # no AWS calls), template assertions
       - name: Mail infra lint, synth, tests
         working-directory: infra/mail
+        run: |
+          npm run lint
+          npx cdk synth --quiet
+          npm test
+
+      # Status-page CDK app (Uptime Kuma on Fargate + EFS behind status.mjukvaruhuset.se),
+      # deployed once like infra/mail: its own lockfile, type check, offline synth (checked-in
+      # PENDING placeholders for the not-yet-provisioned VPC/cert — no AWS calls), template assertions
+      - name: Status infra lint, synth, tests
+        working-directory: infra/status
         run: |
           npm run lint
           npx cdk synth --quiet

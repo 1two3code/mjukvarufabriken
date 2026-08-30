@@ -37,6 +37,7 @@ infra/          CDK: resources-<env> + mf-<env> (site + portal + api), envs dev/
 infra/resident/ separate CDK app a customer deploys into their account for the resident (`npm i --prefix infra/resident`, `cdk deploy -c repository=owner/name`)
 infra/org/      separate CDK app, deployed ONCE into the management account: Customers OU + guardrail SCP for vended customer accounts (docs/backlog/org-accounts.md)
 infra/mail/     separate CDK app, deployed ONCE alongside infra/org: inbound MX + SES receiving for mjukvaruhuset.se, forwarded by Lambda
+infra/status/   separate CDK app, deployed ONCE: Uptime Kuma (Fargate + EFS) behind status.mjukvaruhuset.se, monitoring dev/portal.dev/api.dev
 docker-compose.yml  local Postgres 17; `--profile job` builds/runs the job image behind the egress-proxy sidecar
 .github/        ci.yml (lint/test/build/synth), deploy.yml → deploy-environment.yml (OIDC)
 ```
