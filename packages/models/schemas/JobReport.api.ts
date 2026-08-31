@@ -109,3 +109,25 @@ export const JobReportUpdateResponseSchema = z.object({
 	killed: z.boolean(),
 })
 export type JobReportUpdateResponse = z.infer<typeof JobReportUpdateResponseSchema>
+
+// MARK: POST /internal/jobs/:jobId/database
+/**
+ * Per-delivery database provisioning (Gate C, docs/DELIVERED-DB.md): the api — which holds the
+ * platform database credentials — creates a dedicated database + login role for this job's
+ * delivered app and returns the connection string. The build container only ever sees this
+ * scoped URL, never the admin credentials.
+ */
+export const JobDatabaseResponseSchema = z.object({
+	/** `postgres://<role>:<password>@<host>:<port>/<database>` — the delivered app's own scoped DB */
+	databaseUrl: z.string().min(1),
+})
+export type JobDatabaseResponse = z.infer<typeof JobDatabaseResponseSchema>
+
+// MARK: POST /internal/jobs/:jobId/preview-token
+/**
+ * Short-lived access token for the delivered preview app (audience = the preview audience the
+ * delivered api verifies, NEVER this api's own audience) so the post-deploy acceptance check can
+ * exercise auth-gated routes instead of stopping at 401.
+ */
+export const JobPreviewTokenResponseSchema = z.object({ token: z.string().min(1) })
+export type JobPreviewTokenResponse = z.infer<typeof JobPreviewTokenResponseSchema>
