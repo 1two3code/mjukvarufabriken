@@ -1,6 +1,7 @@
 import { CustomerRevenueListResponseSchema } from '@mf/models'
 
 import {
+	awsPassthroughMarkup,
 	buildCostUsdByOrg,
 	customerMarginRows,
 	defaultAssumptions,
@@ -15,7 +16,6 @@ import type { MarginAssumptions, MarginInputs } from '#/features/admin/margin.ts
 const assumptions: MarginAssumptions = {
 	subscriptionSekPerMonth: 600,
 	tokenMarkup: 1.5,
-	awsPassthroughMarkup: 1.2,
 	sekPerUsd: 10,
 	infraPerOrgMonthlyUsd: 20,
 }
@@ -207,7 +207,52 @@ describe('Margin calculator (M12)', () => {
 	it('Ships default assumptions matching the decided revenue model (2026-08-31)', () => {
 		expect(defaultAssumptions.subscriptionSekPerMonth).toBe(600)
 		expect(defaultAssumptions.tokenMarkup).toBe(1.5)
-		expect(defaultAssumptions.awsPassthroughMarkup).toBe(1.2)
+		// Decided but not yet modeled (no AWS cost feed): a fact constant, not an assumptions knob
+		expect(awsPassthroughMarkup).toBe(1.2)
+	})
+
+	it('Reads every assumptions knob — editing one moves the figures (no dead controls)', () => {
+		const base = {
+			orgs: [{ id: 'org-1', name: 'Acme AB', createdAt: '2026-06-01T00:00:00Z' }],
+			jobs: [{ id: 'a', orgId: 'org-1', costUsd: 10, createdAt: '2026-07-05T00:00:00Z' }],
+			orders: [
+				{
+					id: 'o1',
+					orgId: 'org-1',
+					status: 'paid' as const,
+					priceSek: 4500,
+					lifecycle: 'active' as const,
+					frozenAt: '2026-07-03T00:00:00Z',
+					createdAt: '2026-07-01T00:00:00Z',
+				},
+			],
+			revenue: [],
+			usage: [{ orgId: 'org-1', month: '2026-07', billableUsd: 15, listPriceUsd: 10 }],
+		}
+		const rows = (edit: Partial<MarginAssumptions>) =>
+			customerMarginRows({ ...base, assumptions: { ...assumptions, ...edit } })[0]!
+		const pnl = (edit: Partial<MarginAssumptions>) =>
+			monthlyPnl({
+				...base,
+				assumptions: { ...assumptions, ...edit },
+				infraTotalMonthlyUsd: 100,
+				now,
+			})
+
+		// tokenMarkup rescales resident revenue from the list-price cost basis, cost stays put
+		expect(rows({}).residentRevenueSek).toBe(150)
+		expect(rows({ tokenMarkup: 2 })).toMatchObject({
+			residentRevenueSek: 200,
+			residentCostSek: 100,
+		})
+		expect(pnl({ tokenMarkup: 2 }).find(row => row.id === '2026-07')).toMatchObject({
+			residentRevenueSek: 200,
+			residentCostSek: 100,
+		})
+
+		expect(rows({ subscriptionSekPerMonth: 900 }).subscriptionSekPerMonth).toBe(900)
+		expect(rows({ sekPerUsd: 20 }).buildCostSek).toBe(200)
+		expect(rows({ infraPerOrgMonthlyUsd: 50 }).infraSekPerMonth).toBe(500)
 	})
 })
 

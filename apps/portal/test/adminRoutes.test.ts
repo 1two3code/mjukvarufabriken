@@ -44,7 +44,18 @@ describe('Portal admin routes', () => {
 
 	it('Puts every admin route behind the protected layout', () => {
 		const source = read('src/app/router.tsx')
-		const protectedBlock = source.slice(source.indexOf('ProtectedLayout'))
+		// Anchor at the ELEMENT usage — the first 'ProtectedLayout' occurrence is the import at
+		// the top of the file, and slicing there would keep the whole config (public routes
+		// included) in the block, making every containment check below pass vacuously.
+		const anchor = 'element: <ProtectedLayout />'
+		const start = source.indexOf(anchor)
+		expect(start, anchor).toBeGreaterThan(-1)
+		const protectedBlock = source.slice(start)
+		// Self-check that the slice really excludes the public config: a public route inside the
+		// block means the layout blocks were reordered and this test needs a sharper anchor.
+		expect(protectedBlock, 'public /login route leaked into the protected block').not.toContain(
+			"'/login'"
+		)
 		for (const path of routerPaths().filter(route => route.startsWith('/admin'))) {
 			expect(protectedBlock, path).toContain(`'${path}'`)
 		}

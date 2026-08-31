@@ -126,6 +126,7 @@
   "job.status.queued": "I kö",
   "job.status.verifying": "Verifierar",
   "margin.assumptions.awsPassthroughMarkup": "Påslag AWS-vidarefakturering (×)",
+  "margin.assumptions.awsPassthroughNote": "AWS-vidarefakturering (+20 %, beslutad 2026-08-31) är ännu inte med i modellen – det finns ingen AWS-kostnadskälla (fas 2), så den visas som ett faktum, inte ett redigerbart antagande.",
   "margin.assumptions.infraPerOrgMonthlyUsd": "Infra per kund (USD/månad)",
   "margin.assumptions.note": "Hypotetiska värden, lokala för den här sidan – inget här sparas. Det enda som redigeras på riktigt på kostnadssidan är",
   "margin.assumptions.pricesLink": "modellpristabellen",

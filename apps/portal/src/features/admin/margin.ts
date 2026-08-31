@@ -1,3 +1,5 @@
+import { residentUsageMarkup } from '@mf/models'
+
 import type { CustomerRevenue, Job, Order, Org, ResidentUsageSummary } from '@mf/models'
 
 /**
@@ -15,16 +17,15 @@ import type { CustomerRevenue, Job, Order, Org, ResidentUsageSummary } from '@mf
 // MARK: Assumptions
 
 /**
- * The knobs of the model. Only the token model prices behind `costUsd`/`billableUsd` are
+ * The knobs of the model — every field here is read by the calculator, so editing one on the
+ * page moves the figures. Only the token model prices behind `costUsd`/`listPriceUsd` are
  * backend-editable (the Pricing tab); these are what-if values, local to the page.
  */
 export type MarginAssumptions = {
 	/** Managed subscription, SEK ex moms per month (decided 2026-08-31) */
 	subscriptionSekPerMonth: number
-	/** Resident tokens billed at Anthropic list price × this (already applied in `billableUsd`) */
+	/** Resident revenue modeled as Anthropic list price × this (decided ×1.5, `residentUsageMarkup`) */
 	tokenMarkup: number
-	/** Markup on AWS cost passed through for resident-built resources (no data feed yet — M12 phase 2) */
-	awsPassthroughMarkup: number
 	/** Exchange rate used to fold USD figures into the SEK view */
 	sekPerUsd: number
 	/** Monthly shared-infra allocation per active customer, USD (api phase-1 estimate, overridable) */
@@ -33,10 +34,16 @@ export type MarginAssumptions = {
 
 export const defaultAssumptions: Omit<MarginAssumptions, 'infraPerOrgMonthlyUsd'> = {
 	subscriptionSekPerMonth: 600,
-	tokenMarkup: 1.5,
-	awsPassthroughMarkup: 1.2,
+	tokenMarkup: residentUsageMarkup,
 	sekPerUsd: 10.5,
 }
+
+/**
+ * Decided AWS passthrough markup (+20 %, 2026-08-31) — a fact, NOT a `MarginAssumptions` knob:
+ * there is no AWS cost feed yet (M12 phase 2), so no computation reads it and an editable field
+ * would be a dead control. It moves here the day passthrough cost data exists.
+ */
+export const awsPassthroughMarkup = 1.2
 
 // MARK: Input shapes
 
@@ -111,7 +118,7 @@ export type CustomerMarginRow = {
 	orgName: string
 	/** Paid build fees to date (real payments, from the revenue endpoint) */
 	buildFeeSek: number
-	/** Resident tokens billed to date (list ×1.5), folded to SEK */
+	/** Resident revenue to date: list price × the markup knob (= the api's billed figure at ×1.5) */
 	residentRevenueSek: number
 	/** Build compute to date (`jobs.cost_usd`), folded to SEK */
 	buildCostSek: number
@@ -134,7 +141,10 @@ export type CustomerMarginRow = {
  * One margin row per org: real one-time figures to date (build fees vs. build compute, resident
  * billed vs. resident list cost) plus the modeled monthly run-rate (subscription vs. the infra
  * allocation). Hosting/SLA/further-dev revenue are carried by the api but 0 until those payment
- * kinds exist.
+ * kinds exist. Resident revenue is modeled from the usage rows' `listPriceUsd` × the
+ * `tokenMarkup` knob so the what-if actually moves the figures — at the decided ×1.5 it equals
+ * the api's real billed figure (`residentBillableUsd`, backend-enforced as list ×
+ * `residentUsageMarkup`), which therefore stays unread here.
  */
 export const customerMarginRows = (inputs: MarginInputs): CustomerMarginRow[] => {
 	const { orgs, jobs, orders, revenue, usage, assumptions } = inputs
@@ -146,7 +156,7 @@ export const customerMarginRows = (inputs: MarginInputs): CustomerMarginRow[] =>
 		listCostByOrg.set(row.orgId, (listCostByOrg.get(row.orgId) ?? 0) + row.listPriceUsd)
 	}
 
-	const { sekPerUsd } = assumptions
+	const { sekPerUsd, tokenMarkup } = assumptions
 	return orgs.map(org => {
 		const orgRevenue = revenueByOrg.get(org.id)
 		const buildFeeSek =
@@ -154,9 +164,10 @@ export const customerMarginRows = (inputs: MarginInputs): CustomerMarginRow[] =>
 			(orgRevenue?.hostingSek ?? 0) +
 			(orgRevenue?.slaSek ?? 0) +
 			(orgRevenue?.furtherDevSek ?? 0)
-		const residentRevenueSek = round2((orgRevenue?.residentBillableUsd ?? 0) * sekPerUsd)
+		const listCostUsd = listCostByOrg.get(org.id) ?? 0
+		const residentRevenueSek = round2(listCostUsd * tokenMarkup * sekPerUsd)
 		const buildCostSek = round2((buildCosts.get(org.id) ?? 0) * sekPerUsd)
-		const residentCostSek = round2((listCostByOrg.get(org.id) ?? 0) * sekPerUsd)
+		const residentCostSek = round2(listCostUsd * sekPerUsd)
 
 		const revenueSek = round2(buildFeeSek + residentRevenueSek)
 		const costSek = round2(buildCostSek + residentCostSek)
@@ -195,7 +206,7 @@ export type PnlMonthRow = {
 	buildFeeSek: number
 	/** Modeled subscriptions running this month × the subscription price */
 	subscriptionSek: number
-	/** Resident tokens billed this month (list ×1.5), folded to SEK */
+	/** Resident revenue this month: list price × the markup knob (= billed at ×1.5), in SEK */
 	residentRevenueSek: number
 	revenueSek: number
 	/** Build compute this month (`jobs.cost_usd`), folded to SEK */
@@ -219,7 +230,7 @@ export const monthlyPnl = (
 ): PnlMonthRow[] => {
 	const { jobs, orders, usage, assumptions, infraTotalMonthlyUsd } = inputs
 	const now = inputs.now ?? new Date()
-	const { sekPerUsd } = assumptions
+	const { sekPerUsd, tokenMarkup } = assumptions
 
 	const revenueOrders = orders.filter(isRevenueOrder)
 	const subscriptionStarts = orders.filter(isSubscribedOrder).map(orderMonth)
@@ -245,12 +256,9 @@ export const monthlyPnl = (
 		const subscriptions = subscriptionStarts.filter(start => start <= month).length
 		const subscriptionSek = subscriptions * assumptions.subscriptionSekPerMonth
 		const monthUsage = usage.filter(row => row.month === month)
-		const residentRevenueSek = round2(
-			monthUsage.reduce((sum, row) => sum + row.billableUsd, 0) * sekPerUsd
-		)
-		const residentCostSek = round2(
-			monthUsage.reduce((sum, row) => sum + row.listPriceUsd, 0) * sekPerUsd
-		)
+		const monthListUsd = monthUsage.reduce((sum, row) => sum + row.listPriceUsd, 0)
+		const residentRevenueSek = round2(monthListUsd * tokenMarkup * sekPerUsd)
+		const residentCostSek = round2(monthListUsd * sekPerUsd)
 		const buildCostSek = round2(
 			jobs
 				.filter(job => monthOf(job.createdAt) === month)

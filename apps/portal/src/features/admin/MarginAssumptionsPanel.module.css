@@ -33,6 +33,16 @@
 	background: var(--content-background);
 }
 
+/* A read-only fact rendered in the knob row: input-sized, but visibly not editable */
+.fact {
+	min-width: 9rem;
+	padding: var(--spacing-xxs) var(--spacing-xs);
+	border: var(--border-width-xs) dashed var(--divider-color);
+	border-radius: var(--border-radius-s);
+
+	color: var(--secondary-text-color);
+}
+
 .note {
 	margin-top: var(--spacing-xs);
 	font-size: var(--font-size-s);
