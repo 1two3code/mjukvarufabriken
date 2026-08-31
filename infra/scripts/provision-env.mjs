@@ -139,16 +139,29 @@ if (zoneId !== '<new-zone-id>') {
 	nsRecords = (rrs.find(r => r.Type === 'NS' && r.Name === `${subdomain}.`)?.ResourceRecords || []).map(r => r.Value)
 }
 if (parentZoneId) {
-	log(`  delegating ${subdomain} in parent zone ${parentZoneId}`)
+	// Guard against a mistyped --parent-zone-id silently UPSERTing an NS record into an unrelated
+	// zone (hardening audit 2026-08-30, finding D1): the parent zone must actually be an ancestor
+	// of the subdomain we're delegating. Read-only, so it runs in dry-run too.
+	const parentZoneName = awsJson(['route53', 'get-hosted-zone', '--id', parentZoneId], { env: process.env }).HostedZone
+		?.Name
+	if (!parentZoneName || !`${subdomain}.`.endsWith(parentZoneName)) {
+		fail(
+			`--parent-zone-id ${parentZoneId} is zone '${parentZoneName ?? '?'}', which does not own ${subdomain} — refusing to write an NS record there`
+		)
+	}
+	log(`  delegating ${subdomain} in parent zone ${parentZoneId} (${parentZoneName})`)
 	const batch = JSON.stringify({
 		Changes: [{ Action: 'UPSERT', ResourceRecordSet: { Name: subdomain, Type: 'NS', TTL: 300, ResourceRecords: nsRecords.length ? nsRecords.map(v => ({ Value: v })) : [{ Value: '<ns>' }] } }],
 	})
 	try {
 		// The root zone lives in the management account — use the ORIGINAL creds, not the assumed target.
 		awsWrite(['route53', 'change-resource-record-sets', '--hosted-zone-id', parentZoneId, '--change-batch', batch], { env: process.env })
-	} catch {
+	} catch (e) {
 		log(`  ! could not write to parent zone (different account?) — add this NS delegation by hand:`)
 		nsRecords.forEach(v => log(`      ${subdomain}. NS ${v}`))
+		// The delegation genuinely didn't happen — fail loudly instead of exiting 0 as if it had
+		// (finding D1); the manual fallback printed above is still the right next step.
+		fail(`NS delegation write to parent zone ${parentZoneId} failed: ${e.message}`)
 	}
 } else {
 	log(`  no --parent-zone-id — add this NS delegation to the root zone by hand:`)
