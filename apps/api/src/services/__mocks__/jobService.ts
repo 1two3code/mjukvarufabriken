@@ -51,6 +51,7 @@ const mockPlugin: FastifyPluginAsync = async app => {
 		approve: vi.fn((id: string) =>
 			Promise.resolve(createMockJob({ id, awaitingApproval: true, approved: true }))
 		),
+		retryFailedBuild: vi.fn().mockResolvedValue(undefined),
 		listAll: vi.fn().mockResolvedValue([createMockJob()]),
 		getDeliverables: vi.fn((jobId: string) => Promise.resolve(createMockDeliverables({ jobId }))),
 		authenticateReport: vi.fn((id: string) => Promise.resolve(createMockJob({ id }))),
