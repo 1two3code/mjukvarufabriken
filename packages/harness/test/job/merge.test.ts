@@ -58,6 +58,8 @@ const createRepo = async () => {
 describe('merge', () => {
 	let repo: Awaited<ReturnType<typeof createRepo>>
 	const controller = new AbortController()
+	/** The merge gate as a fake: green unless a test says otherwise (the test repos have no npm scripts) */
+	const verify = vi.fn()
 	const input = (id: string) => ({
 		task: task(id),
 		branch: `task/${id}`,
@@ -65,11 +67,14 @@ describe('merge', () => {
 		repoDir: repo.dir,
 		signal: controller.signal,
 		onUsage: vi.fn(),
+		verify,
 	})
 
 	beforeEach(async () => {
 		repo = await createRepo()
 		runSession.mockReset()
+		verify.mockReset()
+		verify.mockResolvedValue({ ok: true, output: 'ok' })
 	})
 	afterEach(() => rm(repo.dir, { recursive: true, force: true }))
 
@@ -108,6 +113,53 @@ describe('merge', () => {
 		expect(outcome).toEqual({ ok: true, tokens: 0 })
 		// npm install ran on main after the merge: a lockfile now exists (dependency-free, offline)
 		expect((await exec('test', ['-e', 'package-lock.json'], { cwd: repo.dir })).code).toBe(0)
+		// … and it is COMMITTED, so the next serialised merge starts from a clean tree and the
+		// delivered repo never ships a lock that is stale against its manifests
+		expect((await repo.run(['status', '--porcelain'])).stdout.trim()).toBe('')
+		expect((await repo.run(['ls-files', 'package-lock.json'])).stdout.trim()).toBe(
+			'package-lock.json'
+		)
+	})
+
+	it('Gates every accepted merge: a red lint/test run rolls main back to the pre-merge commit', async () => {
+		const before = (await repo.run(['rev-parse', 'HEAD'])).stdout.trim()
+		await repo.edit('task/a', 'breaks a helper another file uses\n', 'a.txt')
+		verify.mockResolvedValue({ ok: false, output: 'npm test failed (1):\n1 test failed' })
+
+		const outcome = await mergeTask(input('a'))
+
+		expect(outcome.ok).toBe(false)
+		expect(outcome.reason).toMatch(/not green after merging task\/a/)
+		expect(outcome.reason).toMatch(/1 test failed/)
+		// Rolled back: the merge commit is gone, the tree matches pre-merge main and is clean
+		expect((await repo.run(['rev-parse', 'HEAD'])).stdout.trim()).toBe(before)
+		expect((await exec('test', ['-e', 'a.txt'], { cwd: repo.dir })).code).not.toBe(0)
+		expect((await repo.run(['status', '--porcelain'])).stdout.trim()).toBe('')
+	})
+
+	it('Scopes the merge gate to the task areas and hands it the merged diff', async () => {
+		await repo.edit('task/a', 'from a\n', 'a.txt')
+
+		await mergeTask({ ...input('a'), task: { ...task('a'), areas: ['apps/app'] } })
+
+		expect(verify).toHaveBeenCalledWith(repo.dir, controller.signal, {
+			areas: ['apps/app'],
+			changed: ['a.txt'],
+		})
+	})
+
+	it('Cleans a dirty main (stray edits + untracked scratch) before merging', async () => {
+		await repo.edit('task/a', 'from a\n', 'a.txt')
+		// A previous step left main dirty: an uncommitted lockfile-style edit and untracked scratch
+		await writeFile(join(repo.dir, 'file.txt'), 'uncommitted local change\n')
+		await writeFile(join(repo.dir, 'scratch.txt'), 'leftover repair scratch\n')
+
+		const outcome = await mergeTask(input('a'))
+
+		expect(outcome).toEqual({ ok: true, tokens: 0 })
+		expect(await repo.read()).toBe('base\n')
+		expect((await exec('test', ['-e', 'scratch.txt'], { cwd: repo.dir })).code).not.toBe(0)
+		expect((await repo.run(['status', '--porcelain'])).stdout.trim()).toBe('')
 	})
 
 	it('Runs one repair session on conflict and completes the merge when resolved', async () => {
@@ -163,5 +215,44 @@ describe('merge', () => {
 		expect(await repo.read()).toBe('main change\n')
 		expect((await repo.run(['status', '--porcelain'])).stdout.trim()).toBe('')
 		expect((await repo.run(['log', '--oneline', '-1'])).stdout).not.toMatch(/merge\(d\)/)
+	})
+
+	it("Fails closed when the repair keeps main's side verbatim (the branch's work would be dropped)", async () => {
+		await repo.edit('task/e', 'e change\n')
+		await repo.edit('main', 'main change\n')
+		// The repair "resolves" the conflict by discarding task/e's side entirely: no markers left,
+		// so the old marker scan would have accepted it and shipped without the branch's work
+		runSession.mockImplementation(async ({ cwd }) => {
+			await writeFile(join(cwd, 'file.txt'), 'main change\n')
+			await git(['add', '-A'], { cwd, env: gitEnv })
+			return { ok: true, tokens: 10, result: 'resolved (kept main only)' }
+		})
+
+		const outcome = await mergeTask(input('e'))
+
+		expect(outcome.ok).toBe(false)
+		expect(outcome.reason).toMatch(/discarded the branch's changes.*file\.txt/)
+		expect(await repo.read()).toBe('main change\n')
+		expect((await repo.run(['status', '--porcelain'])).stdout.trim()).toBe('')
+		expect((await repo.run(['log', '--oneline', '-1'])).stdout).not.toMatch(/merge\(e\)/)
+	})
+
+	it('Rolls the repaired merge back too when the merge gate goes red', async () => {
+		await repo.edit('task/f', 'f change\n')
+		await repo.edit('main', 'main change\n')
+		const before = (await repo.run(['rev-parse', 'HEAD'])).stdout.trim()
+		runSession.mockImplementation(async ({ cwd }) => {
+			await writeFile(join(cwd, 'file.txt'), 'main change + f change\n')
+			return { ok: true, tokens: 10, result: 'resolved' }
+		})
+		verify.mockResolvedValue({ ok: false, output: 'npm run lint failed (1)' })
+
+		const outcome = await mergeTask(input('f'))
+
+		expect(outcome.ok).toBe(false)
+		expect(outcome.reason).toMatch(/not green after merging task\/f/)
+		expect((await repo.run(['rev-parse', 'HEAD'])).stdout.trim()).toBe(before)
+		expect(await repo.read()).toBe('main change\n')
+		expect((await repo.run(['status', '--porcelain'])).stdout.trim()).toBe('')
 	})
 })

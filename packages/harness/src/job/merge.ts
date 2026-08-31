@@ -2,7 +2,7 @@ import { topologicalOrder } from './dag.ts'
 import { exec, git, tail } from './exec.ts'
 import { renderFencedSpec } from './planner.ts'
 import { totalTokens } from './types.ts'
-import { ensureShared, repoConventions, runSession } from './worker.ts'
+import { ensureShared, repoConventions, runSession, verifyRepo } from './worker.ts'
 
 import type { Plan, Spec, Task } from '@mf/models'
 import type { MergeOutcome, TokenUsage } from './types.ts'
@@ -25,7 +25,9 @@ const conflictedFiles = async (repoDir: string, signal: AbortSignal) => {
  */
 const filesWithConflictMarkers = async (repoDir: string, files: string[], signal: AbortSignal) => {
 	if (!files.length) return []
-	const result = await exec('grep', ['-lE', '^(<{7} |={7}$|>{7} )', '--', ...files], {
+	// `\|{7}` is the diff3/zdiff3 base marker — inert under the default conflictStyle, but a
+	// repair under a repo that sets `merge.conflictStyle=diff3` must not slip it through.
+	const result = await exec('grep', ['-lE', '^(<{7} |={7}$|>{7} |\\|{7}( |$))', '--', ...files], {
 		cwd: repoDir,
 		signal,
 	})
@@ -58,12 +60,41 @@ export type MergeTaskInput = {
 	signal: AbortSignal
 	onUsage: (usage: TokenUsage) => void
 	model?: string
+	/** The merge gate (lint + tests on the merged main); defaults to `verifyRepo` — a seam for tests */
+	verify?: typeof verifyRepo
+}
+
+/**
+ * Serialised merges share main's single working tree, so every merge starts from a known-clean,
+ * committed state: clear any half-finished merge, drop stray edits and untracked scratch files a
+ * previous step left behind (an interrupted repair, an aborted install). `-x` is NOT passed, so
+ * ignored files — node_modules — survive.
+ */
+const resetMain = async (repoDir: string, signal: AbortSignal) => {
+	await git(['reset', '--hard', '-q'], { cwd: repoDir, signal })
+	await git(['checkout', '-q', '-f', 'main'], { cwd: repoDir, signal })
+	await git(['clean', '-qfd'], { cwd: repoDir, signal })
+}
+
+/** Puts main back exactly where it was before the merge; best effort (a later `resetMain` re-cleans) */
+const rollbackTo = async (repoDir: string, commit: string) => {
+	await exec('git', ['reset', '--hard', '-q', commit], { cwd: repoDir })
+	await exec('git', ['clean', '-qfd'], { cwd: repoDir })
 }
 
 /**
  * `git merge --no-ff task/<id>` into main. On conflict, one repair session resolves the files and
  * the merge is committed; if anything is still conflicted the merge is aborted and the job fails
  * closed (a half-merged main is worse than a failed job).
+ *
+ * Gate-on-merge: git's exit code proves the merge was TEXTUALLY clean, nothing more, so after
+ * every accepted merge (clean or repaired) main is built and tested — scoped to the task's areas,
+ * widened to the full repo when the merged diff strays outside them — BEFORE the outcome is
+ * reported ok and dependant tasks clone this main. A red gate rolls main back to the pre-merge
+ * commit and fails the task. This gates main in place rather than on an integration branch: the
+ * orchestrator already serialises merges (one `mergeTask` owns main's tree at a time), so
+ * pre-merge-HEAD + `reset --hard` on red gives the same "main is always a gated, buildable tree"
+ * invariant without a second working tree, a second node_modules and a fast-forward step.
  */
 export const mergeTask = async ({
 	task,
@@ -73,15 +104,46 @@ export const mergeTask = async ({
 	signal,
 	onUsage,
 	model,
+	verify = verifyRepo,
 }: MergeTaskInput): Promise<MergeOutcome> => {
 	let tokens = 0
-	await git(['checkout', '-q', 'main'], { cwd: repoDir, signal })
+	await resetMain(repoDir, signal)
+	const preMergeHead = (
+		await git(['rev-parse', 'HEAD'], { cwd: repoDir, signal })
+	).stdout.trim()
+
+	// Accepts the merge that is now committed on main: dependency sync, then the merge gate
+	const acceptMerge = async (): Promise<MergeOutcome> => {
+		const sync = await syncDependencies(repoDir, tokens, signal)
+		if (!sync.ok) {
+			// Unlike every other failure path this one is past the merge commit — never leave the
+			// rejected task's commit in main for the next merge to build on
+			await rollbackTo(repoDir, preMergeHead)
+			return sync
+		}
+		const changed = (
+			await exec('git', ['diff', '--name-only', `${preMergeHead}..HEAD`], { cwd: repoDir, signal })
+		).stdout
+			.split('\n')
+			.filter(Boolean)
+		const verification = await verify(repoDir, signal, { areas: task.areas, changed })
+		if (!verification.ok) {
+			await rollbackTo(repoDir, preMergeHead)
+			return {
+				ok: false,
+				tokens,
+				reason: `main is not green after merging ${branch} (rolled back):\n${verification.output}`,
+			}
+		}
+		return { ok: true, tokens }
+	}
+
 	const merge = await exec(
 		'git',
 		['merge', '--no-ff', '--no-edit', '-m', `merge(${task.id}): ${task.title}`, branch],
 		{ cwd: repoDir, signal }
 	)
-	if (merge.code === 0) return syncDependencies(repoDir, tokens, signal)
+	if (merge.code === 0) return acceptMerge()
 
 	const files = await conflictedFiles(repoDir, signal)
 	if (!files.length || !(await mergeInProgress(repoDir))) {
@@ -128,6 +190,30 @@ export const mergeTask = async ({
 		return { ok: false, tokens, reason }
 	}
 
+	// A repair that "resolves" a conflict by keeping main's side verbatim passes the marker scan
+	// and — when the dropped work has no test — the merge gate too, silently shipping without the
+	// branch's work. Both sides of a conflicted file changed it, so its resolution must differ
+	// from pre-merge main; one that does not means the branch's work in it was discarded.
+	const diffedVsMain = new Set(
+		(
+			await exec('git', ['diff', '--name-only', preMergeHead, '--', ...files], {
+				cwd: repoDir,
+				signal,
+			})
+		).stdout
+			.split('\n')
+			.filter(Boolean)
+	)
+	const dropped = files.filter(file => !diffedVsMain.has(file))
+	if (dropped.length) {
+		await exec('git', ['merge', '--abort'], { cwd: repoDir })
+		return {
+			ok: false,
+			tokens,
+			reason: `merge repair of ${branch} discarded the branch's changes (files identical to pre-merge main): ${dropped.join(', ')}`,
+		}
+	}
+
 	await exec('git', ['add', '-A'], { cwd: repoDir, signal })
 	const commit = await exec(
 		'git',
@@ -146,7 +232,7 @@ export const mergeTask = async ({
 		await exec('git', ['merge', '--abort'], { cwd: repoDir })
 		return { ok: false, tokens, reason: `merge commit failed:\n${tail(commit.stderr)}` }
 	}
-	return syncDependencies(repoDir, tokens, signal)
+	return acceptMerge()
 }
 
 /** Manifest files whose change in a merge means main's node_modules is stale */
@@ -183,6 +269,21 @@ export const syncDependencies = async (
 			ok: false,
 			tokens,
 			reason: `npm install after merging ${manifests.join(', ')} failed (${install.code}):\n${tail(install.stderr || install.stdout)}`,
+		}
+	}
+	// The install may rewrite the lockfile; commit it, or main's tree is dirty for the next
+	// serialised merge (a second lock-touching merge would be refused with "local changes would
+	// be overwritten") and the delivered repo ships a lock that is stale against its manifests.
+	const status = await exec('git', ['status', '--porcelain'], { cwd: repoDir, signal })
+	if (status.stdout.trim()) {
+		await exec('git', ['add', '-A'], { cwd: repoDir, signal })
+		const commit = await exec(
+			'git',
+			['commit', '-q', '-m', 'chore(deps): lockfile refreshed by npm install after merge'],
+			{ cwd: repoDir, signal }
+		)
+		if (commit.code !== 0) {
+			return { ok: false, tokens, reason: `lockfile commit failed:\n${tail(commit.stderr)}` }
 		}
 	}
 	return { ok: true, tokens }

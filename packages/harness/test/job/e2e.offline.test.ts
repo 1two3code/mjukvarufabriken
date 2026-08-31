@@ -455,6 +455,13 @@ describe('offline build-job e2e — failure paths', () => {
 			await mkdir(repoDir, { recursive: true })
 			const run = (args: string[]) => exec('git', args, { cwd: repoDir, env: gitEnv })
 			await write(repoDir, 'shared.txt', 'base\n')
+			// mergeTask now gates every accepted merge (lint + tests on the merged main), so the
+			// tiny repo needs runnable — and green — scripts for the real `verifyRepo` to call
+			await write(
+				repoDir,
+				'package.json',
+				'{"name":"tiny","private":true,"scripts":{"lint":"node -e 0","test":"node -e 0"}}\n'
+			)
 			await run(['init', '-q', '-b', 'main'])
 			await run(['add', '-A'])
 			await run(['commit', '-q', '-m', 'seed'])
