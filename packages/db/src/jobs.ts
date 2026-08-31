@@ -176,18 +176,38 @@ export const listJobs = async (
 }
 
 /**
- * Active jobs (`queued`/`planning`/`building`/`verifying`) that were handed a Fargate task
- * (`task_arn is not null`) and are older than `olderThan` — the candidates the api's liveness
- * sweep re-checks against `ecs:DescribeTasks`. The age floor keeps a freshly-launched task,
- * which has not had time to boot and claim its token, out of the sweep. Oldest first.
+ * How far past its own `max_duration_minutes` wall-clock budget an active job with NO recorded
+ * task (`task_arn is null`) may be before the sweep declares it stuck. Launch is not atomic
+ * (insert → `ecs:RunTask` → arn update): an api that dies in that window leaves the row with
+ * `task_arn = null` forever — the exact "stuck queued forever" case. The threshold is
+ * deliberately generous: even if a task DID start and just never got its arn recorded, its own
+ * wall-clock budget would have ended the job by then, so anything still active is dead weight.
+ */
+export const nullTaskArnSweepSlackMinutes = 60
+
+/**
+ * Active jobs (`queued`/`planning`/`building`/`verifying`) the api's liveness sweep should look
+ * at, oldest first:
+ * - jobs handed a Fargate task (`task_arn is not null`) older than `olderThan` — re-checked
+ *   against `ecs:DescribeTasks` (the age floor keeps a freshly-launched task, which has not had
+ *   time to boot and claim its token, out of the sweep);
+ * - jobs with NO recorded task, once they outlive their whole wall-clock budget plus
+ *   `nullTaskArnSweepSlackMinutes` — nothing to ask ECS about, age alone judges them. A job
+ *   parked at the approve-before-deliver hold is excluded (its clock is legitimately paused).
  */
 export const listStuckJobs = async (db: Db, olderThan: Date): Promise<Job[]> => {
 	const { sql } = db
 	const rows = await sql<JobRow[]>`
 		select * from jobs
 		where status in ${sql(activeJobStatus as readonly string[] as string[])}
-			and task_arn is not null
-			and created_at < ${olderThan}
+			and (
+				(task_arn is not null and created_at < ${olderThan})
+				or (
+					task_arn is null
+					and not awaiting_approval
+					and created_at < now() - make_interval(mins => max_duration_minutes + ${nullTaskArnSweepSlackMinutes})
+				)
+			)
 		order by created_at asc
 		limit 200`
 	return rows.map(toJob)

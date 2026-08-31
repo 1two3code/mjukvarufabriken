@@ -1,3 +1,4 @@
+import { nullTaskArnSweepSlackMinutes } from '#/jobs.ts'
 import {
 	createMemoryRepositories,
 	memoryRateLimitMaxKeys,
@@ -144,6 +145,30 @@ describe('memory repositories', () => {
 
 			// Age floor: a cutoff before every row excludes them all
 			expect(await repos.jobs.listStuck(new Date(0))).toHaveLength(0)
+		})
+
+		it('listStuck includes a job with NO task once it outlives its wall-clock budget plus slack', async () => {
+			vi.useFakeTimers({ toFake: ['Date'] })
+			try {
+				// Launch died before the arn was recorded (api crash between insert and update)
+				const orphan = await repos.jobs.insert({ orderId: 'o1', orgId: 'a', spec, budget })
+				// Parked at the approve-before-deliver hold: its clock is legitimately paused
+				const parked = await repos.jobs.insert({ orderId: 'o2', orgId: 'a', spec, budget })
+				await repos.jobs.update(parked.id, { awaitingApproval: true })
+
+				// Young no-arn rows are never candidates, whatever the arn cutoff says
+				expect(await repos.jobs.listStuck(new Date(Date.now() + 60_000))).toHaveLength(0)
+
+				vi.setSystemTime(
+					new Date(
+						Date.now() + (budget.maxDurationMinutes + nullTaskArnSweepSlackMinutes) * 60_000 + 1_000
+					)
+				)
+				const stuck = await repos.jobs.listStuck(new Date(0))
+				expect(stuck.map(job => job.id)).toEqual([orphan.id])
+			} finally {
+				vi.useRealTimers()
+			}
 		})
 	})
 

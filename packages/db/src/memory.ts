@@ -7,6 +7,7 @@
  */
 import { isActiveJobStatus, isOrderSpecFrozen, pricesEffectiveAt, toSpecStatus } from '@mf/models'
 
+import { nullTaskArnSweepSlackMinutes } from './jobs.ts'
 import { defaultModelPriceRows } from './modelPrices.ts'
 import { rateLimitRetentionMs } from './rateLimits.ts'
 
@@ -364,12 +365,17 @@ export const createMemoryRepositories = (): MemoryRepositories => {
 			listStuck: async olderThan =>
 				byCreatedDesc(
 					[...jobs.values()]
-						.filter(
-							job =>
-								isActiveJobStatus(job.status) &&
-								job.taskArn !== undefined &&
-								new Date(job.createdAt) < olderThan
-						)
+						.filter(job => {
+							if (!isActiveJobStatus(job.status)) return false
+							if (job.taskArn !== undefined) return new Date(job.createdAt) < olderThan
+							// No task recorded: age alone judges — see `listStuckJobs` (jobs.ts)
+							const budgetMs =
+								(job.budget.maxDurationMinutes + nullTaskArnSweepSlackMinutes) * 60_000
+							return (
+								!job.awaitingApproval &&
+								new Date(job.createdAt).getTime() < Date.now() - budgetMs
+							)
+						})
 						.map(clone)
 				)
 					.reverse()
