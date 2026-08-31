@@ -105,13 +105,26 @@ log(`✓ ${ASSUME ? 'assumed OrganizationAccountAccessRole in' : 'authenticated 
 // MARK: P4 — subdomain hosted zone + NS delegation
 log(`\n[P4] hosted zone ${subdomain}`)
 const zones = awsJson(['route53', 'list-hosted-zones-by-name', '--dns-name', subdomain]).HostedZones || []
-let zone = zones.find(z => z.Name === `${subdomain}.`)
+const matchingZones = zones.filter(z => z.Name === `${subdomain}.`)
+// list-hosted-zones-by-name is eventually consistent — the only guard against duping the zone was
+// this list, which a re-run right after a just-created zone could still miss (hardening audit
+// 2026-08-30, finding G1). More than one match means it already happened; fail loudly rather than
+// silently picking one and risking certs/delegation landing in a zone the internet isn't routed to.
+if (matchingZones.length > 1) {
+	fail(
+		`${matchingZones.length} hosted zones already exist for ${subdomain} (${matchingZones.map(z => z.Id).join(', ')}) — resolve the duplicate by hand before re-running`
+	)
+}
+let zone = matchingZones[0]
 let zoneId
 if (zone) {
 	zoneId = zone.Id.replace('/hostedzone/', '')
 	log(`  exists: ${zoneId}`)
 } else if (APPLY) {
-	const created = awsJson(['route53', 'create-hosted-zone', '--name', subdomain, '--caller-reference', `mf-${env}-${Date.now()}`])
+	// A deterministic caller-reference (not Date.now()) makes a re-run that races the list's
+	// eventual consistency idempotent: Route53 returns the EXISTING zone for a repeat of the same
+	// (name, caller-reference) pair instead of creating a second one with a different NS set.
+	const created = awsJson(['route53', 'create-hosted-zone', '--name', subdomain, '--caller-reference', `mf-${env}-zone`])
 	zoneId = created.HostedZone.Id.replace('/hostedzone/', '')
 	log(`  created: ${zoneId}`)
 } else {
