@@ -1,9 +1,11 @@
 # Single-use software ("engångsmjukvara")
 
-Hasse, 2026-08-31, sparked by dogfood app #3 (Ögonblick, the wedding shared-camera PWA):
+Hasse, 2026-08-31, sparked by dogfood app #1 (Ögonblick, the wedding shared-camera PWA):
 software built for **one occasion or one short-lived purpose, then deliberately torn down**.
-Status: brainstorm, filtered and written down so it isn't lost. Nothing here is scheduled;
-the pricing-rethink in PLAN.md is the natural home for the first real decision.
+Status: brainstorm, filtered and written down so it isn't lost. Nothing here is scheduled.
+Pricing/GTM were decided later the same day ([strategy-2026-08-31.md](strategy-2026-08-31.md)) —
+this brief was reconciled against those decisions 2026-08-31; where they diverge, the strategy
+doc wins.
 
 ## Why this is a mjukvaruhuset-shaped idea (not just a cute niche)
 
@@ -11,23 +13,34 @@ Traditional dev economics made single-use software absurd: weeks of work for a w
 Our marginal cost for an S-class build is ~$10–50 of tokens plus a bounded hosting window. That
 inverts the economics — and the concept lines up with almost everything already built or decided:
 
-1. **Pricing rethink fit.** The new direction (PLAN.md, 2026-08-30) wants a ladder of very cheap,
-   low-risk steps with a hard 5k SEK ceiling. An occasion app at 500–2 500 SEK incl. a hosting
-   window *is* that entry tier — with a buyer who already has an occasion budget and a deadline,
-   so no procurement, no "do we need this", no agency-project expectations.
-2. **Teardown becomes product, not churn.** The suspend/teardown lifecycle, account-per-customer
+1. **Pricing-ladder fit.** The decided ladder (strategy-2026-08-31: free quote → 500 kr voucher
+   demo → 3–5k kr real build → 600 kr/mo managed subscription) already has the right slot: an
+   occasion app is a **3–5k kr real-build ticket incl. its hosting window** — with a buyer who
+   already has an occasion budget and a deadline, so no procurement, no "do we need this", no
+   agency-project expectations. (The 500 kr voucher tier doesn't fit hosted occasion apps — a
+   demo build has no event to live at — but the *occasion shapes* can appear in the demo
+   gallery as sales collateral.) The 600 kr/mo subscription doesn't map onto a 3-week lifespan
+   either; occasion pricing is flat-per-occasion, and "same app next year" is the recurring
+   variant (below).
+2. **GTM alignment — a vertical, not the funnel.** The decided GTM targets SMB problem-apps via
+   the voucher discovery machine; occasion apps are a **candidate vertical** for the
+   verticalize-what-recurs step, not the primary funnel. Within the shortlist, the
+   kickoff/offsite and förening/BRF ideas are closest to the SMB motion (same buyers, adjacent
+   budgets); weddings/gifts are a consumer segment that would need its own funnel — strong
+   concept, but don't confuse it with the 40-monthly-customers plan.
+3. **Teardown becomes product, not churn.** The suspend/teardown lifecycle, account-per-customer
    vending and per-account cost metering were built as hygiene
    ([teardown-deprovisioning.md](teardown-deprovisioning.md), org-accounts). For single-use
    software, a scheduled death date is a *selling point* (privacy, price) and the ops story is
    already half-built.
-3. **Built-in distribution.** This is maybe the strongest strategic point: an occasion app is
+4. **Built-in distribution.** This is maybe the strongest strategic point: an occasion app is
    used by *all the guests*, not just the buyer. Every wedding is a live demo in the pockets of
    50–150 people at their emotional peak, with a "byggd av Mjukvaruhuset" footer. Single-use
    software markets itself; enterprise software doesn't.
-4. **Privacy by design as a feature.** "The app and all photos are deleted after the event" is a
+5. **Privacy by design as a feature.** "The app and all photos are deleted after the event" is a
    strong European/GDPR pitch, and for once deletion costs us nothing — we wanted to tear it
    down anyway. Pair with a final artifact (below) so deletion never feels like loss.
-5. **Repetition trains the factory.** Occasions are unique; their *shapes* recur (camera+gallery,
+6. **Repetition trains the factory.** Occasions are unique; their *shapes* recur (camera+gallery,
    schedule+map, signup+list, vote+result). Each repeat feeds LEARNINGS.md and the spec engine,
    margins improve on the second wedding, tenth is near-pure margin — while every customer still
    gets the bespoke personalization (names, branding, inside jokes) that app-store alternatives
@@ -42,18 +55,18 @@ Score candidates against these; the list below already applies them.
 2. **Existing occasion budget.** The buyer already spends on this event (photo-booth rentals go
    for 5–10k SEK; we undercut a *rental* with *custom software*).
 3. **S-class shape.** ≤3 features, no payments/roles/integrations in v1 (see the estimator
-   keyword note under PLAN.md M10 app #3). Knowingly-M is fine if priced for it.
+   keyword note under PLAN.md M10 app #1). Knowingly-M is fine if priced for it.
 4. **Group value.** A crowd shares it — a single person's tool has app-store substitutes; a
    group's *own* app doesn't.
 5. **Personalization is the point.** Names, branding, quirks — the reason "just use an app" fails.
 6. **Clean exit.** A defined final artifact + full deletion (see "the artifact endpoint").
 7. **No traps.** Skip: public UGC needing moderation, gambling-adjacent mechanics, anything
    election/medical, unaccompanied-minors audiences. Guest-only URLs (unlisted link = the access
-   model, like app #3) keep UGC private-circle and low-risk.
+   model, like app #1) keep UGC private-circle and low-risk.
 
 ## Filtered shortlist (best first)
 
-1. **Wedding suite** — flagship. Shared camera (= app #3, already specced), guest info page
+1. **Wedding suite** — flagship. Shared camera (= dogfood app #1, already specced), guest info page
    (schedule, map, RSVP, dietary), **speech/toast signup for the toastmaster** (very Swedish,
    genuinely painful today via SMS), quiz about the couple, guestbook (text/audio). Sell as one
    app or à-la-carte occasions. Buyer: couple or toastmaster, budget context where 2 000 SEK is
@@ -94,7 +107,7 @@ buyer urgency, strong free-app substitutes); anything school-class-shaped (minor
   tier sneaking in). "Same app next year" at a discount is a subscription wearing party clothes.
 - **Event-day reliability is the whole product.** A business app failing on Tuesday gets a fix on
   Wednesday; a wedding app failing on Saturday failed *forever*. Implication: deliver days
-  early, boring tech, offline-tolerant (app #3's offline shell), and freeze — no day-of deploys.
+  early, boring tech, offline-tolerant (app #1's offline shell), and freeze — no day-of deploys.
   The delivery pipeline's boot/acceptance gates matter *more* here, not less.
 - **Every event app carries the footer.** Make "byggd av Mjukvaruhuset — beställ din egen" a
   standard, tasteful part of the deliverable. Distribution is the point; don't forget to collect
@@ -102,13 +115,14 @@ buyer urgency, strong free-app substitutes); anything school-class-shaped (minor
 
 ## Open questions (for when this graduates from brainstorm)
 
-- Does the order flow survive 1 500-SEK tickets (50/50 deposit split is silly there — one
-  Stripe charge up front?) — same question the pricing rethink already carries.
+- ~~Does the order flow survive small tickets (50/50 deposit split)?~~ RESOLVED by
+  strategy-2026-08-31: full payment upfront below ~3k kr, 50/50 only above — occasion apps at
+  3–5k sit right at the boundary; pick per order. (Code still encodes 50/50 everywhere.)
 - Hosting window mechanics: does `suspended → torn_down` + grace scheduler already express
   "auto-teardown at date X, final artifact first", or does delivery need a scheduled-death
   concept?
-- Which shortlist item is dogfood-able next: app #3 (wedding camera) is committed; the advent
-  calendar is the natural second (hard date, S-class, tests scheduled-death end-to-end in
-  December).
+- Which shortlist item is dogfood-able next: app #1 (wedding camera) is committed; the advent
+  calendar is the natural follow-up and is noted as the candidate for the open dogfood slot #3
+  in PLAN.md (hard date, S-class, tests scheduled-death end-to-end in December).
 - Brand: sell under mjukvaruhuset.se or a consumer-facing name for occasions
   ("engångsappen"?). Cheap to decide later; noted so it's a decision, not a drift.
