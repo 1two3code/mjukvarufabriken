@@ -65,9 +65,25 @@ if (account) {
 	log(`  using existing ${accountId} (${account.Name}, ${account.Status})`)
 	if (account.Status !== 'ACTIVE') fail(`account ${accountId} is ${account.Status}, not ACTIVE`)
 } else if (APPLY) {
-	const created = awsJson(['organizations', 'create-account', '--account-name', accountName, '--email', rootEmail, '--role-name', ACCESS_ROLE])
-	const reqId = created.CreateAccountStatus?.Id
-	log(`  CreateAccount requested (${reqId}); polling…`)
+	// Reconcile in-flight requests before firing a new one — list-accounts (above) is eventually
+	// consistent, so a prior --apply that fired CreateAccount then died mid-poll (5-min deadline
+	// hit, or the process was killed) can be invisible to it on a re-run. Firing create-account
+	// again then drives AWS to FAIL the second request against the same one-shot root email
+	// (CONCURRENT_ACCOUNT_MODIFICATION / EMAIL_ALREADY_EXISTS) — alarming, opaque output while
+	// the first request is actually fine (hardening audit 2026-08-30, finding G2). Resume that
+	// request's poll instead of firing a new one.
+	const inFlight = (
+		awsJson(['organizations', 'list-create-account-status', '--states', 'IN_PROGRESS', 'SUCCEEDED']).CreateAccountStatuses || []
+	).find(s => s.AccountName === accountName)
+	let reqId
+	if (inFlight) {
+		reqId = inFlight.Id
+		log(`  found a ${inFlight.State === 'SUCCEEDED' ? 'completed' : 'in-flight'} CreateAccount request (${reqId}); reconciling instead of firing a new one`)
+	} else {
+		const created = awsJson(['organizations', 'create-account', '--account-name', accountName, '--email', rootEmail, '--role-name', ACCESS_ROLE])
+		reqId = created.CreateAccountStatus?.Id
+		log(`  CreateAccount requested (${reqId}); polling…`)
+	}
 	const deadline = Date.now() + 5 * 60 * 1000
 	for (;;) {
 		const st = awsJson(['organizations', 'describe-create-account-status', '--create-account-request-id', reqId]).CreateAccountStatus
