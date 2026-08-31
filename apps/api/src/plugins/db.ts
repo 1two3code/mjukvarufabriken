@@ -39,7 +39,12 @@ export class DatabaseUnavailable extends Error {
 	}
 }
 
-const resolveConnectionString = async () => {
+/**
+ * The platform database connection string (`DATABASE_URL`, or resolved from
+ * `DATABASE_SECRET_ARN`) — also the default admin connection per-delivery database provisioning
+ * runs on (services/previewDbService.ts). Undefined when no database is configured.
+ */
+export const resolveConnectionString = async () => {
 	const fromEnv = process.env.DATABASE_URL?.trim()
 	if (fromEnv) return fromEnv
 	const arn = process.env.DATABASE_SECRET_ARN

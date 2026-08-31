@@ -8,6 +8,8 @@ import { appendEvent, createDb, getJob, getOrderRecord, migrate, updateJob } fro
 import { jobReasonMaxLength } from '@mf/models'
 
 import type {
+	JobDatabaseResponse,
+	JobPreviewTokenResponse,
 	JobReport,
 	JobReportEventsResponse,
 	JobReportTokenResponse,
@@ -32,6 +34,17 @@ export type JobReporter = {
 	isKilled: () => Promise<boolean>
 	/** Approve-before-deliver poll (W9): true once a human released the pre-delivery hold */
 	isApproved: () => Promise<boolean>
+	/**
+	 * Provisions the delivered app's own database through the api (docs/DELIVERED-DB.md) and
+	 * returns its scoped connection string — the container never holds admin DB credentials.
+	 * Absent in db mode (local `job:dev`), where delivery fails closed instead.
+	 */
+	provisionDatabase?: () => Promise<{ databaseUrl: string }>
+	/**
+	 * Mints a short-lived preview access token via the api so the post-deploy live acceptance
+	 * check can exercise auth-gated routes of the delivered app. Absent in db mode.
+	 */
+	mintPreviewToken?: () => Promise<string>
 	close: () => Promise<void>
 }
 
@@ -186,6 +199,16 @@ export const createApiReporter = ({
 					throw error
 				}
 			),
+		provisionDatabase: async () => {
+			const result = await request<JobDatabaseResponse>('/database', 'POST')
+			if (!result) throw new ApiReportError(404, 'job not found')
+			return result
+		},
+		mintPreviewToken: async () => {
+			const result = await request<JobPreviewTokenResponse>('/preview-token', 'POST')
+			if (!result) throw new ApiReportError(404, 'job not found')
+			return result.token
+		},
 		close: async () => {
 			await queue
 		},

@@ -378,7 +378,7 @@ describe('Job Service', () => {
 			})
 		})
 
-		it('Records nothing when the deploy failed (deployUrl null) even if a service is reported', async () => {
+		it('Still records a service whose URL was withheld (failed live acceptance) — it must stay teardownable', async () => {
 			const deliverable = createMockDeliverable({
 				deployUrl: null,
 				deployedService: {
@@ -387,6 +387,16 @@ describe('Job Service', () => {
 					config: { serviceName: 'mf-job1-gym' },
 				},
 			})
+
+			await app.jobService.reportEvents(job(), [
+				{ type: 'delivery', payload: { step: 'bundle', ok: true, deliverable } },
+			])
+
+			expect(await app.db.deployedServices.listForOrder('order-1')).toHaveLength(1)
+		})
+
+		it('Records nothing when the deploy never created a service (no deployedService reported)', async () => {
+			const deliverable = createMockDeliverable({ deployUrl: null })
 
 			await app.jobService.reportEvents(job(), [
 				{ type: 'delivery', payload: { step: 'bundle', ok: true, deliverable } },

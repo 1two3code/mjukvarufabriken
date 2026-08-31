@@ -315,17 +315,20 @@ const plugin: FastifyPluginAsync = async app => {
 	/**
 	 * Records the Express service a delivery stood up against the order (wave 10,
 	 * delivery-lifecycle-followups). The final `bundle` delivery event carries the deliverable's
-	 * `deployedService` when a service was actually created (`deployUrl` non-null). Recording it
-	 * lets the admin teardown target EVERY recorded service of a rebuilt order and lets `resume`
-	 * replay the image/config to re-create a suspended (deleted) one. Best-effort: a failure here
-	 * never fails the container's report (the deploy already succeeded).
+	 * `deployedService` whenever a service was actually created — including a delivery whose
+	 * post-deploy acceptance check failed (Gate C): its `deployUrl` is withheld (null) but the
+	 * service exists and MUST be teardownable, so presence of `deployedService`, not the URL, is
+	 * what triggers recording. Recording it lets the admin teardown target EVERY recorded
+	 * service of a rebuilt order and lets `resume` replay the image/config to re-create a
+	 * suspended (deleted) one. Best-effort: a failure here never fails the container's report
+	 * (the deploy already succeeded).
 	 */
 	const recordDeployedService = async (job: Job, event: JobReportEvent) => {
 		if (event.type !== 'delivery') return
 		const parsed = DeliveryEventPayloadSchema.safeParse(event.payload)
 		const deliverable = parsed.success ? parsed.data.deliverable : undefined
 		const service = deliverable?.deployedService
-		if (!deliverable || deliverable.deployUrl === null || !service) return
+		if (!deliverable || !service) return
 		await db.deployedServices
 			.record({
 				orderId: job.orderId,

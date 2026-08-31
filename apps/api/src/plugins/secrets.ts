@@ -76,6 +76,17 @@ declare module 'fastify' {
 			 */
 			provisionAccounts: boolean
 			/**
+			 * Delivered-preview support (Gate C): `tokenAudience` is the `aud` of tokens minted for
+			 * delivered preview apps (`PREVIEW_TOKEN_AUDIENCE`, default `preview`) — it MUST differ
+			 * from `authAudience`, or a minted preview token would be valid against this api itself;
+			 * the preview-token route refuses to mint when they collide. `dbAdminUrl`
+			 * (`PREVIEW_DB_ADMIN_URL`) overrides the admin connection per-delivery database
+			 * provisioning runs on (default: the platform database connection), and `dbHost`
+			 * (`PREVIEW_DB_HOST`, `host[:port]`) overrides the host advertised to delivered
+			 * containers (docs/DELIVERED-DB.md).
+			 */
+			preview: { tokenAudience: string; dbAdminUrl?: string; dbHost?: string }
+			/**
 			 * Deprovisioning / account-lifecycle wiring (teardown-deprovisioning.md, org-accounts.md).
 			 * `enabled` (`ORG_LIFECYCLE_ENABLED=true`) turns on the real AWS clients behind the admin
 			 * lifecycle action and the onboarding vend; while off, the admin action still transitions
@@ -245,6 +256,11 @@ const plugin: FastifyPluginAsync = async app => {
 			priceId: process.env.RESIDENT_USAGE_PRICE_ID || undefined,
 		},
 		provisionAccounts: process.env.PROVISION_CUSTOMER_ACCOUNTS === 'true',
+		preview: {
+			tokenAudience: process.env.PREVIEW_TOKEN_AUDIENCE || 'preview',
+			dbAdminUrl: process.env.PREVIEW_DB_ADMIN_URL?.trim() || undefined,
+			dbHost: process.env.PREVIEW_DB_HOST?.trim() || undefined,
+		},
 		orgLifecycle: {
 			enabled: process.env.ORG_LIFECYCLE_ENABLED === 'true',
 			region: process.env.ORG_AWS_REGION || 'eu-north-1',
