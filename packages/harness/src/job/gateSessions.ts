@@ -14,7 +14,7 @@ import {
 	skepticSystemPrompt,
 	tallyRefutations,
 } from './gates/review.ts'
-import { renderSpecForPlanning } from './planner.ts'
+import { renderFencedSpec } from './planner.ts'
 import { totalTokens } from './types.ts'
 import {
 	readOnlyTools,
@@ -222,8 +222,7 @@ If a criterion cannot be met by the app as built, still write the test that expr
 # Acceptance criteria
 ${renderCriteria(criteria)}
 
-# The spec
-${renderSpecForPlanning(spec)}
+${renderFencedSpec(spec)}
 
 # ${repoConventions}`
 
@@ -238,8 +237,7 @@ Rules:
 # Acceptance criteria
 ${renderCriteria(criteria)}
 
-# The spec
-${renderSpecForPlanning(spec)}
+${renderFencedSpec(spec)}
 
 # ${repoConventions}`
 
@@ -358,8 +356,7 @@ Severity: high = wrong result, data loss, or exploitable; medium = a defect a us
 
 Finish by returning the findings as the structured output; an empty list is a valid answer when the change is sound.
 
-# The spec
-${renderSpecForPlanning(spec)}`
+${renderFencedSpec(spec)}`
 
 export const reviewFixSystemPrompt = (spec: Spec, findings: ReviewFinding[]) =>
 	`You are an autonomous software engineer at Mjukvaruhuset. An independent review of the application in this repository found the defects below. Fix every one of them properly (no suppressions, no deleted tests, no weakened checks).
@@ -372,8 +369,7 @@ ${findings.map(f => `- [${f.id}] ${f.severity.toUpperCase()} ${f.file}:${f.line}
 2. \`npm run lint\` and \`npm test\` pass from the repository root.
 3. Leave your changes in the working tree, uncommitted — the harness commits them (git writes in this repository are refused for your user).
 
-# The spec
-${renderSpecForPlanning(spec)}
+${renderFencedSpec(spec)}
 
 # ${repoConventions}`
 
@@ -732,8 +728,7 @@ Return the structured output { report: { "<id>": { evidence: [...], status } } }
 # Acceptance criteria
 ${renderCriteria(criteria)}
 
-# The spec
-${renderSpecForPlanning(spec)}`
+${renderFencedSpec(spec)}`
 
 /** Read-only session → Zod-validated `AcceptanceReport`; any unmet/unknown/missing criterion fails */
 export const acceptanceCheckGate = async (

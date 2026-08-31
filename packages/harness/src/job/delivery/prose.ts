@@ -1,6 +1,6 @@
 import { z } from 'zod'
 
-import { renderSpecForPlanning } from '#job/planner.ts'
+import { renderFencedSpec } from '#job/planner.ts'
 import { readOnlyTools, runSession } from '#job/worker.ts'
 
 import type { ProseWriter } from './types.ts'
@@ -21,7 +21,7 @@ export const createLiveProseWriter =
 	async ({ spec, plan, repoDir, signal, onUsage }) => {
 		const session = await runSession({
 			cwd: repoDir,
-			systemPrompt: `${proseSystemPrompt}\n\n# The spec\n${renderSpecForPlanning(spec)}\n\n# Build plan\n${plan?.summary ?? '-'}`,
+			systemPrompt: `${proseSystemPrompt}\n\n${renderFencedSpec(spec)}\n\n# Build plan\n${plan?.summary ?? '-'}`,
 			prompt: 'Write the "What was built" section and return it as the structured output.',
 			signal,
 			onUsage,
