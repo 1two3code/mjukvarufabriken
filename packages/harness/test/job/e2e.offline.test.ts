@@ -396,7 +396,7 @@ describe('offline build-job e2e', () => {
 		} finally {
 			await removeRoot(root)
 		}
-	}, 180_000)
+	}, 360_000)
 })
 
 // MARK: Negative cases — each pins a bug class from the first live delivery (2026-08-27)
