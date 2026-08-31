@@ -98,6 +98,35 @@ describe('api reporter', () => {
 		expect(fetchStub).toHaveBeenCalledTimes(1)
 	})
 
+	it('Provisions the delivered-app database and mints a preview token on the per-job endpoint', async () => {
+		const databaseUrl = 'postgres://mf_app_job1:pw@db:5432/mf_app_job1'
+		const { fetchStub, calls } = createFetchStub([{ status: 200, body: { databaseUrl } }])
+		const reporter = createApiReporter(options(fetchStub))
+
+		await expect(reporter.provisionDatabase!()).resolves.toEqual({ databaseUrl })
+		expect(calls[0]).toMatchObject({
+			url: 'http://api.internal/internal/jobs/job-1/database',
+			method: 'POST',
+			authorization: 'Bearer secret',
+		})
+
+		const minted = createFetchStub([{ status: 200, body: { token: 'preview-jwt' } }])
+		await expect(
+			createApiReporter(options(minted.fetchStub)).mintPreviewToken!()
+		).resolves.toBe('preview-jwt')
+		expect(minted.calls[0]).toMatchObject({
+			url: 'http://api.internal/internal/jobs/job-1/preview-token',
+			method: 'POST',
+		})
+	})
+
+	it('Surfaces a 503 from database provisioning (the delivery fails its deploy closed)', async () => {
+		const { fetchStub } = createFetchStub([{ status: 503, body: { error: {} } }])
+		const reporter = createApiReporter({ ...options(fetchStub), retries: 0 })
+
+		await expect(reporter.provisionDatabase!()).rejects.toMatchObject({ status: 503 })
+	})
+
 	it('Posts events one at a time, in order and numbered, and patches updates', async () => {
 		const { fetchStub, calls } = createFetchStub([
 			{ status: 200, body: { lastEventId: 1 } },

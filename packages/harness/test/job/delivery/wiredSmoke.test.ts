@@ -75,16 +75,44 @@ describe('extractApiCalls', () => {
 })
 
 describe('wiringFailures / wiredSmokeReason', () => {
-	it('flags only 404s and names them', () => {
-		const failures = wiringFailures([
-			{ method: 'GET', path: '/guestbook', status: 404 },
-			{ method: 'POST', path: '/guestbook', status: 401 },
-			{ method: 'GET', path: '/ok', status: 200 },
-			{ method: 'GET', path: '/dead', status: 0 },
+	it('flags 404s AND anonymous 401s (the guestbook regression: 401 route, empty publicUrls)', () => {
+		const failures = wiringFailures(
+			[
+				{ method: 'GET', path: '/guestbook', status: 404 },
+				{ method: 'POST', path: '/guestbook', status: 401 },
+				{ method: 'GET', path: '/ok', status: 200 },
+				{ method: 'GET', path: '/dead', status: 0 },
+			],
+			[] // the delivered auth.ts allowlists nothing
+		)
+		expect(failures.map(failure => `${failure.method}:${failure.status}`)).toEqual([
+			'GET:404',
+			'POST:401',
 		])
-		expect(failures).toEqual([{ method: 'GET', path: '/guestbook', status: 404 }])
+		expect(failures[1]!.reason).toContain('publicUrls')
 		expect(wiredSmokeReason('/bff', failures)).toContain('GET /bff/guestbook')
 		expect(wiredSmokeReason('/bff', failures)).toContain('VITE_API_URL=/bff')
+	})
+
+	it('never judges the template auth-bootstrap routes (401/501 there is the logged-out contract)', () => {
+		expect(
+			wiringFailures(
+				[
+					{ method: 'POST', path: '/auth/refresh', status: 401 },
+					{ method: 'GET', path: '/session', status: 401 },
+				],
+				[]
+			)
+		).toEqual([])
+	})
+
+	it('flags an allowlisted path that still 401s as a publicUrls mismatch', () => {
+		const failures = wiringFailures(
+			[{ method: 'GET', path: '/guestbook', status: 401 }],
+			['/guestbook']
+		)
+		expect(failures).toHaveLength(1)
+		expect(failures[0]!.reason).toContain('listed in publicUrls')
 	})
 })
 

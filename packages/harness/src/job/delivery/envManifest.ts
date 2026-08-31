@@ -1,6 +1,6 @@
 import { randomBytes } from 'node:crypto'
 import { readdir, readFile } from 'node:fs/promises'
-import { join } from 'node:path'
+import { join, relative } from 'node:path'
 
 import { generateAppSecrets } from './appSecrets.ts'
 
@@ -179,4 +179,45 @@ export const buildEnvManifest = async (
 		)
 	}
 	return { required, env, placeholders, todos }
+}
+
+// MARK: Database need (D1)
+
+/** npm dependencies that mean "this app talks to a real Postgres/SQL database" */
+const dbDependencies = ['pg', 'postgres', 'drizzle-orm', 'knex', '@prisma/client', 'typeorm', 'kysely']
+
+export type DatabaseNeed = { needed: boolean; evidence: string[] }
+
+/**
+ * Whether the built app needs a real database at runtime (audit finding D1: env-manifest could
+ * DETECT a required `DATABASE_URL` but nothing ever provisioned one — the app booted, served the
+ * SPA, and 500'd on every read/write against a database that never existed). Three independent
+ * signals, unioned: `DATABASE_URL` in the declared required env, a known DB client in any
+ * package.json dependencies, or a `migrations/` directory. A false positive costs one unused
+ * (empty) database; a false negative ships a dead app — so detection errs wide.
+ */
+export const detectDatabaseNeed = async (
+	repoDir: string,
+	required: string[]
+): Promise<DatabaseNeed> => {
+	const evidence: string[] = []
+	if (required.includes('DATABASE_URL')) evidence.push('required env declares DATABASE_URL')
+	for (const root of await packageRoots(repoDir)) {
+		try {
+			const pkg = JSON.parse(await readFile(join(root, 'package.json'), 'utf8')) as {
+				dependencies?: Record<string, string>
+			}
+			const found = dbDependencies.filter(name => pkg.dependencies?.[name])
+			if (found.length) evidence.push(`${relative(repoDir, root) || '.'}/package.json depends on ${found.join(', ')}`)
+		} catch {
+			// no package.json here
+		}
+		try {
+			await readdir(join(root, 'migrations'))
+			evidence.push(`${relative(repoDir, root) || '.'}/migrations/ exists`)
+		} catch {
+			// no migrations dir
+		}
+	}
+	return { needed: evidence.length > 0, evidence }
 }

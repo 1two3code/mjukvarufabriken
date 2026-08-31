@@ -25,6 +25,7 @@ import authService from '#/services/authService.ts'
 import contactService from '#/services/contactService.ts'
 import iterationBriefService from '#/services/iterationBriefService.ts'
 import jobService from '#/services/jobService.ts'
+import previewDbService from '#/services/previewDbService.ts'
 import marginService from '#/services/marginService.ts'
 import orderService from '#/services/orderService.ts'
 import paymentService from '#/services/paymentService.ts'
@@ -78,6 +79,7 @@ export async function createServer({ logLevel }: Options = {}): Promise<FastifyI
 		// Services
 		.register(specService)
 		.register(jobService)
+		.register(previewDbService)
 		.register(userService)
 		.register(authService)
 		.register(contactService)

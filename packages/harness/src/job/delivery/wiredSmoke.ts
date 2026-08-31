@@ -4,6 +4,7 @@ import { join } from 'node:path'
 
 import { killProcessGroup, launch, sandboxEnv, tail } from '#job/exec.ts'
 
+import { judgeAnonymousProbe, readPublicUrls } from './authReconcile.ts'
 import { defaultReadyPattern, resolveBootTarget } from './bootArtifact.ts'
 
 import type { ChildProcess } from 'node:child_process'
@@ -20,9 +21,12 @@ import type { BootCheck } from './types.ts'
  * This wires the two halves together: boot the real server, then replay the requests the built
  * frontend actually makes (its `VITE_API_URL` base + the endpoint paths in its RTK-Query slices)
  * and fail if any resolves to a 404 — the deterministic signature of a route the SPA needs but the
- * backend does not serve. 401/400/500 all mean the route EXISTS (auth / validation / a bug), which
- * this check deliberately does not judge; only "the path is not registered at all" is a wiring
- * defect it can prove without a browser.
+ * backend does not serve — or to a 401/403 the delivered visitor could never get past (the
+ * un-fixed second half of the guestbook incident: the route existed but was not in the api's
+ * `publicUrls` allowlist, and the preview has no login, so every anonymous call was rejected;
+ * see authReconcile.ts). 400/500 still mean the route EXISTS (validation / a bug) — the runtime
+ * env of this local boot is not the live one, so 5xx is judged by the post-deploy live
+ * acceptance check (liveAcceptance.ts), not here.
  */
 
 // MARK: Frontend API surface (pure extraction)
@@ -200,14 +204,36 @@ export const probeApiSurface = async (
 	return results
 }
 
-/** A frontend call is a wiring defect only when the route is not registered at all (404). */
-export const wiringFailures = (results: ProbeResult[]): ProbeResult[] =>
-	results.filter(result => result.status === 404)
+export type WiringFailure = ProbeResult & { reason: string }
 
-export const wiredSmokeReason = (base: string, failures: ProbeResult[]): string =>
-	`the built frontend calls ${failures.length} endpoint(s) the backend does not serve (404): ` +
-	`${failures.map(failure => `${failure.method} ${base}${failure.path}`).join(', ')} — the SPA is ` +
-	`wired (VITE_API_URL=${base || '/'}) to routes that are not registered; check the API prefix / route paths.`
+/**
+ * A frontend call is a wiring defect when the route is not registered at all (404), or when the
+ * anonymous visitor is rejected (401/403) — the delivered preview has no login, so an
+ * auth-rejected route is exactly as dead in a browser as a missing one (guestbook incident,
+ * second half). `publicUrls` is the delivered repo's own allowlist (authReconcile.ts); a status-0
+ * connection error is still ignored here — this check boots locally, where transient connect
+ * flakiness must not fail a good build.
+ */
+export const wiringFailures = (
+	results: ProbeResult[],
+	publicUrls?: string[],
+	base = ''
+): WiringFailure[] => {
+	const failures: WiringFailure[] = []
+	for (const result of results) {
+		if (![401, 403, 404].includes(result.status)) continue
+		// Judge the FULL route path (base + extracted path) — publicUrls entries are full routes
+		const verdict = judgeAnonymousProbe(`${base}${result.path}`, result.status, publicUrls)
+		if (!verdict.ok) failures.push({ ...result, reason: verdict.reason ?? `${result.status}` })
+	}
+	return failures
+}
+
+export const wiredSmokeReason = (base: string, failures: WiringFailure[]): string =>
+	`the built frontend calls ${failures.length} endpoint(s) a visitor cannot use: ` +
+	`${failures.map(failure => `${failure.method} ${base}${failure.path} → ${failure.reason}`).join('; ')} ` +
+	`— the SPA is wired (VITE_API_URL=${base || '/'}) to routes that are unregistered or ` +
+	`auth-locked; check the API prefix / route paths and the publicUrls allowlist in plugins/auth.ts.`
 
 // MARK: Boot-and-hold (keeps the server up so it can be probed, then kills it)
 
@@ -333,7 +359,7 @@ export const createWiredSmokeCheck = ({
 				return { ok: true, output: held.output, reason: 'booted; no static frontend API calls to verify' }
 			}
 			const results = await probeApiSurface(held.origin, surface, fetchFn)
-			const failures = wiringFailures(results)
+			const failures = wiringFailures(results, await readPublicUrls(repoDir), surface.base)
 			return failures.length
 				? { ok: false, output: held.output, reason: wiredSmokeReason(surface.base, failures) }
 				: { ok: true, output: held.output, reason: `booted; ${results.length} frontend endpoint(s) resolve` }

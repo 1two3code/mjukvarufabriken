@@ -170,6 +170,14 @@ try {
 		...config.delivery,
 		jobId,
 		workerModel: config.workerModel,
+		// The api provisions the delivered app's database / mints preview tokens on this job's
+		// report credentials (db-mode local runs have neither → delivery fails closed on DB need)
+		...(reporter.provisionDatabase && {
+			dbProvisioner: { provision: () => reporter.provisionDatabase!() },
+		}),
+		...(reporter.mintPreviewToken && {
+			mintPreviewToken: () => reporter.mintPreviewToken!().catch(() => undefined),
+		}),
 	})
 	// Record seam (off unless `MF_CASSETTE`/`--record <dir>`): wrap the planner client and the Agent
 	// SDK `query()` so this one live run writes a cassette that replays offline with no tokens.

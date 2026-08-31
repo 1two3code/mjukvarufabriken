@@ -19,6 +19,7 @@ const mockPlugin: FastifyPluginAsync = async app => {
 		githubOauth: { clientId: 'gh-client-id', clientSecret: 'gh-client-secret' },
 		residentBilling: { meterEvent: 'resident_usage_usd_cents', priceId: 'price_resident' },
 		provisionAccounts: false,
+		preview: { tokenAudience: 'preview', dbAdminUrl: undefined, dbHost: undefined },
 		orgLifecycle: { enabled: false, region: 'eu-north-1', graceDays: 30 },
 		infra: { jobSubnetIds: [], jobApiUrl: 'https://api.example.com' },
 	})

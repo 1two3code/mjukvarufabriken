@@ -3,8 +3,13 @@ import { z } from 'zod'
 import { DeployedServiceReportSchema } from './DeployedService.ts'
 
 // MARK: Enums
-/** Delivery steps in run order; each one is emitted as a `delivery` job event */
-export const deliveryStep = ['docs', 'repo', 'deploy', 'bundle'] as const
+/**
+ * Delivery steps in run order; each one is emitted as a `delivery` job event. `acceptance` is
+ * the post-deploy end-to-end check: the LIVE preview URL is probed like a customer would use it
+ * (SPA HTML + assets, headless render, token-aware API probes). It only runs when a service was
+ * actually stood up, so older events without it stay valid.
+ */
+export const deliveryStep = ['docs', 'repo', 'deploy', 'acceptance', 'bundle'] as const
 export type DeliveryStep = (typeof deliveryStep)[number]
 
 // MARK: Files
@@ -42,7 +47,9 @@ export const DeliverableSchema = z.object({
 	/**
 	 * The Express service delivery stood up (name/arn/image + the config `resume` replays), so
 	 * the api can record it per order for teardown + resume. Absent when the deploy was skipped
-	 * or failed (`deployUrl` null), or for a dry-run.
+	 * or failed before a service existed, or for a dry-run. Present with a null `deployUrl` when
+	 * a service WAS created but the post-deploy acceptance check failed — the URL is withheld
+	 * from the customer, yet the service must still be teardownable.
 	 */
 	deployedService: DeployedServiceReportSchema.optional(),
 	/** Public URL of the static SPA build in the artifacts bucket, when one was built */

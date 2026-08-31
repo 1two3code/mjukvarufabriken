@@ -196,6 +196,43 @@ describe('Job Service', () => {
 			expect(forAdmin).toEqual([createMockJobEvent(), gate, notify])
 		})
 
+		it('Strips a URL the live acceptance check withheld from customer delivery events, not from admins', async () => {
+			const url = 'https://mf-11111111-app.eu-north-1.on.aws'
+			const deploy = {
+				...createMockJobEvent({ id: 2, type: 'delivery' }),
+				payload: { step: 'deploy', ok: true, url },
+			}
+			const acceptance = {
+				...createMockJobEvent({ id: 3, type: 'delivery' }),
+				payload: { step: 'acceptance', ok: false, url, reason: 'blank page' },
+			}
+			vi.spyOn(app.db.jobs, 'listEvents').mockResolvedValue([deploy, acceptance])
+
+			const forCustomer = await app.jobService.listEvents('job-1', 0, user)
+			// The platform judged the live app at that URL broken and withheld it from the
+			// deliverable — the event stream must not hand it out either.
+			expect(forCustomer[0]!.payload).toEqual({ step: 'deploy', ok: true })
+			expect(forCustomer[1]!.payload).toEqual({ step: 'acceptance', ok: false, reason: 'blank page' })
+
+			const forAdmin = await app.jobService.listEvents('job-1', 0, admin)
+			expect(forAdmin).toEqual([deploy, acceptance])
+		})
+
+		it('Keeps delivery-event URLs whose acceptance check passed — including a re-delivery that later passes', async () => {
+			const url = 'https://mf-11111111-app.eu-north-1.on.aws'
+			const events = [
+				{ ...createMockJobEvent({ id: 2, type: 'delivery' }), payload: { step: 'deploy', ok: true, url } },
+				{ ...createMockJobEvent({ id: 3, type: 'delivery' }), payload: { step: 'acceptance', ok: false, url, reason: 'probed too early' } },
+				{ ...createMockJobEvent({ id: 4, type: 'delivery' }), payload: { step: 'deploy', ok: true, url } },
+				{ ...createMockJobEvent({ id: 5, type: 'delivery' }), payload: { step: 'acceptance', ok: true, url } },
+			]
+			vi.spyOn(app.db.jobs, 'listEvents').mockResolvedValue(events)
+
+			const forCustomer = await app.jobService.listEvents('job-1', 0, user)
+			// The LAST verdict for the URL is a pass, so the working URL stays visible
+			expect(forCustomer.map(event => event.payload.url)).toEqual([url, url, url, url])
+		})
+
 		it('Filters the order list by org for users', async () => {
 			vi.spyOn(app.db.jobs, 'list').mockResolvedValue([
 				createMockJob({ id: 'a', orgId: 'org-1' }),
@@ -378,7 +415,7 @@ describe('Job Service', () => {
 			})
 		})
 
-		it('Records nothing when the deploy failed (deployUrl null) even if a service is reported', async () => {
+		it('Still records a service whose URL was withheld (failed live acceptance) — it must stay teardownable', async () => {
 			const deliverable = createMockDeliverable({
 				deployUrl: null,
 				deployedService: {
@@ -387,6 +424,16 @@ describe('Job Service', () => {
 					config: { serviceName: 'mf-job1-gym' },
 				},
 			})
+
+			await app.jobService.reportEvents(job(), [
+				{ type: 'delivery', payload: { step: 'bundle', ok: true, deliverable } },
+			])
+
+			expect(await app.db.deployedServices.listForOrder('order-1')).toHaveLength(1)
+		})
+
+		it('Records nothing when the deploy never created a service (no deployedService reported)', async () => {
+			const deliverable = createMockDeliverable({ deployUrl: null })
 
 			await app.jobService.reportEvents(job(), [
 				{ type: 'delivery', payload: { step: 'bundle', ok: true, deliverable } },
