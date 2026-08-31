@@ -66,7 +66,10 @@ describe('exec', () => {
 			GIT_COMMITTER_EMAIL: 'build@mjukvaruhuset.se',
 			PATH: '/usr/bin',
 			HOME: '/home/job',
-			ANTHROPIC_API_KEY: 'sk-ant',
+			// ANTHROPIC_API_KEY is stripped (hardening audit 2026-08-30, finding A1) — apps/job's own
+			// process no longer holds the raw key in its env at all, only ANTHROPIC_BASE_URL/
+			// ANTHROPIC_AUTH_TOKEN (the local forward-proxy pointer + a harmless placeholder), which
+			// are not secrets and pass through untouched (not asserted here — not set in this fixture).
 			HTTPS_PROXY: 'http://127.0.0.1:8888',
 			NO_PROXY: 'localhost',
 			GIT_AUTHOR_NAME: 'build',
@@ -106,10 +109,12 @@ describe('exec', () => {
 			ECS_AGENT_URI: 'http://169.254.170.2/api',
 			ECS_: '',
 		}
-		const env = sandboxEnv({ ...cloud, PATH: '/usr/bin', ANTHROPIC_API_KEY: 'sk' })
+		// ANTHROPIC_BASE_URL (not ANTHROPIC_API_KEY — stripped by name, see the test above) as the
+		// "survives" control: a legitimate non-secret var that happens to also start with ANTHROPIC_.
+		const env = sandboxEnv({ ...cloud, PATH: '/usr/bin', ANTHROPIC_BASE_URL: 'http://127.0.0.1:1' })
 		expect(Object.keys(env).filter(key => /^(AWS|ECS)_/.test(key))).toEqual([])
 		expect(Object.keys(env).filter(key => key in cloud)).toEqual([])
-		expect(env).toMatchObject({ PATH: '/usr/bin', ANTHROPIC_API_KEY: 'sk' })
+		expect(env).toMatchObject({ PATH: '/usr/bin', ANTHROPIC_BASE_URL: 'http://127.0.0.1:1' })
 		// Not a prefix match on "AWS"/"ECS" without the underscore
 		expect(sandboxEnv({ AWSOME: '1', ECSTATIC: '1' })).toMatchObject({ AWSOME: '1', ECSTATIC: '1' })
 	})

@@ -22,6 +22,7 @@ import {
 } from '@mf/harness'
 import { Cassette, recordQuery, recordSpecEngineClient } from '@mf/harness/testing'
 
+import { startAnthropicForwardProxy } from '#/anthropicForwardProxy.ts'
 import { loadConfig } from '#/config.ts'
 import { gitIdentity, seedRepo } from '#/repo.ts'
 import { createApiReporter, createDbReporter } from '#/reporter.ts'
@@ -50,7 +51,16 @@ for (const key of [
 ]) {
 	delete process.env[key]
 }
-process.env.ANTHROPIC_API_KEY = config.anthropicApiKey
+// The raw Anthropic key is NEVER put in process.env from here on (hardening audit 2026-08-30,
+// Gate B finding A1): a worker session's Bash tool inherits this process's env, so a plaintext
+// ANTHROPIC_API_KEY here would be as readable as `echo $ANTHROPIC_API_KEY` to a prompt-injected
+// spec. Instead, a local-only forward proxy holds the real key in its own closure and injects it
+// on the way out; workers get ANTHROPIC_BASE_URL pointed at it plus a harmless placeholder token
+// (sessionEnv, worker.ts) — never the key itself. `packages/harness` sandboxEnv also denies
+// ANTHROPIC_API_KEY by name now (defense in depth for any other exec(asWorker:true) path).
+const anthropicProxy = await startAnthropicForwardProxy({ apiKey: config.anthropicApiKey })
+process.env.ANTHROPIC_BASE_URL = anthropicProxy.url
+process.env.ANTHROPIC_AUTH_TOKEN = 'unused-forwarded-by-local-proxy'
 Object.assign(process.env, gitIdentity)
 
 const { jobId } = config

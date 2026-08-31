@@ -157,7 +157,9 @@ export const createLiveDeliveryClients = ({
 			artifacts: artifactsBucket
 				? createS3ArtifactStore(artifactsBucket, region, artifactsScope)
 				: createDryRunArtifactStore('mf-artifacts-dry-run', log),
-			prose: process.env.ANTHROPIC_API_KEY
+			// "Is Anthropic configured" — ANTHROPIC_BASE_URL (never the raw key) is set precisely when
+			// the job's local forward proxy started (apps/job/src/index.ts), same signal as before.
+			prose: process.env.ANTHROPIC_BASE_URL
 				? createLiveProseWriter({ model: workerModel })
 				: undefined,
 			boot: createDryRunBootCheck(log),

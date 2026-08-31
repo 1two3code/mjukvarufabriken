@@ -298,12 +298,25 @@ describe('sessionEnv', () => {
 		})
 		expect(env).toMatchObject({
 			PATH: '/usr/bin',
-			ANTHROPIC_API_KEY: 'sk-ant',
 			CLAUDE_AGENT_SDK_CLIENT_APP: 'mf-harness/0.1',
 		})
 		expect(Object.keys(env).filter(key => key.startsWith('DISABLE_PROMPT_CACHING'))).toEqual([])
 		expect(env.JOB_TOKEN).toBeUndefined()
 		expect(env.HOME).toBeUndefined()
+	})
+
+	it('Never gives the session the raw Anthropic key, only the local forward-proxy pointer (hardening audit 2026-08-30, A1)', () => {
+		// A Bash tool call in this session inherits this exact env — a real ANTHROPIC_API_KEY here
+		// would be as readable as `echo $ANTHROPIC_API_KEY` to a prompt-injected spec.
+		const env = sessionEnv({
+			PATH: '/usr/bin',
+			ANTHROPIC_API_KEY: 'sk-ant-REAL-SECRET',
+			ANTHROPIC_BASE_URL: 'http://127.0.0.1:8899',
+			ANTHROPIC_AUTH_TOKEN: 'unused-forwarded-by-local-proxy',
+		})
+		expect(env.ANTHROPIC_API_KEY).toBeUndefined()
+		expect(env.ANTHROPIC_BASE_URL).toBe('http://127.0.0.1:8899')
+		expect(env.ANTHROPIC_AUTH_TOKEN).toBe('unused-forwarded-by-local-proxy')
 	})
 
 	it("Gives the session the worker uid's HOME and Claude config dir when one is configured", () => {
