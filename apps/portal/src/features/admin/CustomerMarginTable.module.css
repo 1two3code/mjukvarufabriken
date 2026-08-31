@@ -1,0 +1,11 @@
+.positive {
+	color: inherit;
+}
+
+.negative {
+	color: var(--error);
+}
+
+.none {
+	color: var(--secondary-text-color);
+}

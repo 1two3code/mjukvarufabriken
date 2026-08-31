@@ -1,0 +1,28 @@
+.intro {
+	color: var(--secondary-text-color);
+}
+
+.mockToggle {
+	cursor: pointer;
+
+	display: inline-flex;
+	gap: var(--spacing-xxs);
+	align-items: center;
+
+	margin-bottom: var(--spacing-xs);
+}
+
+.mockNote {
+	margin-bottom: var(--spacing-s);
+	font-size: var(--font-size-s);
+	color: var(--secondary-text-color);
+}
+
+.section {
+	margin-top: var(--spacing-m);
+}
+
+.sectionTitle {
+	margin-bottom: var(--spacing-xs);
+	font-size: var(--font-size-l);
+}
