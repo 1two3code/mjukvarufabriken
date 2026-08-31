@@ -28,10 +28,17 @@ import type {
 	SpecDraft,
 	User,
 } from '@mf/models'
-import type { JobUpdate, NewJob } from './jobs.ts'
+import type { JobUpdate, NewJob, RetryOf } from './jobs.ts'
 
 export type JobsRepository = {
 	insert: (job: NewJob) => Promise<Job>
+	/**
+	 * Inserts the ONE automatic rebuild of a failed job atomically with the `retry` events that
+	 * link — and disqualify — both rows (the once-only bound of the demo auto-retry is
+	 * structural: no crash can leave a retry row that looks like a fresh first attempt).
+	 * Rejects with the same 23505 as `insert` when another job is active for the order.
+	 */
+	insertRetry: (job: NewJob, ofJob: RetryOf) => Promise<Job>
 	get: (id: string) => Promise<Job | undefined>
 	/** The job whose report token hashes to `tokenHash` (build-container auth); never by id */
 	getByReportToken: (tokenHash: string) => Promise<Job | undefined>

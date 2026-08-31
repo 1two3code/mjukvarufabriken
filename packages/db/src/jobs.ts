@@ -142,6 +142,51 @@ export const insertJob = async (db: Db, job: NewJob): Promise<Job> => {
 	return toJob(row!)
 }
 
+/** What `insertRetryJob` records about the failed job its new row retries */
+export type RetryOf = {
+	id: string
+	reason?: string
+	tokensUsed: number
+}
+
+/**
+ * Inserts the ONE automatic rebuild of a failed job atomically with the `retry` events that link
+ * — and disqualify — both rows: the failed job gets `{retryJobId}` (no later pass can pick it
+ * again) and the new row gets `{ofJobId, attempt: 2}` (its own later failure is no candidate).
+ * One transaction, so no crash between writes can leave a retry row that looks like a fresh
+ * first attempt — the once-only bound of the demo auto-retry is structural, not best-effort.
+ * The one-active-job-per-order unique index still applies (23505 when another writer already
+ * started a job for the order; nothing is written then).
+ */
+export const insertRetryJob = async (db: Db, job: NewJob, ofJob: RetryOf): Promise<Job> => {
+	const { sql } = db
+	const [row] = await sql.begin(async tx => {
+		const [inserted] = await tx<JobRow[]>`
+			insert into jobs (
+				order_id, org_id, spec, budget_tokens, max_workers, max_duration_minutes, report_token_hash
+			)
+			values (
+				${job.orderId}, ${job.orgId}, ${tx.json(job.spec as never)},
+				${job.budget.maxTokens}, ${job.budget.maxWorkers}, ${job.budget.maxDurationMinutes},
+				${job.reportTokenHash ?? null}
+			)
+			returning *`
+		const linkOut = {
+			retryJobId: inserted!.id,
+			...(ofJob.reason !== undefined && { reason: ofJob.reason }),
+			tokensUsed: ofJob.tokensUsed,
+		}
+		await tx`
+			insert into job_events (job_id, type, payload)
+			values (${ofJob.id}, 'retry', ${tx.json(linkOut as never)})`
+		await tx`
+			insert into job_events (job_id, type, payload)
+			values (${inserted!.id}, 'retry', ${tx.json({ ofJobId: ofJob.id, attempt: 2 } as never)})`
+		return [inserted!]
+	})
+	return toJob(row!)
+}
+
 export const getJob = async (db: Db, id: string): Promise<Job | undefined> => {
 	if (!isUuid(id)) return undefined
 	const [row] = await db.sql<JobRow[]>`select * from jobs where id = ${id}`
@@ -308,6 +353,7 @@ export const listEvents = async (db: Db, jobId: string, afterId = 0): Promise<Jo
 
 export const createJobsRepository = (db: Db): JobsRepository => ({
 	insert: job => insertJob(db, job),
+	insertRetry: (job, ofJob) => insertRetryJob(db, job, ofJob),
 	get: id => getJob(db, id),
 	getByReportToken: tokenHash => getJobByReportToken(db, tokenHash),
 	list: filter => listJobs(db, filter),

@@ -2,7 +2,7 @@ import { topologicalOrder } from './dag.ts'
 import { exec, git, tail } from './exec.ts'
 import { renderFencedSpec } from './planner.ts'
 import { totalTokens } from './types.ts'
-import { ensureShared, repoConventions, runSession, verifyRepo } from './worker.ts'
+import { ensureShared, gatedMainRef, repoConventions, runSession, verifyRepo } from './worker.ts'
 
 import type { Plan, Spec, Task } from '@mf/models'
 import type { MergeOutcome, TokenUsage } from './types.ts'
@@ -95,6 +95,17 @@ const rollbackTo = async (repoDir: string, commit: string) => {
  * orchestrator already serialises merges (one `mergeTask` owns main's tree at a time), so
  * pre-merge-HEAD + `reset --hard` on red gives the same "main is always a gated, buildable tree"
  * invariant without a second working tree, a second node_modules and a fast-forward step.
+ *
+ * Two things a rollback must not leave behind:
+ * - Task CLONES are not serialised with the merge queue (the scheduler starts ready tasks while
+ *   another task's merge gate is still running), so while the gate runs, live `main` points at a
+ *   commit that may be rolled back. `gatedMainRef` records the last gated commit — written here
+ *   before the merge commit and advanced only on green — and `createWorktree` bases every task
+ *   branch on it, so no clone can ever capture (and later re-introduce) a rejected merge.
+ * - `syncDependencies` mutates main's node_modules BEFORE the gate; `reset --hard` restores the
+ *   tree but not node_modules, so a rejected manifest-touching merge would leave every later
+ *   gate running against dependency state the shipped lockfile does not declare
+ *   (`restoreDependencies` re-installs against the rolled-back lockfile).
  */
 export const mergeTask = async ({
 	task,
@@ -111,15 +122,27 @@ export const mergeTask = async ({
 	const preMergeHead = (
 		await git(['rev-parse', 'HEAD'], { cwd: repoDir, signal })
 	).stdout.trim()
+	// Between merges main is always a gated state, so recording it is always correct — and doing
+	// it before the merge commit guarantees the ref exists the moment main can first point at an
+	// ungated commit (see `gatedMainRef` in worker.ts: task clones base on this ref, not on main)
+	await git(['update-ref', gatedMainRef, preMergeHead], { cwd: repoDir, signal })
+
+	// Rolls a rejected merge off main; when its dependency sync already ran npm install, also
+	// re-sync node_modules to the rolled-back manifests (a plain reset restores the tree only)
+	const reject = async (installed: boolean | undefined, reason: string): Promise<MergeOutcome> => {
+		await rollbackTo(repoDir, preMergeHead)
+		const restore = installed ? await restoreDependencies(repoDir, preMergeHead, signal) : ''
+		return { ok: false, tokens, reason: `${reason}${restore}` }
+	}
 
 	// Accepts the merge that is now committed on main: dependency sync, then the merge gate
 	const acceptMerge = async (): Promise<MergeOutcome> => {
 		const sync = await syncDependencies(repoDir, tokens, signal)
 		if (!sync.ok) {
 			// Unlike every other failure path this one is past the merge commit — never leave the
-			// rejected task's commit in main for the next merge to build on
-			await rollbackTo(repoDir, preMergeHead)
-			return sync
+			// rejected task's commit in main for the next merge to build on (the failed install
+			// may have half-applied, so the restore runs here too)
+			return reject(sync.installed, sync.reason ?? 'dependency sync failed')
 		}
 		const changed = (
 			await exec('git', ['diff', '--name-only', `${preMergeHead}..HEAD`], { cwd: repoDir, signal })
@@ -128,13 +151,13 @@ export const mergeTask = async ({
 			.filter(Boolean)
 		const verification = await verify(repoDir, signal, { areas: task.areas, changed })
 		if (!verification.ok) {
-			await rollbackTo(repoDir, preMergeHead)
-			return {
-				ok: false,
-				tokens,
-				reason: `main is not green after merging ${branch} (rolled back):\n${verification.output}`,
-			}
+			return reject(
+				sync.installed,
+				`main is not green after merging ${branch} (rolled back):\n${verification.output}`
+			)
 		}
+		// Green: this main (merge + possible lockfile refresh) is the new base for task clones
+		await git(['update-ref', gatedMainRef, 'HEAD'], { cwd: repoDir, signal })
 		return { ok: true, tokens }
 	}
 
@@ -238,6 +261,41 @@ export const mergeTask = async ({
 /** Manifest files whose change in a merge means main's node_modules is stale */
 const manifestPattern = /(^|\/)package(-lock)?\.json$/
 
+/** `MergeOutcome` plus whether `npm install` was attempted (i.e. node_modules may have changed) */
+type SyncOutcome = MergeOutcome & { installed?: boolean }
+
+/** The npm invocation `syncDependencies` and `restoreDependencies` share (see there for flags) */
+const npmInstall = (repoDir: string, signal?: AbortSignal) =>
+	exec('npm', ['install', '--no-audit', '--no-fund', '--ignore-scripts', '--loglevel=error'], {
+		cwd: repoDir,
+		signal,
+	})
+
+/**
+ * Re-syncs main's node_modules to the ROLLED-BACK manifests + lockfile after a rejected merge
+ * whose `syncDependencies` already ran npm install: `reset --hard` restores the tree but not
+ * node_modules, and nothing later re-installs (a later merge only syncs when ITS diff touches a
+ * manifest) — so every later merge gate, every worktree hard-linking main's node_modules and the
+ * final verify would otherwise run against dependency state the shipped lockfile does not
+ * declare (false green on a package only the rejected branch installed, spurious red on one its
+ * install pruned). `npm install` against the restored lockfile prunes/reverts; the lockfile
+ * churn it may leave is rolled back again so main stays clean and committed. Returns a note to
+ * append to the failure reason when the re-install itself fails (later gates then run in a
+ * possibly-poisoned environment, but they fail closed).
+ */
+const restoreDependencies = async (
+	repoDir: string,
+	preMergeHead: string,
+	signal?: AbortSignal
+): Promise<string> => {
+	const install = await npmInstall(repoDir, signal)
+	await ensureShared(repoDir)
+	await rollbackTo(repoDir, preMergeHead)
+	return install.code === 0
+		? ''
+		: `\n(re-installing node_modules against the restored lockfile also failed (${install.code}): ${tail(install.stderr || install.stdout)})`
+}
+
 /**
  * Workers install packages in their own worktree, so a merge can bring in a `package.json` /
  * lock change that main's hard-linked `node_modules` does not have — the final verify (and every
@@ -249,7 +307,7 @@ export const syncDependencies = async (
 	repoDir: string,
 	tokens: number,
 	signal?: AbortSignal
-): Promise<MergeOutcome> => {
+): Promise<SyncOutcome> => {
 	const changed = await exec('git', ['diff', '--name-only', 'HEAD~1', 'HEAD'], { cwd: repoDir, signal })
 	const manifests = changed.stdout.split('\n').filter(file => manifestPattern.test(file))
 	if (!manifests.length) return { ok: true, tokens }
@@ -258,16 +316,13 @@ export const syncDependencies = async (
 	// replace files in it (npm exited 243 without output on Fargate run 6ff720d2, 2026-08-27).
 	// Lifecycle scripts stay off, so no package code runs with the job's privileges; the worktrees
 	// re-link the result for the next tasks (`ensureShared`).
-	const install = await exec(
-		'npm',
-		['install', '--no-audit', '--no-fund', '--ignore-scripts', '--loglevel=error'],
-		{ cwd: repoDir, signal }
-	)
+	const install = await npmInstall(repoDir, signal)
 	await ensureShared(repoDir)
 	if (install.code !== 0) {
 		return {
 			ok: false,
 			tokens,
+			installed: true,
 			reason: `npm install after merging ${manifests.join(', ')} failed (${install.code}):\n${tail(install.stderr || install.stdout)}`,
 		}
 	}
@@ -283,8 +338,13 @@ export const syncDependencies = async (
 			{ cwd: repoDir, signal }
 		)
 		if (commit.code !== 0) {
-			return { ok: false, tokens, reason: `lockfile commit failed:\n${tail(commit.stderr)}` }
+			return {
+				ok: false,
+				tokens,
+				installed: true,
+				reason: `lockfile commit failed:\n${tail(commit.stderr)}`,
+			}
 		}
 	}
-	return { ok: true, tokens }
+	return { ok: true, tokens, installed: true }
 }

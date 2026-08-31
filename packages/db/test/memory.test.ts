@@ -56,6 +56,37 @@ describe('memory repositories', () => {
 			expect(updated).toMatchObject({ gates: [gate], gateWaivers: ['a.ts:1'] })
 		})
 
+		it('insertRetry writes the retry row and BOTH linking retry events (and 23505s like insert)', async () => {
+			const job = await repos.jobs.insert({ orderId: 'o1', orgId: 'org', spec, budget })
+			await repos.jobs.update(job.id, { status: 'failed', finishedAt: new Date() })
+
+			const retry = await repos.jobs.insertRetry(
+				{ orderId: 'o1', orgId: 'org', spec, budget, reportTokenHash: 'hash-r' },
+				{ id: job.id, reason: 'gates red', tokensUsed: 42 }
+			)
+
+			expect(retry).toMatchObject({ orderId: 'o1', status: 'queued' })
+			await expect(repos.jobs.listEvents(job.id)).resolves.toEqual([
+				expect.objectContaining({
+					type: 'retry',
+					payload: { retryJobId: retry.id, reason: 'gates red', tokensUsed: 42 },
+				}),
+			])
+			await expect(repos.jobs.listEvents(retry.id)).resolves.toEqual([
+				expect.objectContaining({ type: 'retry', payload: { ofJobId: job.id, attempt: 2 } }),
+			])
+
+			// The retry is active, so another insertRetry hits the one-active-per-order guard —
+			// and writes NO events (atomic with the row)
+			await expect(
+				repos.jobs.insertRetry(
+					{ orderId: 'o1', orgId: 'org', spec, budget },
+					{ id: job.id, tokensUsed: 42 }
+				)
+			).rejects.toMatchObject({ code: '23505' })
+			await expect(repos.jobs.listEvents(job.id)).resolves.toHaveLength(1)
+		})
+
 		it('Allows one active job per order and mirrors the unique violation code', async () => {
 			const job = await repos.jobs.insert({ orderId: 'o1', orgId: 'org', spec, budget })
 			await expect(

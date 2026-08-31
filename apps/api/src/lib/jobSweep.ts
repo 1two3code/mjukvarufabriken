@@ -55,15 +55,36 @@ const failDeadJob = async (
 }
 
 /**
+ * A job the sweep fails died WITHOUT reporting: no container notification ever went out — and
+ * for a dead auto-retry the FIRST failure's mail was deliberately held (`reportEvents`) on the
+ * promise that the retry would page. Unless a retry job was just started (whose own outcome
+ * pages), the sweep is therefore the last chance a human hears about the build at all, so it
+ * mails the admins itself. Guarded: the sweep also runs in tests without the email plugin.
+ */
+const notifySweepFailure = async (app: FastifyInstance, job: Job, reason: string) => {
+	const { email, secrets } = app as Partial<FastifyInstance>
+	if (!email || !secrets) return
+	const subject = `[mf ${secrets.env}] Build job ${job.id} failed (liveness sweep)`
+	const text = `Job ${job.id} (order ${job.orderId}) was failed by the liveness sweep — its build task died without reporting.\n\nReason:\n${reason}\n\nNo automatic retry was started for it.`
+	for (const to of secrets.authAdminEmails) {
+		await email.send({ to, subject, text }).catch((error: Error) => {
+			app.log.error({ err: error, jobId: job.id, to }, 'Could not send the sweep failure mail')
+		})
+	}
+}
+
+/**
  * One liveness pass: lists active jobs created over `jobSweepMinTaskAgeMs` ago (enough for their
  * Fargate task to start), `ecs:DescribeTasks` for them in one shot, and fails every job whose
  * task ECS reports `STOPPED` or no longer knows. A job whose task is still `RUNNING`/`PENDING`
  * is left untouched. Candidates with NO recorded task (`listStuck` only surfaces those once
  * their whole wall-clock budget plus slack has passed — the interrupted-launch case) are failed
  * on age alone, without asking ECS. A failed job is offered to the demo auto-retry, exactly like
- * a failure the container reported itself. Idempotent (a failed job is no longer active, so a
- * later pass skips it) and a no-op when ECS is unconfigured — then no task was ever launched.
- * Returns the counts (for logs and tests).
+ * a failure the container reported itself; it counts into the `JobsFailed` alarm metric (the
+ * container's own terminal report — the usual metric writer — never came), and when no retry
+ * was started the admins are mailed (`notifySweepFailure`). Idempotent (a failed job is no
+ * longer active, so a later pass skips it) and a no-op when ECS is unconfigured — then no task
+ * was ever launched. Returns the counts (for logs and tests).
  */
 export const runJobSweep = async (
 	app: FastifyInstance
@@ -88,11 +109,23 @@ export const runJobSweep = async (
 		const failedJob = await failDeadJob(app, job, reason)
 		if (!failedJob) continue
 		failed++
-		if (retry) {
-			await retry(failedJob).catch((error: Error) =>
-				app.log.error({ err: error, jobId: job.id }, 'Auto-retry of the swept job threw')
+		await (app as Partial<FastifyInstance>).metrics
+			?.recordJobFailed(job.id)
+			.catch((error: Error) =>
+				app.log.warn({ err: error, jobId: job.id }, 'Could not record the JobsFailed metric')
 			)
+		let retried: Job | undefined
+		let retryThrew = false
+		if (retry) {
+			try {
+				retried = await retry(failedJob)
+			} catch (error) {
+				// `retryFailedBuild` has already mailed for every post-candidacy throw
+				retryThrew = true
+				app.log.error({ err: error, jobId: job.id }, 'Auto-retry of the swept job threw')
+			}
 		}
+		if (!retried && !retryThrew) await notifySweepFailure(app, failedJob, reason)
 	}
 
 	const result = { checked: candidates.length, failed }

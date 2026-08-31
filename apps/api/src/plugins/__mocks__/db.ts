@@ -64,6 +64,7 @@ const mockPlugin: FastifyPluginAsync = async app => {
 		pricingTiers: memory.pricingTiers,
 		jobs: {
 			insert: vi.fn(job => Promise.resolve(createMockJob({ ...job, id: 'job-1' }))),
+			insertRetry: vi.fn(job => Promise.resolve(createMockJob({ ...job, id: 'job-2' }))),
 			get: vi.fn((id: string) => Promise.resolve(createMockJob({ id }))),
 			getByReportToken: vi.fn().mockResolvedValue(createMockJob()),
 			list: vi.fn().mockResolvedValue([createMockJob()]),

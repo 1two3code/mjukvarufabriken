@@ -1,3 +1,4 @@
+import { customerSlugForBuild } from '#/lib/customerSlug.ts'
 import { EntityNotFound } from '#/lib/entityError.ts'
 import { createMockJob, createMockJobEvent } from '#/plugins/__mocks__/db.ts'
 import { mockTaskArn } from '#/plugins/__mocks__/ecs.ts'
@@ -716,42 +717,51 @@ describe('Job Service', () => {
 			createMockJob({ id: 'job-1', status: 'failed', reason: 'gates red', tokensUsed: 42 })
 		const retryRow = () => createMockJob({ id: 'job-2', orderId: 'order-1' })
 
-		it('Retries a failed S job once: fresh job, S budget, launched, both rows linked by retry events', async () => {
-			vi.spyOn(app.db.jobs, 'insert').mockResolvedValue(retryRow())
+		it('Retries a failed S job once: fresh job, S budget, launched, rows linked atomically', async () => {
+			vi.spyOn(app.db.jobs, 'insertRetry').mockResolvedValue(retryRow())
 
 			const retry = await app.jobService.retryFailedBuild(failed())
 
 			expect(retry?.id).toBe('job-2')
-			expect(app.db.jobs.insert).toHaveBeenCalledWith({
-				orderId: 'order-1',
-				orgId: 'org-1',
-				spec: failed().spec,
-				budget: budgetForSize.S,
-				reportTokenHash: expect.stringMatching(/^[0-9a-f]{64}$/),
-			})
-			// The event trail: failed job → its retry, retry job → what it retries (and the second
-			// attempt is thereby marked unretryable)
-			expect(app.db.jobs.appendEvent).toHaveBeenCalledWith('job-1', {
-				type: 'retry',
-				payload: { retryJobId: 'job-2', reason: 'gates red', tokensUsed: 42 },
-			})
-			expect(app.db.jobs.appendEvent).toHaveBeenCalledWith('job-2', {
-				type: 'retry',
-				payload: { ofJobId: 'job-1', attempt: 2 },
-			})
+			// Row + linking `retry` events land in ONE call (a transaction in the SQL driver), so
+			// no crash can leave a retry row that reads as a fresh first attempt
+			expect(app.db.jobs.insertRetry).toHaveBeenCalledWith(
+				{
+					orderId: 'order-1',
+					orgId: 'org-1',
+					spec: failed().spec,
+					budget: budgetForSize.S,
+					reportTokenHash: expect.stringMatching(/^[0-9a-f]{64}$/),
+				},
+				{ id: 'job-1', reason: 'gates red', tokensUsed: 42 }
+			)
 			// Launched with a fresh token whose hash is what the row stores
 			expect(app.ecs.runJob).toHaveBeenCalledWith('job-2', expect.stringMatching(/^[\w-]{43}$/))
 			const [[, token]] = vi.mocked(app.ecs.runJob).mock.calls
-			const [[inserted]] = vi.mocked(app.db.jobs.insert).mock.calls
+			const [[inserted]] = vi.mocked(app.db.jobs.insertRetry).mock.calls
 			expect(hashReportToken(token)).toBe(inserted.reportTokenHash)
 			expect(app.db.jobs.update).toHaveBeenCalledWith('job-2', { taskArn: mockTaskArn })
+		})
+
+		it("Re-records the order's customer slug for the retry — deprovision fencing must point at the attempt that delivers", async () => {
+			vi.spyOn(app.db.jobs, 'insertRetry').mockResolvedValue(retryRow())
+			const setCustomerSlug = vi.spyOn(app.db.orders, 'setCustomerSlug')
+
+			await app.jobService.retryFailedBuild(failed())
+
+			// The slug embeds the delivering job's id (customerSlugForBuild) — must be job-2's, not job-1's
+			expect(setCustomerSlug).toHaveBeenCalledTimes(1)
+			expect(setCustomerSlug).toHaveBeenCalledWith(
+				'order-1',
+				customerSlugForBuild(retryRow().spec.goal, 'job-2')
+			)
 		})
 
 		it('Never retries an M/L job — the demo class is S only', async () => {
 			const job = createMockJob({ status: 'failed', spec: { sizeClass: 'M' } })
 
 			await expect(app.jobService.retryFailedBuild(job)).resolves.toBeUndefined()
-			expect(app.db.jobs.insert).not.toHaveBeenCalled()
+			expect(app.db.jobs.insertRetry).not.toHaveBeenCalled()
 		})
 
 		it('Never retries twice: a job with a retry event (either direction) is not a candidate', async () => {
@@ -760,23 +770,49 @@ describe('Job Service', () => {
 			])
 
 			await expect(app.jobService.retryFailedBuild(failed())).resolves.toBeUndefined()
-			expect(app.db.jobs.insert).not.toHaveBeenCalled()
+			expect(app.db.jobs.insertRetry).not.toHaveBeenCalled()
 			expect(app.ecs.runJob).not.toHaveBeenCalled()
 		})
 
-		it('Loses the double-failure-report race cleanly (23505: another job already active)', async () => {
-			vi.spyOn(app.db.jobs, 'insert').mockRejectedValue(
+		it('Loses the double-retry race silently (23505 and the job already carries a retry event)', async () => {
+			app.secrets.authAdminEmails = ['a@example.com']
+			vi.spyOn(app.db.jobs, 'insertRetry').mockRejectedValue(
 				Object.assign(new Error('duplicate key'), { code: '23505' })
 			)
+			// The concurrent winner committed its retry event with its row — a rebuild is running
+			vi.spyOn(app.db.jobs, 'listEvents').mockResolvedValue([
+				createMockJobEvent({ type: 'retry', payload: { retryJobId: 'job-9' } }),
+			])
 
 			await expect(app.jobService.retryFailedBuild(failed())).resolves.toBeUndefined()
-			expect(app.db.jobs.appendEvent).not.toHaveBeenCalled()
 			expect(app.ecs.runJob).not.toHaveBeenCalled()
+			// The held first-failure mail stays held: the winner's rebuild outcome will page
+			expect(app.email.send).not.toHaveBeenCalled()
 		})
 
-		it("The container's terminal failed report triggers the retry (and a retry hiccup never fails it)", async () => {
+		it('Mails the held failure when 23505 hides a job that is NOT a retry of this one', async () => {
+			app.secrets.authAdminEmails = ['a@example.com']
+			vi.spyOn(app.db.jobs, 'insertRetry').mockRejectedValue(
+				Object.assign(new Error('duplicate key'), { code: '23505' })
+			)
+			// The active job blocking the insert is a human-started rebuild: nothing will ever
+			// page for THIS failure, so the held mail must go out now (the candidacy listEvents
+			// call and this one both see no retry event)
+			vi.spyOn(app.db.jobs, 'listEvents').mockResolvedValue([])
+
+			await expect(app.jobService.retryFailedBuild(failed())).resolves.toBeUndefined()
+			expect(app.email.send).toHaveBeenCalledWith(
+				expect.objectContaining({
+					to: 'a@example.com',
+					subject: expect.stringContaining('auto-retry not started'),
+				})
+			)
+		})
+
+		it("The container's terminal failed report triggers the retry; a hiccup never fails the report but DOES mail", async () => {
+			app.secrets.authAdminEmails = ['a@example.com']
 			vi.spyOn(app.db.jobs, 'update').mockResolvedValue(failed())
-			vi.spyOn(app.db.jobs, 'insert').mockRejectedValue(new Error('db down'))
+			vi.spyOn(app.db.jobs, 'insertRetry').mockRejectedValue(new Error('db down'))
 
 			const result = await app.jobService.reportUpdate(
 				createMockJob({ id: 'job-1', status: 'verifying' }),
@@ -784,11 +820,18 @@ describe('Job Service', () => {
 			)
 
 			expect(result).toEqual({ status: 'failed', killed: false })
-			expect(app.db.jobs.insert).toHaveBeenCalledTimes(1)
+			expect(app.db.jobs.insertRetry).toHaveBeenCalledTimes(1)
+			// The held first-failure mail is not lost with the failed insert: the fallback pages
+			expect(app.email.send).toHaveBeenCalledWith(
+				expect.objectContaining({
+					to: 'a@example.com',
+					subject: expect.stringContaining('auto-retry not started'),
+				})
+			)
 		})
 
 		it('Pages the admins when the retry itself cannot launch (its held first-failure mail must not be lost)', async () => {
-			vi.spyOn(app.db.jobs, 'insert').mockResolvedValue(retryRow())
+			vi.spyOn(app.db.jobs, 'insertRetry').mockResolvedValue(retryRow())
 			vi.spyOn(app.ecs, 'runJob').mockRejectedValue(new Error('no capacity'))
 			app.secrets.authAdminEmails = ['a@example.com']
 
