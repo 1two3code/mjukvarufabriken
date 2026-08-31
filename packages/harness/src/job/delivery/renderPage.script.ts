@@ -3,7 +3,9 @@
  * `scripts/smoke-spa.mjs` idea (render the built bundle, require something in #root and no
  * console errors) without Chrome, which the job container does not ship: jsdom executes the
  * page's scripts instead. Run as a CHILD process (`node renderPage.script.ts <url> [timeoutMs]`)
- * with the harness sandboxEnv, never in-process — the delivered bundle is untrusted code.
+ * through the harness worker sandbox (`launch(..., { asWorker: true })`: setpriv to the worker
+ * uid with all capabilities dropped, plus sandboxEnv), never in-process — the delivered bundle
+ * is untrusted code.
  *
  * Prints a single JSON line to stdout: `{ rootHtml, errors, reason? }`. A non-JSON stdout or a
  * non-zero exit is treated as a failed render by the parent.

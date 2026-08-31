@@ -1,10 +1,12 @@
 import { spawn } from 'node:child_process'
 import { fileURLToPath } from 'node:url'
 
-import { sandboxEnv } from '#job/exec.ts'
+import { killProcessGroup, launch, sandboxEnv, sandboxUser, workerEnv } from '#job/exec.ts'
 
 import { judgeAnonymousProbe, readPublicUrls } from './authReconcile.ts'
 import { extractFrontendApiSurface, findFrontendAppDir } from './wiredSmoke.ts'
+
+import type { SandboxUser } from '#job/exec.ts'
 
 /**
  * !!! The lesson after wiredSmoke: everything before this point verifies PROXIES of the delivery
@@ -72,14 +74,29 @@ export type LiveCheck = { check: (input: LiveCheckInput) => Promise<LiveAcceptan
 const renderScript = fileURLToPath(new URL('./renderPage.script.ts', import.meta.url))
 
 /**
- * Runs renderPage.script.ts (jsdom) as a child with the harness sandboxEnv — the delivered
- * bundle is untrusted code, so it never executes inside the job process itself.
+ * Runs renderPage.script.ts (jsdom, `runScripts: 'dangerously'`) as a child process EXACTLY like
+ * every other execution of worker-driven code: through `launch(..., { asWorker: true })`, which —
+ * with a sandbox user configured, i.e. in the job image — wraps the child in `setpriv
+ * --reuid=<worker> --inh-caps=-all --ambient-caps=-all --no-new-privs`, the same drop the boot
+ * smoke uses (wiredSmoke.ts#bootAndHold). The delivered bundle is untrusted code; a plain spawn
+ * would hand it the job's own uid (same-uid `/proc/<jobpid>` access to the claimed report token)
+ * plus the job's ambient CAP_SETUID/SETGID/KILL, which propagate across a bare fork+exec — the
+ * exact threat the two-uid sandbox exists to block. `sandboxEnv()` on top only scrubs env vars;
+ * it is defense in depth, not the isolation.
  */
-export const renderPageInChild = (url: string, signal?: AbortSignal): Promise<RenderedPage> =>
+export const renderPageInChild = (
+	url: string,
+	signal?: AbortSignal,
+	{ spawnFn = spawn, user = sandboxUser() }: { spawnFn?: typeof spawn; user?: SandboxUser } = {}
+): Promise<RenderedPage> =>
 	new Promise(resolve => {
-		const child = spawn(process.execPath, [renderScript, url], {
-			env: sandboxEnv(),
+		const launched = launch(process.execPath, [renderScript, url], { asWorker: true, user })
+		const child = spawnFn(launched.command, launched.args, {
+			env: { ...sandboxEnv(), ...workerEnv(user) },
 			stdio: ['ignore', 'pipe', 'pipe'],
+			// Its own process group, so a timeout/abort kill takes jsdom's whole tree (needs the
+			// job's CAP_KILL once the child runs as the worker uid)
+			detached: true,
 		})
 		let stdout = ''
 		let stderr = ''
@@ -91,17 +108,20 @@ export const renderPageInChild = (url: string, signal?: AbortSignal): Promise<Re
 			signal?.removeEventListener('abort', onAbort)
 			resolve(page)
 		}
+		const killChild = () => {
+			if (!killProcessGroup(child.pid)) child.kill('SIGKILL')
+		}
 		const onAbort = () => {
-			child.kill('SIGKILL')
+			killChild()
 			settle({ rootHtml: '', errors: [], reason: 'aborted' })
 		}
 		const timer = setTimeout(() => {
-			child.kill('SIGKILL')
+			killChild()
 			settle({ rootHtml: '', errors: [], reason: 'render process timed out' })
 		}, 60_000)
 		signal?.addEventListener('abort', onAbort, { once: true })
-		child.stdout.on('data', chunk => (stdout += String(chunk)))
-		child.stderr.on('data', chunk => (stderr += String(chunk)))
+		child.stdout?.on('data', chunk => (stdout += String(chunk)))
+		child.stderr?.on('data', chunk => (stderr += String(chunk)))
 		child.on('error', error => settle({ rootHtml: '', errors: [], reason: `spawn failed: ${error.message}` }))
 		child.on('close', code => {
 			try {
@@ -133,12 +153,31 @@ export type LiveAcceptanceOptions = {
 	fetchFn?: LiveFetch
 	render?: PageRenderer
 	mintToken?: PreviewTokenMinter
+	/**
+	 * How long the check keeps re-trying the landing fetch while the service looks *not up yet*
+	 * (no response / 5xx) before judging — the deploy step only waits for the ECS Express
+	 * endpoint FIELD to exist, and a brand-new service routinely answers 502/503 or refuses
+	 * connections for a window after that. Without this, a perfectly healthy first deploy fails
+	 * acceptance for being probed seconds too early. Default 3 min.
+	 */
+	readinessTimeoutMs?: number
+	/** Pause between readiness attempts (default 5 s) */
+	readinessIntervalMs?: number
+	/** Injectable for tests */
+	sleep?: (ms: number) => Promise<void>
+	now?: () => number
 }
+
+const defaultSleep = (ms: number) => new Promise<void>(resolve => setTimeout(resolve, ms))
 
 export const createLiveAcceptanceCheck = ({
 	fetchFn = fetch,
 	render = renderPageInChild,
 	mintToken,
+	readinessTimeoutMs = 3 * 60_000,
+	readinessIntervalMs = 5_000,
+	sleep = defaultSleep,
+	now = Date.now,
 }: LiveAcceptanceOptions = {}): LiveCheck => ({
 	check: async ({ url, repoDir, signal }) => {
 		const origin = url.replace(/\/+$/, '')
@@ -157,8 +196,17 @@ export const createLiveAcceptanceCheck = ({
 			}
 		}
 
-		// 1. The landing page: the exact request the customer's browser makes first
-		const landing = await get(`${origin}/`)
+		// 1. The landing page: the exact request the customer's browser makes first. Readiness:
+		// retry ONLY while the answer is "not up yet" (no response, or 5xx — a fresh service's
+		// gateway answers 502/503 until the first task serves) and only until the deadline; a 4xx
+		// is the app answering wrongly and is judged immediately. Everything after runs
+		// single-shot against a service that proved it is up — or against its final failing answer.
+		const deadline = now() + readinessTimeoutMs
+		let landing = await get(`${origin}/`)
+		while ((!landing || landing.status >= 500) && now() < deadline && !signal?.aborted) {
+			await sleep(readinessIntervalMs)
+			landing = await get(`${origin}/`)
+		}
 		const landingHtml = landing && landing.status === 200 ? await landing.text().catch(() => '') : ''
 		if (!landing || landing.status !== 200) {
 			failures.push(`GET / → ${landing?.status ?? 'no response'} (expected the SPA's HTML)`)

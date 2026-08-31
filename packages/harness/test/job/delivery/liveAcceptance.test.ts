@@ -1,3 +1,4 @@
+import { EventEmitter } from 'node:events'
 import { mkdir, mkdtemp, rm, writeFile } from 'node:fs/promises'
 import { createServer } from 'node:http'
 import { tmpdir } from 'node:os'
@@ -11,6 +12,8 @@ import {
 	extractAssetPaths,
 	renderPageInChild,
 } from '#job/delivery/liveAcceptance.ts'
+
+import type { spawn } from 'node:child_process'
 
 import type { LiveFetch, PageRenderer } from '#job/delivery/liveAcceptance.ts'
 
@@ -181,6 +184,72 @@ describe('createLiveAcceptanceCheck', () => {
 		expect(noAsset.reason).toContain('/assets/index-abc.js')
 	})
 
+	it('READINESS: retries a landing 503/refused-connection until the fresh service answers, then passes', async () => {
+		await seedRepo(root, { publicUrls: ['/bff/guestbook'] })
+		const okFetch = fakeFetch({ 'GET /': 200, 'GET /assets/index-abc.js': 200, 'GET /bff/guestbook': 200 })
+		let landingAttempts = 0
+		const warmingFetch: LiveFetch = async (url, init) => {
+			if (url === `${LIVE}/` && init.method === 'GET') {
+				landingAttempts += 1
+				if (landingAttempts === 1) throw new Error('ECONNREFUSED') // no task behind the endpoint yet
+				if (landingAttempts === 2) return { status: 503, text: async () => 'warming up' }
+			}
+			return okFetch(url, init)
+		}
+		const sleeps: number[] = []
+		const check = createLiveAcceptanceCheck({
+			fetchFn: warmingFetch,
+			render: renderOk,
+			readinessIntervalMs: 5_000,
+			sleep: async ms => void sleeps.push(ms),
+		})
+		const result = await check.check({ url: LIVE, repoDir: root })
+		expect(result.ok).toBe(true)
+		expect(landingAttempts).toBe(3)
+		expect(sleeps).toEqual([5_000, 5_000])
+	})
+
+	it('READINESS: gives up at the deadline and judges the final failing answer', async () => {
+		await seedRepo(root, { publicUrls: ['/bff/guestbook'] })
+		let landingAttempts = 0
+		const deadFetch: LiveFetch = async (url, init) => {
+			if (url === `${LIVE}/` && init.method === 'GET') landingAttempts += 1
+			return { status: 503, text: async () => 'no' }
+		}
+		let clock = 0
+		const check = createLiveAcceptanceCheck({
+			fetchFn: deadFetch,
+			render: renderOk,
+			readinessTimeoutMs: 60_000,
+			readinessIntervalMs: 10_000,
+			sleep: async ms => void (clock += ms),
+			now: () => clock,
+		})
+		const result = await check.check({ url: LIVE, repoDir: root })
+		expect(result.ok).toBe(false)
+		expect(result.reason).toContain('GET / → 503')
+		expect(landingAttempts).toBe(7) // the first try + one per 10 s of the 60 s window
+	})
+
+	it('READINESS: never retries a 4xx — that is the app answering wrongly, not warming up', async () => {
+		await seedRepo(root, { publicUrls: ['/bff/guestbook'] })
+		let landingAttempts = 0
+		const notFoundFetch: LiveFetch = async (url, init) => {
+			if (url === `${LIVE}/` && init.method === 'GET') landingAttempts += 1
+			return { status: 404, text: async () => 'no' }
+		}
+		const sleeps: number[] = []
+		const check = createLiveAcceptanceCheck({
+			fetchFn: notFoundFetch,
+			render: renderOk,
+			sleep: async ms => void sleeps.push(ms),
+		})
+		const result = await check.check({ url: LIVE, repoDir: root })
+		expect(result.ok).toBe(false)
+		expect(landingAttempts).toBe(1)
+		expect(sleeps).toEqual([])
+	})
+
 	it('never judges the template auth-bootstrap routes', async () => {
 		await seedRepo(root, {
 			publicUrls: ['/bff/guestbook'],
@@ -206,6 +275,63 @@ describe('createFakeLiveCheck', () => {
 		const result = await fake.check({ url: LIVE, repoDir: '/repo' })
 		expect(result.ok).toBe(false)
 		expect(fake.calls).toEqual([{ url: LIVE, repoDir: '/repo' }])
+	})
+})
+
+// MARK: the render child's sandbox (the delivered bundle is untrusted code)
+
+describe('renderPageInChild sandbox', () => {
+	it('spawns the jsdom child through the setpriv worker sandbox, like every other untrusted execution', async () => {
+		const captured: { command: string; args: string[]; options: Record<string, unknown> }[] = []
+		const fakeSpawn = ((command: string, args: string[], options: Record<string, unknown>) => {
+			captured.push({ command, args, options })
+			const child = new EventEmitter() as EventEmitter & {
+				stdout: EventEmitter
+				stderr: EventEmitter
+				kill: () => void
+				pid: number
+			}
+			child.stdout = new EventEmitter()
+			child.stderr = new EventEmitter()
+			child.kill = () => {}
+			child.pid = 99999
+			setImmediate(() => {
+				child.stdout.emit('data', `${JSON.stringify({ rootHtml: '<main>ok</main>', errors: [] })}\n`)
+				child.emit('close', 0)
+			})
+			return child
+		}) as unknown as typeof spawn
+		const user = { uid: 60001, gid: 60001, home: '/home/worker' }
+
+		process.env.JOB_TOKEN = 'never-reaches-the-bundle'
+		let page
+		try {
+			page = await renderPageInChild('http://127.0.0.1:1/', undefined, { spawnFn: fakeSpawn, user })
+		} finally {
+			delete process.env.JOB_TOKEN
+		}
+
+		expect(page.rootHtml).toContain('ok')
+		expect(captured).toHaveLength(1)
+		const call = captured[0]!
+		// The whole point: setpriv drops to the worker uid with an EMPTY capability set — the
+		// bundle must never run with the job's uid or its ambient CAP_SETUID/SETGID/KILL.
+		expect(call.command).toBe('setpriv')
+		expect(call.args.slice(0, 6)).toEqual([
+			'--reuid=60001',
+			'--regid=60001',
+			'--init-groups',
+			'--inh-caps=-all',
+			'--ambient-caps=-all',
+			'--no-new-privs',
+		])
+		expect(call.args).toContain(process.execPath)
+		expect(call.args.at(-1)).toBe('http://127.0.0.1:1/')
+		expect(call.args.find(arg => arg.includes('renderPage.script.ts'))).toBeDefined()
+		// Worker env on top of the scrubbed sandbox env
+		const env = call.options.env as Record<string, string | undefined>
+		expect(env.HOME).toBe('/home/worker')
+		expect(env.JOB_TOKEN).toBeUndefined()
 	})
 })
 

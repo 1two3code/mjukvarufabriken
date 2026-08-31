@@ -168,18 +168,48 @@ const statusRank: Record<JobStatus, number> = {
 }
 
 /**
+ * URLs the delivery decided to withhold from the customer: a `delivery` event stream where a
+ * URL's LAST `acceptance` step failed means the platform judged the live app at that URL broken
+ * and nulled it on the deliverable — but the earlier `deploy` step event (emitted before the
+ * verdict existed) and the failed `acceptance` event itself still carry it. Served unredacted,
+ * the customer's event stream would hand out a "working" URL the platform just withheld.
+ */
+const withheldDeployUrls = (events: JobEvent[]): Set<string> => {
+	const lastVerdictByUrl = new Map<string, boolean>()
+	for (const event of events) {
+		if (event.type !== 'delivery') continue
+		const { step, ok, url } = event.payload
+		if (step === 'acceptance' && typeof url === 'string') lastVerdictByUrl.set(url, ok === true)
+	}
+	return new Set([...lastVerdictByUrl].filter(([, passed]) => !passed).map(([url]) => url))
+}
+
+/**
  * What a customer may see of the event log: `notify` events are addressed to the admins and
  * `gate` details carry the full review findings / test output of the delivered code — both stay
  * admin-only. Customers get the gate's name, verdict, timing, tokens and one-line summary.
+ * Delivery events lose their `url` when the live acceptance check withheld that URL as broken
+ * ({@link withheldDeployUrls}) — the deliverable already nulls `deployUrl`; this closes the same
+ * promise on the customer-readable event stream.
  */
-export const redactEventsForCustomer = (events: JobEvent[]): JobEvent[] =>
-	events
+export const redactEventsForCustomer = (events: JobEvent[]): JobEvent[] => {
+	const withheld = withheldDeployUrls(events)
+	return events
 		.filter(event => event.type !== 'notify')
 		.map(event => {
+			if (
+				event.type === 'delivery' &&
+				typeof event.payload.url === 'string' &&
+				withheld.has(event.payload.url)
+			) {
+				const { url: _url, ...payload } = event.payload
+				return { ...event, payload }
+			}
 			if (event.type !== 'gate') return event
 			const { details: _details, ...payload } = event.payload
 			return { ...event, payload }
 		})
+}
 
 /**
  * The same rule for a job row's stored gate reports: `gates[].details` carry the review findings
