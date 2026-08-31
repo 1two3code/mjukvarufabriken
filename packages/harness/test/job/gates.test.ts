@@ -245,9 +245,15 @@ describe('failureNotification', () => {
 		expect(payload.subject).toBe('Build job job-1 failed')
 		expect(payload.text).toContain('- verify: ok (0 tokens, 2 s)')
 		expect(payload.text).toContain('- review: FAILED (4200 tokens, 60 s)')
+		// The api holds exactly this mail for a job it is about to auto-retry
+		expect(payload.kind).toBe('job-failed')
 	})
 
 	it('Says so when no gate ran', () => {
 		expect(failureNotification('j', 'killed', undefined, []).text).toContain('- no gate ran')
+	})
+
+	it('Marks only a FAILED job for the auto-retry mail hold — an admin kill is never retried', () => {
+		expect(failureNotification('j', 'killed', undefined, []).kind).toBeUndefined()
 	})
 })
