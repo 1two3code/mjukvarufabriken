@@ -7,19 +7,34 @@ import type { CreatedRepo, GitHubClient } from './types.ts'
 
 export const defaultGitHubOrg = 'mjukvaruhuset'
 
-/** Push URL with the token as the `x-access-token` user — built per call, never logged or stored */
-const authenticatedCloneUrl = (cloneUrl: string, token: string) => {
-	const url = new URL(cloneUrl)
-	url.username = 'x-access-token'
-	url.password = token
-	return url.toString()
-}
+/** Env var name the inline credential helper below reads the token from — never git's argv */
+const pushTokenEnvVar = 'MF_GIT_PUSH_TOKEN'
 
 /**
- * `git push` of one branch over HTTPS. The token lives in the argument list of this one process
- * only: the error on a failed push is built from the plain `cloneUrl` and a redacted stderr tail
- * (never from the arguments), because that message becomes a job event, the job's `reason` and a
- * log line the customer can read.
+ * Builds the `git push` argv + env for an authenticated push WITHOUT putting the token in argv
+ * (hardening audit 2026-08-30, finding A3): `/proc/<pid>/cmdline` is world-readable with no
+ * `hidepid`, so embedding the token in the push URL — an argv element — let any same-uid process
+ * (e.g. a worker Bash command backgrounded with `nohup … &` that outlives its session) read the
+ * org-wide GitHub App installation token. `git -c credential.helper=<inline shell function>` puts
+ * only a *reference* to the env var in argv; the token itself exists solely in the child
+ * process's environment, read by the `sh -c` git spawns internally when it needs credentials.
+ */
+export const buildPushInvocation = (cloneUrl: string, branch: string, token: string) => ({
+	args: [
+		'-c',
+		`credential.helper=!f() { printf 'username=x-access-token\\npassword=%s\\n' "$${pushTokenEnvVar}"; }; f`,
+		'push',
+		'--force',
+		cloneUrl,
+		`${branch}:${branch}`,
+	],
+	env: { [pushTokenEnvVar]: token },
+})
+
+/**
+ * `git push` of one branch over HTTPS. The error on a failed push is built from the plain
+ * `cloneUrl` and a redacted stderr tail (never from the arguments), because that message becomes
+ * a job event, the job's `reason` and a log line the customer can read.
  */
 export const pushBranch = async (
 	repoDir: string,
@@ -27,11 +42,8 @@ export const pushBranch = async (
 	branch: string,
 	token: string
 ) => {
-	const result = await exec(
-		'git',
-		['push', '--force', authenticatedCloneUrl(cloneUrl, token), `${branch}:${branch}`],
-		{ cwd: repoDir, timeoutMs: 10 * 60_000 }
-	)
+	const { args, env } = buildPushInvocation(cloneUrl, branch, token)
+	const result = await exec('git', args, { cwd: repoDir, timeoutMs: 10 * 60_000, env })
 	if (result.code !== 0) {
 		throw new Error(
 			`git push ${branch} → ${cloneUrl} failed (${result.code}):\n${redactUrlCredentials(tail(result.stderr || result.stdout))}`
