@@ -1,3 +1,4 @@
+import { execFileSync } from 'node:child_process'
 import { mkdir, mkdtemp, readFile, rm, writeFile } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
@@ -9,7 +10,7 @@ import { deliver } from '#job/delivery/deliver.ts'
 import { createFakeGitHubClient } from '#job/delivery/github.ts'
 import { createLiveDeliveryClients } from '#job/delivery/index.ts'
 import { createFakeProseWriter } from '#job/delivery/prose.ts'
-import { pushBranch } from '#job/delivery/github.ts'
+import { buildPushInvocation, pushBranch } from '#job/delivery/github.ts'
 import { exec } from '#job/exec.ts'
 
 import type { GateReport, NewJobEvent, Spec } from '@mf/models'
@@ -345,6 +346,39 @@ describe('deliver', () => {
 		expect(error.message).toContain(`git push main → ${cloneUrl} failed`)
 		expect(error.message).not.toContain(token)
 		expect(error.message).not.toContain('x-access-token')
+	})
+
+	it('Never puts the token in git argv — only in the child env (hardening audit 2026-08-30, A3)', () => {
+		// Arrange — /proc/<pid>/cmdline is world-readable with no hidepid; the token must never be
+		// an argv element of the spawned `git` process, only reachable via its own environment
+		const token = 'ghs_SECRET_INSTALLATION_TOKEN'
+
+		// Act
+		const { args, env } = buildPushInvocation('https://github.com/mjukvaruhuset/gym-booking.git', 'main', token)
+
+		// Assert
+		expect(args.some(arg => arg.includes(token))).toBe(false)
+		expect(Object.values(env)).toContain(token)
+	})
+
+	it("Authenticates through git's own credential protocol with the token from the env", () => {
+		// Arrange — exercises the real inline shell helper via `git credential fill`, no network:
+		// proves the helper string is syntactically correct and actually resolves the token, not
+		// just that it is absent from argv
+		const token = 'ghs_SECRET_INSTALLATION_TOKEN'
+		const { args, env } = buildPushInvocation('https://github.com/mjukvaruhuset/gym-booking.git', 'main', token)
+		const credentialHelperArg = args[1]!
+
+		// Act
+		const child = execFileSync('git', ['-c', credentialHelperArg, 'credential', 'fill'], {
+			input: 'protocol=https\nhost=github.com\n\n',
+			encoding: 'utf8',
+			env: { ...process.env, ...env },
+		})
+
+		// Assert
+		expect(child).toContain(`password=${token}`)
+		expect(child).toContain('username=x-access-token')
 	})
 
 	it('Still delivers when the deploy fails: deployUrl null + a notify event for the admins', async () => {
