@@ -8,7 +8,8 @@ import { useSiteRoute } from '#/hooks/useSiteRoute.ts'
 import { ButtonLink } from '#/components/ButtonLink.tsx'
 import { Card, Grid, Section } from '#/components/Section.tsx'
 
-const sizes = ['s', 'm', 'l'] as const
+/** Paid rungs of the pricing ladder shown on the home page (the spec/quote rung is free) */
+const ladderSteps = ['demo', 'build', 'managed'] as const
 const builtPoints = ['sdk', 'sandbox', 'budget', 'review', 'failClosed', 'delivery'] as const
 
 export function HomePage() {
@@ -45,22 +46,22 @@ export function HomePage() {
 			</Section>
 
 			<Section
-				eyebrow={t('home.sizes.eyebrow')}
-				title={t('home.sizes.title')}
-				lead={t('home.sizes.lead')}
+				eyebrow={t('home.ladder.eyebrow')}
+				title={t('home.ladder.title')}
+				lead={t('home.ladder.lead')}
 			>
 				<Grid columns={3}>
-					{sizes.map(size => (
-						<Card key={size} title={t(`pricing.size.${size}.name`)} marker={size.toUpperCase()}>
-							<p className={styles.price}>{t(`pricing.size.${size}.price`)}</p>
-							<p>{t(`pricing.size.${size}.covers`)}</p>
+					{ladderSteps.map((step, index) => (
+						<Card key={step} title={t(`pricing.step.${step}.name`)} marker={`${index + 1}`}>
+							<p className={styles.price}>{t(`pricing.step.${step}.price`)}</p>
+							<p>{t(`pricing.step.${step}.covers`)}</p>
 						</Card>
 					))}
 				</Grid>
-				<p className={styles.note}>{t('home.sizes.note')}</p>
+				<p className={styles.note}>{t('home.ladder.note')}</p>
 				<div>
 					<ButtonLink to={pathTo('pricing')} color="secondary" size="small">
-						{t('home.sizes.cta')}
+						{t('home.ladder.cta')}
 					</ButtonLink>
 				</div>
 			</Section>
