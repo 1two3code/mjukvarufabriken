@@ -1,7 +1,7 @@
 import styles from './PaymentPanel.module.css'
 
 import { useTranslation } from 'react-i18next'
-import { paymentAmounts } from '@mf/models'
+import { isFullUpfront, paymentAmounts, requiredPaymentKinds } from '@mf/models'
 
 import {
 	useCompleteFakeCheckoutMutation,
@@ -25,6 +25,8 @@ const dueIn: Record<PaymentKind, OrderDetail['order']['status']> = {
 
 type PaymentRowProps = {
 	kind: PaymentKind
+	/** Locale key suffix: `full` for the single 100 % payment of a full-upfront order */
+	label: 'deposit' | 'balance' | 'full'
 	priceSek: number
 	paid?: Payment
 	/** A Checkout session opened but not completed yet */
@@ -33,7 +35,7 @@ type PaymentRowProps = {
 	orderId: string
 }
 
-function PaymentRow({ kind, priceSek, paid, pending, due, orderId }: PaymentRowProps) {
+function PaymentRow({ kind, label, priceSek, paid, pending, due, orderId }: PaymentRowProps) {
 	const { t, i18n } = useTranslation()
 	const [createCheckout, { isLoading }] = useCreateCheckoutMutation()
 	const [completeFake, { isLoading: isCompletingFake }] = useCompleteFakeCheckoutMutation()
@@ -55,7 +57,7 @@ function PaymentRow({ kind, priceSek, paid, pending, due, orderId }: PaymentRowP
 	return (
 		<li className={[styles.row, paid ? styles.paid : ''].join(' ')}>
 			<div className={styles.rowHeader}>
-				<span className={styles.kind}>{t(`payment.kind.${kind}`)}</span>
+				<span className={styles.kind}>{t(`payment.kind.${label}`)}</span>
 				<span className={styles.state}>
 					{paid
 						? t('payment.paidAt', {
@@ -100,7 +102,7 @@ function PaymentRow({ kind, priceSek, paid, pending, due, orderId }: PaymentRowP
 			{due && !paid && (
 				<div className={styles.actions}>
 					<Button disabled={isLoading || isCompletingFake} onClick={handlePay}>
-						{t(`payment.action.pay.${kind}`)}
+						{t(`payment.action.pay.${label}`)}
 					</Button>
 				</div>
 			)}
@@ -108,21 +110,27 @@ function PaymentRow({ kind, priceSek, paid, pending, due, orderId }: PaymentRowP
 	)
 }
 
-/** Deposit + balance with Stripe-hosted invoice/receipt links; the due one has a pay button */
+/**
+ * The order's payments with Stripe-hosted invoice/receipt links; the due one has a pay button.
+ * An order priced below the full-upfront threshold shows a single 100 % payment instead of the
+ * deposit/balance split (pricing ladder 2026-08-31).
+ */
 export function PaymentPanel({ detail }: PaymentPanelProps) {
 	const { t } = useTranslation()
 	const { order, payments } = detail
 	if (order.priceSek === undefined) return null
+	const fullUpfront = isFullUpfront(order.priceSek)
 
 	return (
 		<section className={styles.panel}>
 			<h2 className={styles.title}>{t('payment.title')}</h2>
-			<p className={styles.intro}>{t('payment.intro')}</p>
+			<p className={styles.intro}>{t(fullUpfront ? 'payment.introFull' : 'payment.intro')}</p>
 			<ul className={styles.list}>
-				{(['deposit', 'balance'] as const).map(kind => (
+				{requiredPaymentKinds(order.priceSek).map(kind => (
 					<PaymentRow
 						key={kind}
 						kind={kind}
+						label={fullUpfront ? 'full' : kind}
 						priceSek={order.priceSek!}
 						paid={paymentOf(payments, kind, 'paid')}
 						pending={paymentOf(payments, kind, 'pending')}

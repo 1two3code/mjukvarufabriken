@@ -109,7 +109,7 @@ export function OrderPage() {
 				</p>
 			)}
 
-			<OrderStepper status={order.status} />
+			<OrderStepper status={order.status} priceSek={order.priceSek} />
 
 			<div className={styles.layout}>
 				<section className={styles.next}>

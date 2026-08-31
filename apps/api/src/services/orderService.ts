@@ -3,6 +3,7 @@ import {
 	canTransitionOrder,
 	customerCancellableOrderStatus,
 	isActiveJobStatus,
+	isFullUpfront,
 	isSpecComplete,
 	orderTransitions,
 } from '@mf/models'
@@ -126,7 +127,25 @@ const plugin: FastifyPluginAsync = async app => {
 		// With the per-order flag on, the (already-delivered) build parks the order for a human to
 		// approve; without the flag the order auto-delivers exactly as before.
 		const next: OrderStatus = order.approveBeforeDeliver ? 'awaiting_approval' : 'delivered'
-		return (await db.orders.transition(order.id, ['building'], next)) ?? order
+		const updated = (await db.orders.transition(order.id, ['building'], next)) ?? order
+		return settleFullUpfront(updated)
+	}
+
+	/**
+	 * A full-upfront order (priced below the 3 000 kr threshold, pricing ladder 2026-08-31) has
+	 * no balance payment: the whole price was in the upfront Checkout. Once such an order is
+	 * `delivered` — and the upfront payment really is in, so an admin-override build (`frozen →
+	 * building`, no payment) still invoices normally — it closes as `paid` right away.
+	 */
+	const settleFullUpfront = async (order: Order) => {
+		if (order.status !== 'delivered') return order
+		if (order.priceSek === undefined || !isFullUpfront(order.priceSek)) return order
+		const payments = await db.orders.listPayments(order.id)
+		const upfrontPaid = payments.some(
+			payment => payment.kind === 'deposit' && payment.status === 'paid'
+		)
+		if (!upfrontPaid) return order
+		return (await db.orders.transition(order.id, ['delivered'], 'paid')) ?? order
 	}
 
 	app.decorate('orderService', {
@@ -137,7 +156,7 @@ const plugin: FastifyPluginAsync = async app => {
 			if (order.status !== 'awaiting_approval') {
 				throw new InvalidOrderTransition(orderId, order.status, 'delivered')
 			}
-			return transition(orderId, 'delivered')
+			return settleFullUpfront(await transition(orderId, 'delivered'))
 		},
 		setApprovalGate: async (orderId, enabled, session) => {
 			// Org-scoped read first: another org's order is EntityNotFound before any write
