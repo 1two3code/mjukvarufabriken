@@ -1,6 +1,6 @@
 import { topologicalOrder } from './dag.ts'
 import { exec, git, tail } from './exec.ts'
-import { renderSpecForPlanning } from './planner.ts'
+import { renderFencedSpec } from './planner.ts'
 import { totalTokens } from './types.ts'
 import { ensureShared, repoConventions, runSession } from './worker.ts'
 
@@ -46,8 +46,7 @@ Resolve every conflict so that BOTH the existing main behaviour and the task's w
 Task description for context:
 ${task.description}
 
-The spec:
-${renderSpecForPlanning(spec)}
+${renderFencedSpec(spec)}
 
 ${repoConventions}`
 

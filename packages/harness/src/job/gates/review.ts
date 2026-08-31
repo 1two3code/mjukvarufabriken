@@ -3,7 +3,7 @@ import { isAbsolute, resolve } from 'node:path'
 
 import { z } from 'zod'
 
-import { renderSpecForPlanning } from '#job/planner.ts'
+import { renderFencedSpec } from '#job/planner.ts'
 
 import type { ReviewFinding, Spec } from '@mf/models'
 
@@ -148,8 +148,7 @@ Be skeptical, not generous: if the code does not clearly do what the claim says,
 # Findings to disprove
 ${renderFindingsForSkeptic(findings)}
 
-# The spec
-${renderSpecForPlanning(spec)}`
+${renderFencedSpec(spec)}`
 
 /** The user turn that starts a skeptic session */
 export const skepticPrompt = (range: string) =>

@@ -15,7 +15,7 @@ import {
 	tail,
 	workerEnv,
 } from './exec.ts'
-import { renderSpecForPlanning } from './planner.ts'
+import { renderFencedSpec } from './planner.ts'
 import { openTranscript, transcriptsDir } from './transcript.ts'
 import { addUsage, cost, emptyUsage, totalTokens } from './types.ts'
 import { createUsageAccumulator } from './usage.ts'
@@ -241,8 +241,7 @@ Stay within your task: do not implement the other tasks in the plan, but keep in
 ${plan.summary}
 ${plan.tasks.map(item => `- ${item.id}: ${item.title}${item.id === task.id ? ' (YOU)' : ''}`).join('\n')}
 
-# The spec
-${renderSpecForPlanning(spec)}
+${renderFencedSpec(spec)}
 
 # ${taskConventions}`
 }
