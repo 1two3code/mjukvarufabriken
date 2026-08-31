@@ -1,5 +1,5 @@
 import fp from 'fastify-plugin'
-import { createSpecEngine, estimatePrice } from '@mf/harness'
+import { createSpecEngine, estimatePrice, sizePricesFromTiers } from '@mf/harness'
 import { isSpecComplete } from '@mf/models'
 
 import { EntityInvalid, EntityNotFound } from '#/lib/entityError.ts'
@@ -42,6 +42,13 @@ const plugin: FastifyPluginAsync = async app => {
 	const { db, anthropic, secrets } = app
 	const engine = createSpecEngine({ client: anthropic, model: secrets.specModel })
 
+	/**
+	 * Build prices per size class from the operator-editable `pricing_tiers` table. An empty
+	 * table (the in-memory db, a fresh install) falls back to the ladder defaults in
+	 * `priceForSize`; a db error fails the request rather than quoting a stale default.
+	 */
+	const sizePrices = async () => sizePricesFromTiers(await db.pricingTiers.list())
+
 	const get: FastifyInstance['specService']['get'] = async (orderId, session) => {
 		const existing = await db.orders.get(orderId)
 		if (!existing || (session.role !== 'admin' && existing.orgId !== session.orgId)) {
@@ -57,7 +64,7 @@ const plugin: FastifyPluginAsync = async app => {
 			if (draft.status === 'frozen') throw new EntityInvalid('spec', orderId)
 
 			const turn = await engine.nextTurn(draft, content)
-			const price = turn.complete ? estimatePrice(turn.spec) : undefined
+			const price = turn.complete ? estimatePrice(turn.spec, await sizePrices()) : undefined
 			const updated: SpecDraft = {
 				...draft,
 				status: turn.complete ? 'ready' : 'drafting',
@@ -80,7 +87,7 @@ const plugin: FastifyPluginAsync = async app => {
 			if (draft.status === 'frozen') return draft
 			if (!isSpecComplete(draft.spec)) throw new EntityInvalid('spec', orderId)
 
-			const price = estimatePrice(draft.spec)
+			const price = estimatePrice(draft.spec, await sizePrices())
 			const frozen: SpecDraft = {
 				...draft,
 				status: 'frozen',

@@ -1,7 +1,47 @@
-import type { PartialSpec, SizeClass, Spec } from '@mf/models'
+import type { PartialSpec, PricingTierRow, SizeClass, Spec } from '@mf/models'
 
-/** Fixed price per size class, SEK ex moms (PLAN.md decision 2026-08-26) */
-export const priceForSize: Record<SizeClass, number> = { S: 15_000, M: 45_000, L: 120_000 }
+/**
+ * S/M/L survive as INTERNAL build-size classes (budgets, worker caps, duration limits) but no
+ * longer carry a price of their own: the customer price comes from the operator-editable
+ * `pricing_tiers` table via `sizePricesFromTiers`, with `priceForSize` as the code fallback.
+ */
+
+/** `pricing_tiers` row key that prices a build of each size class (seeded by migration 0020) */
+export const tierKeyForSize: Record<SizeClass, string> = {
+	S: 'build_s',
+	M: 'build_m',
+	L: 'build_l',
+}
+
+/**
+ * Fallback price per size class, SEK ex moms — the decided ladder (strategy 2026-08-31: real
+ * build 3–5 k kr by size). Used when the tiers table has no effective row for the size, so the
+ * in-memory db and a fresh install price correctly without any seed.
+ */
+export const priceForSize: Record<SizeClass, number> = { S: 3_000, M: 4_000, L: 5_000 }
+
+/** Hard price ceiling, SEK ex moms: nothing is offered above this (strategy 2026-08-31) */
+export const priceCeilingSek = 5_000
+
+/** Price per size class as read from the tiers table; a missing size falls back to `priceForSize` */
+export type SizePrices = Partial<Record<SizeClass, number>>
+
+/**
+ * The effective build price per size class from the `pricing_tiers` rows: for each size's tier
+ * key, the SEK row with the latest `effectiveFrom` that is not in the future wins. Sizes without
+ * such a row are left out (the estimator falls back to `priceForSize`).
+ */
+export const sizePricesFromTiers = (tiers: PricingTierRow[], at = new Date()): SizePrices => {
+	const prices: SizePrices = {}
+	for (const [size, tierKey] of Object.entries(tierKeyForSize) as [SizeClass, string][]) {
+		const effective = tiers
+			.filter(tier => tier.tierKey === tierKey && tier.currency === 'SEK')
+			.filter(tier => new Date(tier.effectiveFrom).getTime() <= at.getTime())
+			.sort((a, b) => b.effectiveFrom.localeCompare(a.effectiveFrom))[0]
+		if (effective) prices[size] = Math.round(effective.price)
+	}
+	return prices
+}
 
 const smallMaxFeatures = 3
 const smallMaxCriteria = 6
@@ -65,7 +105,12 @@ export const sizeClass = (spec: PartialSpec): SizeClass => {
 
 export type PriceEstimate = { sizeClass: SizeClass; priceSek: number }
 
-export const estimatePrice = (spec: Spec | PartialSpec): PriceEstimate => {
+/**
+ * Prices the spec: size class from the deterministic classifier, price from the tiers table
+ * (`prices`, see `sizePricesFromTiers`) with `priceForSize` as fallback. The hard ceiling is
+ * applied last, so not even a mistyped tier row can quote above it.
+ */
+export const estimatePrice = (spec: Spec | PartialSpec, prices: SizePrices = {}): PriceEstimate => {
 	const size = sizeClass(spec)
-	return { sizeClass: size, priceSek: priceForSize[size] }
+	return { sizeClass: size, priceSek: Math.min(prices[size] ?? priceForSize[size], priceCeilingSek) }
 }

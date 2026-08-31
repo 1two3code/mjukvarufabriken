@@ -1,6 +1,13 @@
-import { estimatePrice, priceForSize, sizeClass } from '#spec/priceEstimator.ts'
+import {
+	estimatePrice,
+	priceCeilingSek,
+	priceForSize,
+	sizePricesFromTiers,
+	sizeClass,
+	tierKeyForSize,
+} from '#spec/priceEstimator.ts'
 
-import type { PartialSpec, SpecFeature } from '@mf/models'
+import type { PartialSpec, PricingTierRow, SpecFeature } from '@mf/models'
 
 const feature = (title: string, criteria = 1, description = ''): SpecFeature => ({
 	title,
@@ -17,14 +24,15 @@ const baseSpec = (features: SpecFeature[]): PartialSpec => ({
 })
 
 describe('priceEstimator', () => {
-	it('Maps size classes to the fixed price list', () => {
-		expect(priceForSize).toEqual({ S: 15_000, M: 45_000, L: 120_000 })
+	it('Falls back to the decided ladder prices per size class, capped at the ceiling', () => {
+		expect(priceForSize).toEqual({ S: 3_000, M: 4_000, L: 5_000 })
+		expect(Math.max(...Object.values(priceForSize))).toBe(priceCeilingSek)
 	})
 
 	it('Classifies ≤ 3 features with ≤ 6 criteria as S', () => {
 		const spec = baseSpec([feature('List', 2), feature('Create', 2), feature('Edit', 2)])
 		expect(sizeClass(spec)).toBe('S')
-		expect(estimatePrice(spec)).toEqual({ sizeClass: 'S', priceSek: 15_000 })
+		expect(estimatePrice(spec)).toEqual({ sizeClass: 'S', priceSek: 3_000 })
 	})
 
 	it('Classifies 3 features with 7 criteria as M', () => {
@@ -34,7 +42,7 @@ describe('priceEstimator', () => {
 
 	it('Classifies 4–7 plain features as M', () => {
 		const spec = baseSpec(['a', 'b', 'c', 'd', 'e'].map(title => feature(title)))
-		expect(estimatePrice(spec)).toEqual({ sizeClass: 'M', priceSek: 45_000 })
+		expect(estimatePrice(spec)).toEqual({ sizeClass: 'M', priceSek: 4_000 })
 	})
 
 	it('Classifies ≥ 8 features as L', () => {
@@ -72,5 +80,52 @@ describe('priceEstimator', () => {
 
 	it('Handles an empty partial spec as S', () => {
 		expect(sizeClass({})).toBe('S')
+	})
+
+	describe('prices from the tiers table', () => {
+		const tier = (overrides: Partial<PricingTierRow>): PricingTierRow => ({
+			id: 'tier-1',
+			tierKey: 'build_s',
+			name: 'Build (small)',
+			price: 3_000,
+			currency: 'SEK',
+			description: '',
+			effectiveFrom: '2026-08-31T00:00:00.000Z',
+			createdAt: '2026-08-31T00:00:00.000Z',
+			...overrides,
+		})
+		const at = new Date('2026-09-15T00:00:00.000Z')
+
+		it('Reads the effective SEK row per size and falls back for missing sizes', () => {
+			const tiers = [
+				tier({ price: 2_500 }),
+				tier({ id: 'tier-2', tierKey: 'build_l', price: 4_800 }),
+				tier({ id: 'tier-3', tierKey: 'demo', price: 500 }),
+			]
+			expect(sizePricesFromTiers(tiers, at)).toEqual({ S: 2_500, L: 4_800 })
+
+			const spec = baseSpec([feature('List', 1)])
+			expect(estimatePrice(spec, sizePricesFromTiers(tiers, at)).priceSek).toBe(2_500)
+			expect(estimatePrice(baseSpec([]), {})).toEqual({ sizeClass: 'S', priceSek: 3_000 })
+		})
+
+		it('Lets the latest non-future row win and ignores future and non-SEK rows', () => {
+			const tiers = [
+				tier({ price: 3_000, effectiveFrom: '2026-08-31T00:00:00.000Z' }),
+				tier({ id: 'tier-2', price: 2_000, effectiveFrom: '2026-09-10T00:00:00.000Z' }),
+				tier({ id: 'tier-3', price: 1_000, effectiveFrom: '2027-01-01T00:00:00.000Z' }),
+				tier({ id: 'tier-4', price: 100, currency: 'USD', effectiveFrom: '2026-09-12T00:00:00.000Z' }),
+			]
+			expect(sizePricesFromTiers(tiers, at)).toEqual({ S: 2_000 })
+		})
+
+		it('Caps any configured price at the hard ceiling', () => {
+			const spec = baseSpec([feature('List', 1)])
+			expect(estimatePrice(spec, { S: 9_000 }).priceSek).toBe(priceCeilingSek)
+		})
+
+		it('Maps every size class to a build tier key', () => {
+			expect(tierKeyForSize).toEqual({ S: 'build_s', M: 'build_m', L: 'build_l' })
+		})
 	})
 })

@@ -20,7 +20,7 @@ describe('POST /bff/orders/:orderId/spec/freeze route', () => {
 			orderId: 'order-1',
 			status: 'frozen',
 			spec: { ...createMockSpec(), sizeClass: 'S' },
-			priceSek: 15_000,
+			priceSek: 3_000,
 			frozenAt: '2026-08-26T12:00:00.000Z',
 		})
 		vi.spyOn(app.specService, 'freeze').mockResolvedValue(frozen)

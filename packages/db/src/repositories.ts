@@ -415,9 +415,11 @@ export type ModelPricesRepository = {
 // MARK: Pricing tiers (customer-facing offer)
 
 /**
- * The operator-editable pricing-tier table (migration 0019). Append-only, same shape as
- * `ModelPricesRepository`: a new row for a `tierKey` takes effect from its `effectiveFrom` on.
- * Shape only — nothing in the app reads this yet (PLAN.md "Pricing v1" is under revision).
+ * The operator-editable pricing-tier table (migration 0019, seeded with the decided ladder in
+ * 0020). Append-only, same shape as `ModelPricesRepository`: a new row for a `tierKey` takes
+ * effect from its `effectiveFrom` on. The spec engine's price estimate reads the `build_s/m/l`
+ * rows at freeze time (`sizePricesFromTiers` in @mf/harness); the other rows are the admin's
+ * price list for tiers whose flows are not built yet.
  */
 export type PricingTiersRepository = {
 	/** Every row, newest `effectiveFrom` first — the admin's full history */

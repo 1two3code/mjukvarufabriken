@@ -7,12 +7,10 @@ import { z } from 'zod'
  * `model_prices` (`ModelPrice.ts`): append-only, one row per (`tierKey`, `effectiveFrom`), a
  * later row for the same key takes over from its `effectiveFrom` on.
  *
- * This is intentionally just the SHAPE, not a decision — PLAN.md's "Pricing v1" is explicitly
- * under revision (2026-08-30) with no numbers, tier count, or currency settled yet (a possible
- * free tier, a cheap entry tier, an upsell tier, a subscription tier — all still open). Nothing
- * in the app reads this table yet: no order flow, no `priceEstimator.ts`. It only gives an
- * admin a place to type tiers in — and change them — once pricing is decided, without another
- * code change.
+ * Seeded (migration 0020) with the pricing ladder decided 2026-08-31: `demo` 500 kr,
+ * `build_s/m/l` 3–5 k kr (read by `priceEstimator.ts` at spec freeze via `sizePricesFromTiers`),
+ * `managed_monthly` 600 kr/mo. An admin reprices by inserting a later row for the same key —
+ * no code change needed.
  */
 export const PricingTierRowSchema = z.object({
 	id: z.string(),

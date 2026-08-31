@@ -124,7 +124,7 @@ describe('Spec Service', () => {
 			expect(draft.status).toBe('ready')
 			expect(draft.openQuestions).toEqual([])
 			expect(draft.spec.sizeClass).toBe('S')
-			expect(draft.priceSek).toBe(15_000)
+			expect(draft.priceSek).toBe(3_000)
 			expect(draft.messages).toHaveLength(4)
 		})
 
@@ -200,10 +200,29 @@ describe('Spec Service', () => {
 				status: 'frozen',
 				spec: { ...ready.spec, sizeClass: 'S' },
 				openQuestions: [],
-				priceSek: 15_000,
+				priceSek: 3_000,
 				frozenAt: expect.any(String),
 			})
 			await expect(app.db.orders.get('order-1')).resolves.toEqual(frozen)
+		})
+
+		it('Reads the build price from the pricing_tiers table when seeded', async () => {
+			// Arrange: an admin repriced the S build; the latest effective row wins over the default
+			await app.db.pricingTiers.insert({
+				tierKey: 'build_s',
+				name: 'Build (small)',
+				price: 2_500,
+				currency: 'SEK',
+				description: '',
+				effectiveFrom: '2026-08-31T00:00:00.000Z',
+			})
+			await seed(createMockSpecDraft({ status: 'ready', spec: createMockSpec() }))
+
+			// Act
+			const frozen = await app.specService.freeze('order-1', user)
+
+			// Assert
+			expect(frozen.priceSek).toBe(2_500)
 		})
 
 		it('Is idempotent for an already frozen draft', async () => {
