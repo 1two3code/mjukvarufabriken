@@ -374,7 +374,7 @@ describe('offline build-job e2e', () => {
 			const deliverySteps = events
 				.filter(event => event.type === 'delivery')
 				.map(event => (event.payload as { step: string }).step)
-			expect(deliverySteps).toEqual(['docs', 'repo', 'deploy', 'bundle'])
+			expect(deliverySteps).toEqual(['docs', 'repo', 'deploy', 'acceptance', 'bundle'])
 			expect(types().at(-1)).toBe('done')
 
 			// The fake artifact store received the whole bundle

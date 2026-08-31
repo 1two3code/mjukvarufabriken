@@ -17,14 +17,22 @@ import {
 	defaultGitHubOrg,
 } from './github.ts'
 import { createCodeBuildImageBuilder } from './imageBuild.ts'
+import {
+	createDryRunLiveCheck,
+	createFakeLiveCheck,
+	createLiveAcceptanceCheck,
+} from './liveAcceptance.ts'
 import { createFakeProseWriter, createLiveProseWriter } from './prose.ts'
 import { createWiredSmokeCheck } from './wiredSmoke.ts'
 
 import type { GitHubAppAuth } from './github.ts'
-import type { DeliveryClients, PreviewAuth } from './types.ts'
+import type { PreviewTokenMinter } from './liveAcceptance.ts'
+import type { DbProvisioner, DeliveryClients, PreviewAuth } from './types.ts'
 
 export * from './artifacts.ts'
+export * from './authReconcile.ts'
 export * from './bootArtifact.ts'
+export * from './liveAcceptance.ts'
 export * from './wiredSmoke.ts'
 export * from './bundle.ts'
 export * from './deliver.ts'
@@ -94,6 +102,17 @@ export type LiveDeliveryOptions = {
 	artifactsRoleArn?: string
 	region?: string
 	workerModel?: string
+	/**
+	 * Provisions the delivered app's database through the api's internal endpoint (the job's
+	 * report credentials, wired by apps/job). Absent → an app that needs a database fails closed
+	 * at the deploy step (docs/DELIVERED-DB.md).
+	 */
+	dbProvisioner?: DbProvisioner
+	/**
+	 * Mints a short-lived preview access token through the api (apps/job wires the report
+	 * credentials) so the post-deploy acceptance check can exercise auth-gated routes.
+	 */
+	mintPreviewToken?: PreviewTokenMinter
 	/** Log instead of calling GitHub / ECS Express / S3 */
 	dryRun?: boolean
 	log?: (line: string) => void
@@ -142,6 +161,8 @@ export const createLiveDeliveryClients = ({
 	artifactsRoleArn,
 	region = process.env.AWS_REGION || 'eu-north-1',
 	workerModel,
+	dbProvisioner,
+	mintPreviewToken,
 	dryRun = false,
 	log = line => console.log(JSON.stringify({ message: line })),
 }: LiveDeliveryOptions): DeliveryClients => {
@@ -163,6 +184,8 @@ export const createLiveDeliveryClients = ({
 				? createLiveProseWriter({ model: workerModel })
 				: undefined,
 			boot: createDryRunBootCheck(log),
+			liveCheck: createDryRunLiveCheck(log),
+			dbProvisioner,
 			githubOrg,
 			previewAuth,
 			dryRun: true,
@@ -213,6 +236,11 @@ export const createLiveDeliveryClients = ({
 		// the backend does not serve (a 404, e.g. a `/bff` prefix the worker skipped) fails here, so
 		// a dead-in-browser app never gets deployed even though the gates and a plain boot pass.
 		boot: createWiredSmokeCheck(),
+		// Visits the LIVE preview URL after the deploy — headless render + token-aware API probes —
+		// so a deployed-but-dead app (blank page, 401-locked routes, dead database) is never handed
+		// to the customer as a working URL.
+		liveCheck: createLiveAcceptanceCheck({ mintToken: mintPreviewToken }),
+		dbProvisioner,
 		githubOrg,
 		previewAuth,
 	}
@@ -225,4 +253,5 @@ export const createFakeDeliveryClients = (): DeliveryClients => ({
 	artifacts: createFakeArtifactStore(),
 	prose: createFakeProseWriter(),
 	boot: createFakeBootCheck(),
+	liveCheck: createFakeLiveCheck(),
 })

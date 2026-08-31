@@ -9,6 +9,7 @@ import type {
 	Spec,
 } from '@mf/models'
 import type { TokenUsage } from '#job/types.ts'
+import type { LiveCheck } from './liveAcceptance.ts'
 
 // MARK: Target
 
@@ -102,6 +103,18 @@ export type BootCheck = {
 	}) => Promise<{ ok: boolean; output: string; reason?: string }>
 }
 
+/**
+ * Provisions the delivered app's own database (a dedicated database + login role on the
+ * platform's Postgres, docs/DELIVERED-DB.md). Implemented by the api's
+ * `/internal/jobs/:jobId/database` endpoint, called with the job's report token — the build
+ * container NEVER holds the admin database credentials, it only receives the scoped URL back.
+ * Absent (local db-mode runs, older callers) → an app that needs a database fails closed: the
+ * deploy is skipped with a clear reason instead of shipping a live-but-dead URL.
+ */
+export type DbProvisioner = {
+	provision: (input?: { signal?: AbortSignal }) => Promise<{ databaseUrl: string }>
+}
+
 export type ArtifactStore = {
 	/** Which backend backs the store — real S3, dry-run logger, in-memory fake, or unconfigured */
 	kind: 's3' | 'dry-run' | 'fake' | 'none'
@@ -134,6 +147,14 @@ export type DeliveryClients = {
 	 * skipped (gates-only runs, older callers); provided → a boot failure skips the deploy.
 	 */
 	boot?: BootCheck
+	/**
+	 * Post-deploy end-to-end acceptance check (liveAcceptance.ts): probes the LIVE preview URL
+	 * like a customer. Omitted → the step is skipped (older callers); a failure withholds the
+	 * URL from the deliverable and pages the admins.
+	 */
+	liveCheck?: LiveCheck
+	/** Provisions the delivered app's database when it needs one (docs/DELIVERED-DB.md) */
+	dbProvisioner?: DbProvisioner
 	/** GitHub organisation that owns customer repos (default `mjukvaruhuset`) */
 	githubOrg?: string
 	/** IdP for the preview api; without it the Express deploy step is not attempted */

@@ -1,5 +1,5 @@
 import { deliverableKeyOf, uploadBundle, uploadSite, uploadSource } from './bundle.ts'
-import { buildEnvManifest } from './envManifest.ts'
+import { buildEnvManifest, detectDatabaseNeed } from './envManifest.ts'
 import { curateWorkflows, stripInternalGitArtifacts } from './curate.ts'
 import { writeDocs } from './docs.ts'
 import { defaultGitHubOrg } from './github.ts'
@@ -41,11 +41,29 @@ export const deployFailedNotification = (
 })
 
 /**
- * Delivery after green gates, in four steps that each emit a `delivery` event:
- *   docs   — HANDOVER.md / TEST-REPORT.md / README.md written + committed
- *   repo   — private GitHub repo `mjukvaruhuset/<slug>`, main pushed, customer added as admin
- *   deploy — ECS Express service (built image → managed URL) + SPA build to the artifacts bucket
- *   bundle — repo.zip, docs and the gate/acceptance reports under `deliverables/<jobId>/`
+ * The `notify` payload when the service deployed but the post-deploy acceptance check found the
+ * live app broken — the URL is withheld from the deliverable (never presented as working), the
+ * service stays up for the admins to inspect and remains recorded for teardown.
+ */
+export const acceptanceFailedNotification = (
+	jobId: string,
+	deployUrl: string,
+	reason: string
+): NotifyPayload => ({
+	to: 'admins',
+	subject: `Build job ${jobId} deployed but FAILED the live acceptance check`,
+	text: `Job ${jobId}'s preview deployed to ${deployUrl}, but probing it like a customer found it broken — the URL was withheld from the deliverable:\n\n${reason}\n\nThe service is still up for inspection (and recorded for teardown). Fix and re-deliver, or tear it down.`,
+})
+
+/**
+ * Delivery after green gates, in five steps that each emit a `delivery` event:
+ *   docs       — HANDOVER.md / TEST-REPORT.md / README.md written + committed
+ *   repo       — private GitHub repo `mjukvaruhuset/<slug>`, main pushed, customer added as admin
+ *   deploy     — ECS Express service (built image → managed URL) + SPA build to the artifacts
+ *                bucket; an app that needs a database gets one provisioned first (or no deploy)
+ *   acceptance — the LIVE URL probed like a customer (liveAcceptance.ts); a failure withholds
+ *                the URL from the deliverable and pages the admins
+ *   bundle     — repo.zip, docs and the gate/acceptance reports under `deliverables/<jobId>/`
  * The repo push and the bundle are the contract (`ok`); a failed deploy leaves `deployUrl`
  * null and raises a `notify` event for the admins. A docs failure is fatal: without the commit
  * the repo and the archive would be wrong.
@@ -71,6 +89,8 @@ export const deliver = async (
 		artifacts,
 		prose,
 		boot,
+		liveCheck,
+		dbProvisioner,
 		previewAuth,
 		githubOrg = defaultGitHubOrg,
 		dryRun,
@@ -199,11 +219,40 @@ export const deliver = async (
 			() => {}
 		)
 	}
+	// D1 (docs/DELIVERED-DB.md): an app that needs a real database gets its own one provisioned
+	// through the api (the job never holds admin DB credentials, only the scoped URL that comes
+	// back) — or, when provisioning is unavailable or fails, NO deploy at all: a live URL whose
+	// every read/write 500s against a database that does not exist is worse than no URL.
+	let dbBlocked: string | undefined
+	const dbNeed = await detectDatabaseNeed(repoDir, manifest.required)
+	if (dbNeed.needed && !dryRun) {
+		if (!dbProvisioner) {
+			dbBlocked = `the app needs a database (${dbNeed.evidence.join('; ')}) but database provisioning is not configured — deploy skipped instead of shipping a live-but-dead app`
+		} else {
+			try {
+				const { databaseUrl } = await dbProvisioner.provision({ signal })
+				manifest.env.DATABASE_URL = databaseUrl
+				manifest.placeholders = manifest.placeholders.filter(name => name !== 'DATABASE_URL')
+				manifest.todos = manifest.todos.filter(todo => !todo.includes('DATABASE_URL'))
+				// The placeholder TODO for DATABASE_URL is resolved now — recompute the step reason
+				deployReason = manifest.todos.length ? manifest.todos.join('\n') : undefined
+				await emit({
+					type: 'log',
+					payload: { message: `database provisioned for the delivered app (${dbNeed.evidence.join('; ')})` },
+				}).catch(() => {})
+			} catch (error) {
+				dbBlocked = `database provisioning failed: ${(error as Error).message} — deploy skipped (the app needs a database: ${dbNeed.evidence.join('; ')})`
+			}
+		}
+	}
 	// Acceptance smoke: boot the built artifact before standing up a service. In-process green
 	// (lint + vitest) does not prove `node src/index.ts` boots — an env-contract mismatch or a
 	// CJS/ESM interop crash only shows here. A boot failure skips the deploy (no crashlooping 503).
-	const bootResult = boot ? await boot.boot({ repoDir, env: manifest.env, signal }) : undefined
-	if (bootResult && !bootResult.ok) {
+	const bootResult =
+		boot && !dbBlocked ? await boot.boot({ repoDir, env: manifest.env, signal }) : undefined
+	if (dbBlocked) {
+		deployReason = dbBlocked
+	} else if (bootResult && !bootResult.ok) {
 		deployReason = `acceptance boot: the built app did not start — ${bootResult.reason ?? 'no "Server listening"'}`
 	} else {
 		try {
@@ -248,6 +297,30 @@ export const deliver = async (
 			payload: deployFailedNotification(jobId, repositoryUrl, deployReason ?? 'unknown'),
 		}).catch(() => {})
 	}
+	if (aborted()) return aborted()!
+
+	// MARK: acceptance (post-deploy end-to-end — visit the LIVE URL like the customer will)
+	// A deployed service that fails this check is NOT handed out: `deployUrl` is withheld from the
+	// deliverable (the service itself stays up, recorded, for the admins to inspect / tear down).
+	if (deployUrl !== null && liveCheck) {
+		const live = await liveCheck
+			.check({ url: deployUrl, repoDir, signal })
+			.catch(error => ({
+				ok: false,
+				reason: `live acceptance check crashed: ${(error as Error).message}`,
+				probes: [],
+			}))
+		await step({ step: 'acceptance', ok: live.ok, url: deployUrl, reason: live.reason })
+		if (!live.ok) {
+			const reason = live.reason ?? 'live acceptance check failed'
+			deployReason = deployReason ? `${deployReason}\n${reason}` : reason
+			await emit({
+				type: 'notify',
+				payload: acceptanceFailedNotification(jobId, deployUrl, reason),
+			}).catch(() => {})
+			deployUrl = null
+		}
+	}
 
 	// MARK: bundle
 	try {
@@ -265,8 +338,9 @@ export const deliver = async (
 			repositoryUrl,
 			transferPending: transferPending !== undefined,
 			deployUrl,
-			// Only carried when a service was actually stood up (deployUrl non-null)
-			...(deployUrl !== null && deployedService && { deployedService }),
+			// Carried whenever a service was actually stood up — even when the live acceptance check
+			// failed and the URL was withheld, the service exists and must be teardownable
+			...(deployedService && { deployedService }),
 			siteUrl,
 			deliverableKey: deliverableKeyOf(jobId),
 			files,

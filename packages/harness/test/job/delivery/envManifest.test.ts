@@ -4,6 +4,7 @@ import { join } from 'node:path'
 
 import {
 	buildEnvManifest,
+	detectDatabaseNeed,
 	detectRequiredEnv,
 	isPlaceholderValue,
 	isSelfIssuedSecret,
@@ -202,5 +203,44 @@ describe('buildEnvManifest', () => {
 		const manifest = await buildEnvManifest(repoDir, undefined)
 		expect(manifest.env.AUTH_AUDIENCE).toBe(placeholderValue('AUTH_AUDIENCE'))
 		expect(manifest.placeholders).toEqual(['AUTH_AUDIENCE'])
+	})
+})
+
+describe('detectDatabaseNeed', () => {
+	let repoDir: string
+	beforeEach(async () => {
+		repoDir = await mkdtemp(join(tmpdir(), 'mf-dbneed-'))
+	})
+	afterEach(() => rm(repoDir, { recursive: true, force: true }))
+
+	it('a repo with no DB signal needs nothing', async () => {
+		expect(await detectDatabaseNeed(repoDir, ['AUTH_AUDIENCE'])).toEqual({
+			needed: false,
+			evidence: [],
+		})
+	})
+
+	it('DATABASE_URL in the declared required env is a need', async () => {
+		const need = await detectDatabaseNeed(repoDir, ['DATABASE_URL'])
+		expect(need.needed).toBe(true)
+		expect(need.evidence[0]).toContain('DATABASE_URL')
+	})
+
+	it('a known DB client in package.json dependencies is a need', async () => {
+		await mkdir(join(repoDir, 'apps', 'api'), { recursive: true })
+		await writeFile(
+			join(repoDir, 'apps', 'api', 'package.json'),
+			JSON.stringify({ dependencies: { pg: '^8.0.0', fastify: '^5' } })
+		)
+		const need = await detectDatabaseNeed(repoDir, [])
+		expect(need.needed).toBe(true)
+		expect(need.evidence[0]).toContain('pg')
+	})
+
+	it('a migrations/ directory is a need', async () => {
+		await mkdir(join(repoDir, 'migrations'), { recursive: true })
+		const need = await detectDatabaseNeed(repoDir, [])
+		expect(need.needed).toBe(true)
+		expect(need.evidence[0]).toContain('migrations/')
 	})
 })

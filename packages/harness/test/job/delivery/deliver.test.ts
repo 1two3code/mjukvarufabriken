@@ -9,6 +9,7 @@ import { createFakeBootCheck } from '#job/delivery/bootArtifact.ts'
 import { deliver } from '#job/delivery/deliver.ts'
 import { createFakeGitHubClient } from '#job/delivery/github.ts'
 import { createLiveDeliveryClients } from '#job/delivery/index.ts'
+import { createFakeLiveCheck } from '#job/delivery/liveAcceptance.ts'
 import { createFakeProseWriter } from '#job/delivery/prose.ts'
 import { buildPushInvocation, pushBranch } from '#job/delivery/github.ts'
 import { exec } from '#job/exec.ts'
@@ -494,6 +495,126 @@ describe('deliver', () => {
 		)
 		expect(log).toBeTruthy()
 		expect(outcome.steps[2]).toMatchObject({ step: 'deploy', ok: true })
+	})
+
+	it('Runs the live acceptance check after the deploy and keeps the URL when it is green', async () => {
+		// Arrange
+		const liveCheck = createFakeLiveCheck({ ok: true, probes: [] })
+		const { clients } = createClients({ liveCheck })
+		const input = createInput(repoDir)
+
+		// Act
+		const outcome = await deliver(input, clients)
+
+		// Assert — the check probed the LIVE url and the deliverable keeps it
+		expect(liveCheck.calls).toHaveLength(1)
+		expect(liveCheck.calls[0]!.url).toBe(outcome.deliverable!.deployUrl)
+		expect(liveCheck.calls[0]!.repoDir).toBe(repoDir)
+		expect(outcome.steps.map(step => `${step.step}:${step.ok}`)).toEqual([
+			'docs:true',
+			'repo:true',
+			'deploy:true',
+			'acceptance:true',
+			'bundle:true',
+		])
+	})
+
+	it('Withholds the URL but keeps the service recorded when the live acceptance check fails', async () => {
+		// Arrange — the guestbook shape caught live: the probe reports the visitor locked out
+		const liveCheck = createFakeLiveCheck({
+			ok: false,
+			reason: 'GET /bff/guestbook: 401 for an anonymous visitor and not in publicUrls',
+			probes: [{ method: 'GET', path: '/guestbook', status: 401, ok: false }],
+		})
+		const { clients } = createClients({ liveCheck })
+		const input = createInput(repoDir)
+
+		// Act
+		const outcome = await deliver(input, clients)
+
+		// Assert — still delivered (repo + bundle), but NO working-URL claim; admins paged
+		expect(outcome.ok).toBe(true)
+		expect(outcome.deliverable?.deployUrl).toBeNull()
+		// The service exists and must stay teardownable even though the URL was withheld
+		expect(outcome.deliverable?.deployedService).toBeTruthy()
+		expect(outcome.steps.find(step => step.step === 'acceptance')).toMatchObject({
+			ok: false,
+			reason: expect.stringContaining('401'),
+		})
+		const notify = input.events.find(event => event.type === 'notify')
+		expect(notify?.payload).toMatchObject({
+			subject: expect.stringContaining('FAILED the live acceptance check'),
+		})
+		expect(outcome.reason).toContain('401')
+	})
+
+	it('Skips the deploy when the app needs a database and no provisioner is configured', async () => {
+		// Arrange — D1: a required DATABASE_URL used to ship as a placeholder into a live container
+		await mkdir(join(repoDir, 'apps/api/src/plugins'), { recursive: true })
+		await writeFile(
+			join(repoDir, 'apps/api/src/plugins/secrets.ts'),
+			`const required = ['DATABASE_URL'] as const\n`
+		)
+		const deploy = createFakeDeployClient()
+		const boot = createFakeBootCheck()
+		const { clients } = createClients({ deploy, boot })
+		const input = createInput(repoDir)
+
+		// Act
+		const outcome = await deliver(input, clients)
+
+		// Assert — fail closed: no boot, no service, the reason names the database need
+		expect(deploy.deployments).toEqual([])
+		expect(boot.calls).toEqual([])
+		expect(outcome.deliverable?.deployUrl).toBeNull()
+		expect(outcome.steps[2]).toMatchObject({ step: 'deploy', ok: false })
+		expect(outcome.steps[2]!.reason).toContain('needs a database')
+		expect(outcome.steps[2]!.reason).toContain('DATABASE_URL')
+	})
+
+	it('Provisions the database and injects DATABASE_URL into both the boot and the live container', async () => {
+		// Arrange
+		await mkdir(join(repoDir, 'apps/api/src/plugins'), { recursive: true })
+		await writeFile(
+			join(repoDir, 'apps/api/src/plugins/secrets.ts'),
+			`const required = ['DATABASE_URL'] as const\n`
+		)
+		const databaseUrl = 'postgres://mf_app_11111111:pw@db.internal:5432/mf_app_11111111'
+		const dbProvisioner = { provision: vi.fn().mockResolvedValue({ databaseUrl }) }
+		const deploy = createFakeDeployClient()
+		const boot = createFakeBootCheck()
+		const { clients } = createClients({ deploy, boot, dbProvisioner })
+		const input = createInput(repoDir)
+
+		// Act
+		const outcome = await deliver(input, clients)
+
+		// Assert — the scoped URL (never admin creds) reached the boot smoke AND the live container,
+		// and no DATABASE_URL operator-TODO is left on the step
+		expect(dbProvisioner.provision).toHaveBeenCalledTimes(1)
+		expect(boot.calls[0]!.env.DATABASE_URL).toBe(databaseUrl)
+		expect(deploy.envs[0]!.DATABASE_URL).toBe(databaseUrl)
+		expect(outcome.steps[2]).toMatchObject({ step: 'deploy', ok: true })
+		expect(outcome.steps[2]!.reason ?? '').not.toContain('DATABASE_URL')
+	})
+
+	it('Skips the deploy when database provisioning fails (never a live-but-dead URL)', async () => {
+		// Arrange
+		await mkdir(join(repoDir, 'migrations'), { recursive: true })
+		const dbProvisioner = {
+			provision: vi.fn().mockRejectedValue(new Error('api: 503 no admin database configured')),
+		}
+		const deploy = createFakeDeployClient()
+		const { clients } = createClients({ deploy, dbProvisioner })
+		const input = createInput(repoDir)
+
+		// Act
+		const outcome = await deliver(input, clients)
+
+		// Assert
+		expect(deploy.deployments).toEqual([])
+		expect(outcome.steps[2]).toMatchObject({ step: 'deploy', ok: false })
+		expect(outcome.steps[2]!.reason).toContain('database provisioning failed')
 	})
 
 	it('Fails closed when the push fails — no deploy, no bundle', async () => {
