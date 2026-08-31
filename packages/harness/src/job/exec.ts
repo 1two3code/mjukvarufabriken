@@ -35,12 +35,17 @@ export type ExecOptions = {
  * database credentials, secret ARNs, the ECS task-role credential endpoint and other AWS config,
  * the ECS Express / CodeBuild / ECR delivery config (M5), the GitHub token / App private key
  * (GITHUB_APP_*), the per-job api reporting token (`JOB_TOKEN`, exchanged at start-up but still
- * in the task environment — a worker could otherwise forge job events) and the artifacts-role ARN
+ * in the task environment — a worker could otherwise forge job events), the artifacts-role ARN
  * (`ARTIFACTS_ROLE_ARN`, M3 hardening #1 — knowing it is harmless without the task-role
- * credentials this same strip already removes, but it names an internal role, not a tool input).
+ * credentials this same strip already removes, but it names an internal role, not a tool input),
+ * and the raw Anthropic key (`ANTHROPIC_API_KEY$`, exact — never `ANTHROPIC_BASE_URL`/
+ * `ANTHROPIC_AUTH_TOKEN`, the harmless local-forward-proxy pointer + placeholder a session
+ * legitimately needs, hardening audit 2026-08-30 finding A1: apps/job's own process no longer
+ * holds the real key in its env at all — this strip is defense in depth for any future path that
+ * might, not the primary control).
  */
 const secretEnvKey =
-	/^(DATABASE_|AWS_|ECS_|EXPRESS_|CODEBUILD_|ECR_|GITHUB_TOKEN$|GITHUB_APP_|JOB_TOKEN$|ARTIFACTS_BUCKET$|ARTIFACTS_ROLE_ARN$)|_SECRET_ARN$/
+	/^(DATABASE_|AWS_|ECS_|EXPRESS_|CODEBUILD_|ECR_|GITHUB_TOKEN$|GITHUB_APP_|JOB_TOKEN$|ARTIFACTS_BUCKET$|ARTIFACTS_ROLE_ARN$|ANTHROPIC_API_KEY$)|_SECRET_ARN$/
 
 /**
  * Git's repository-location variables. Git exports these to hooks (and `git` sets them for its
