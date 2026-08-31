@@ -33,6 +33,8 @@ cdk.out
 # AI assistants
 .claude/settings.local.json
 CLAUDE.local.md
+# Per-session worktrees (CLAUDE.md "Git workflow") — each carries its own node_modules
+.claude/worktrees/
 
 # Environment variables
 .env*
