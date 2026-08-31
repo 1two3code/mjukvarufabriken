@@ -78,5 +78,13 @@ scripts/ensure-bootstrapped.sh "$CDK_DEFAULT_ACCOUNT" "$CDK_DEFAULT_REGION"
 case " $stacks " in
 *" budget-"*) scripts/ensure-bootstrapped.sh "$CDK_DEFAULT_ACCOUNT" us-east-1 ;;
 esac
+# A rolled-back resources-<env> create (RDS/AuthKeySeed/IAM failure, etc.) can leave its six
+# placeholder secrets scheduled for deletion — CloudFormation's default secret delete has no
+# ForceDeleteWithoutRecovery, so it's a ~30-day recovery window, not immediate. A retry then hits
+# "already scheduled for deletion" on every one of them. Restore before every retry deploys them
+# (hardening audit 2026-08-30, finding F2).
+case " $stacks " in
+*" resources-"*) node scripts/reconcile-secrets.mjs "$env" ;;
+esac
 
 npx cdk deploy $stacks $exclusively --require-approval never --outputs-file "cdk-outputs-$env.json"
