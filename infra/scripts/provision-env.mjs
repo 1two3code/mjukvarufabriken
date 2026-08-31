@@ -146,7 +146,18 @@ if (parentZoneId) {
 const ensureCert = (certRegion, primaryDomain, sans, label) => {
 	log(`\n[P5] ${label} cert (${certRegion}) for ${[primaryDomain, ...sans].join(', ')}`)
 	const list = awsJson(['acm', 'list-certificates'], { region: certRegion }).CertificateSummaryList || []
-	let arn = list.find(c => c.DomainName === primaryDomain)?.CertificateArn
+	// Reuse only a cert that (a) is still on a path to ISSUED — not a terminal FAILED/
+	// VALIDATION_TIMED_OUT one from an earlier aborted run, which would dead-end every re-run
+	// (hardening audit 2026-08-30, finding C1) — and (b) actually covers every SAN we need, not
+	// just the primary domain (finding C3): reusing a cert missing the portal SAN would adopt a
+	// cert CloudFront serves the portal on with a TLS SNI mismatch in every browser.
+	const reusable = list.find(
+		c =>
+			c.DomainName === primaryDomain &&
+			(c.Status === 'ISSUED' || c.Status === 'PENDING_VALIDATION') &&
+			sans.every(san => (c.SubjectAlternativeNameSummaries || []).includes(san))
+	)
+	let arn = reusable?.CertificateArn
 	if (arn) {
 		log(`  exists: ${arn}`)
 	} else if (APPLY) {
@@ -185,7 +196,21 @@ const ensureCert = (certRegion, primaryDomain, sans, label) => {
 				sh('aws', ['acm', 'wait', 'certificate-validated', '--certificate-arn', arn, '--region', certRegion], targetEnv)
 				log(`  ISSUED`)
 			} catch {
-				log(`  ! not ISSUED within the wait window — records are in place, ACM validates on its own; re-run to confirm`)
+				// The waiter times out well before ACM's real 72h validation window closes, so a timeout
+				// here doesn't necessarily mean the cert failed — re-check the actual status before
+				// deciding. Finding C2 (hardening audit 2026-08-30): the old code logged a soft warning
+				// and kept going with exit 0, publishing a not-yet-ISSUED ARN that CloudFront/ALB then
+				// reject at deploy time — and re-runs kept publishing the same stuck ARN. Fail loudly
+				// instead so the ARN is never written to config/GitHub with a status that can't deploy.
+				const status = awsJson(['acm', 'describe-certificate', '--certificate-arn', arn], {
+					region: certRegion,
+				}).Certificate.Status
+				if (status !== 'ISSUED') {
+					fail(
+						`${label} cert ${arn} is ${status}, not ISSUED, after the wait window — records are in place, ACM validates on its own; re-run this script once it clears (or if it's FAILED/VALIDATION_TIMED_OUT, delete it in ACM and re-run to request a fresh one)`
+					)
+				}
+				log(`  ISSUED (confirmed after the wait window timed out)`)
 			}
 		}
 	}
