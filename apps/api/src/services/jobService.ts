@@ -54,6 +54,17 @@ declare module 'fastify' {
 			 * when the job is not currently holding for approval.
 			 */
 			approve: (jobId: string, session: BackendSession) => Promise<Job>
+			/**
+			 * Demo auto-retry (Gate C): an S-class job that just FAILED gets ONE automatic rebuild
+			 * before a human is paged. Returns the new job, or undefined when the job is not an
+			 * auto-retry candidate (not S, not failed, already retried, or itself a retry — the
+			 * `retry` events on the rows bound the loop to a single attempt). Called from the
+			 * container's terminal `failed` report and from the liveness sweep. When a candidate's
+			 * retry cannot be created or launched, the admins are mailed before this returns or
+			 * throws — the first failure's mail was held in anticipation of the retry and must
+			 * never be lost.
+			 */
+			retryFailedBuild: (job: Job) => Promise<Job | undefined>
 			listAll: () => Promise<Job[]>
 			/**
 			 * The delivered bundle with presigned download links (org-scoped). `EntityNotFound`
@@ -322,6 +333,117 @@ const plugin: FastifyPluginAsync = async app => {
 		}
 	}
 
+	/**
+	 * Demo auto-retry candidacy (Gate C; strategy 2026-08-31 #4). Only the S/demo class retries —
+	 * a rebuild costs ~100 kr — and only ONCE: a job that already spawned a retry carries a
+	 * `retry` event ({retryJobId}), a job that IS a retry carries one too ({ofJobId}), and either
+	 * disqualifies it, so two failed attempts can never chain into a third. The bound is
+	 * structural: `db.jobs.insertRetry` writes the retry row and BOTH events in one transaction,
+	 * so no crash can leave a retry row that reads as a fresh first attempt.
+	 */
+	const autoRetryCandidate = async (job: Job) => {
+		if ((job.spec.sizeClass ?? 'S') !== 'S') return false
+		const events = await db.jobs.listEvents(job.id)
+		return !events.some(event => event.type === 'retry')
+	}
+
+	/**
+	 * The compensating page for a held first-failure mail (see `reportEvents`): sent whenever the
+	 * retry that justified the hold could NOT be started, so a failed demo build can never
+	 * disappear with only a log line. Mails directly — no notify-cap lookup: this path runs
+	 * exactly when the db may be misbehaving, and the text is api-composed, not container input.
+	 */
+	const sendHeldFailureMail = async (job: Job, why: string) => {
+		const subject = `[mf ${app.secrets.env}] Build job ${job.id} failed — auto-retry not started`
+		const text = `Job ${job.id} (order ${job.orderId}) failed:\n${job.reason ?? '-'}\n\nIts automatic retry was NOT started: ${why}\n\nThe first-failure notification was held in anticipation of the retry; this mail replaces it.`
+		for (const to of app.secrets.authAdminEmails) {
+			await app.email.send({ to, subject, text }).catch(error => {
+				app.log.error({ err: error, jobId: job.id, to }, 'Could not send the held failure mail')
+			})
+		}
+	}
+
+	/**
+	 * Launches the one automatic rebuild of a failed S-class job: a fresh job row for the same
+	 * order/spec with the standard S budget (each attempt keeps its own token/cost accounting;
+	 * the order's total is the sum over its jobs), inserted atomically with the `retry` events
+	 * that link both rows (`db.jobs.insertRetry`). If the retry cannot be created or launched,
+	 * the admins are mailed — their first-failure notification was held in anticipation of it.
+	 */
+	const retryFailedBuild = async (job: Job): Promise<Job | undefined> => {
+		if (job.status !== 'failed' || !(await autoRetryCandidate(job))) return undefined
+		const reportToken = mintReportToken()
+		let retry: Job
+		try {
+			retry = await db.jobs.insertRetry(
+				{
+					orderId: job.orderId,
+					orgId: job.orgId,
+					spec: job.spec,
+					budget: budgetForSize[job.spec.sizeClass ?? 'S'],
+					reportTokenHash: hashReportToken(reportToken),
+				},
+				{ id: job.id, reason: job.reason, tokensUsed: job.tokensUsed }
+			)
+		} catch (error) {
+			if ((error as Error & { code?: string }).code === '23505') {
+				// One-active-job-per-order: another writer got there first. A concurrent retry of
+				// THIS job committed its `retry` event with its row — then a rebuild is running and
+				// the held mail stays held. Any OTHER active job (a human re-ordered a build) means
+				// no retry will ever page for this failure: send the held mail now. A failing
+				// re-read fails open towards mailing (a duplicate page beats silence).
+				const events = await db.jobs.listEvents(job.id).catch(() => [])
+				if (!events.some(event => event.type === 'retry')) {
+					await sendHeldFailureMail(job, 'another job is already active for the order')
+				}
+				return undefined
+			}
+			// The held first-failure mail must not die with the insert (db blip): page now, then
+			// rethrow for the caller's log line
+			await sendHeldFailureMail(job, `the retry job could not be created: ${(error as Error).message}`)
+			throw error
+		}
+		app.log.warn(
+			{ jobId: job.id, retryJobId: retry.id, reason: job.reason },
+			'S-class build failed — auto-retrying once before paging anyone'
+		)
+		// The deprovision fence must point at the attempt that will actually DELIVER: delivery
+		// stamps the live resources with a tag derived from the retry's OWN job id, so re-record
+		// the order's customer slug for it (mirrors `start`; best-effort, never fails the retry).
+		await db.orders
+			.setCustomerSlug(job.orderId, customerSlugForBuild(retry.spec.goal, retry.id))
+			.catch((error: Error) =>
+				app.log.warn({ err: error, jobId: retry.id }, 'Could not record the order customer slug')
+			)
+		if (!ecs.configured) {
+			app.log.warn({ jobId: retry.id }, `ECS not configured — run: npm run job:dev -- ${retry.id}`)
+			return retry
+		}
+		try {
+			const taskArn = await ecs.runJob(retry.id, reportToken)
+			return (await db.jobs.update(retry.id, { taskArn })) ?? retry
+		} catch (error) {
+			const reason = `ecs:RunTask failed on the auto-retry: ${(error as Error).message}`
+			app.log.error({ err: error, jobId: retry.id }, reason)
+			await db.jobs.appendEvent(retry.id, { type: 'failed', payload: { reason } })
+			const failed = await db.jobs.update(retry.id, {
+				status: 'failed',
+				reason,
+				finishedAt: new Date(),
+				reportTokenHash: null,
+			})
+			await notifyAdmins(retry, {
+				type: 'notify',
+				payload: {
+					to: 'admins',
+					subject: `Build job ${job.id} failed and its auto-retry could not launch`,
+					text: `Job ${job.id} failed:\n${job.reason ?? '-'}\n\nThe automatic retry ${retry.id} could not be started:\n${reason}`,
+				},
+			})
+			return failed ?? retry
+		}
+	}
+
 	/** Every `gate` payload must be a GateReport — `jobs.gates` is typed and serialised as such */
 	const parseGateReports = (job: Job, events: JobReportEvent[]) => {
 		const gates = new Map<JobReportEvent, GateReport>()
@@ -481,6 +603,7 @@ const plugin: FastifyPluginAsync = async app => {
 			const approved = (await db.jobs.update(jobId, { approved: true })) ?? job
 			return isAdmin(session) ? approved : redactJobForCustomer(approved)
 		},
+		retryFailedBuild,
 		listAll: () => db.jobs.list(),
 		getDeliverables: async (jobId, session) => {
 			await get(jobId, session)
@@ -530,7 +653,23 @@ const plugin: FastifyPluginAsync = async app => {
 				if (duplicate) continue
 				const gate = gateReports.get(event)
 				if (gate) gates.push(gate)
-				if (event.type === 'notify') await notifyAdmins(job, event)
+				if (event.type === 'notify') {
+					// Hold the build-failure mail (only that mail — deploy degradations etc. still
+					// page) for a job the auto-retry will rebuild: the human is paged when the
+					// SECOND attempt fails, whose own job is no candidate. The event itself is
+					// stored either way, so the trail keeps the first failure. The hold is safe
+					// because every way the retry can then fail to happen pages instead:
+					// `retryFailedBuild` mails when it cannot create/launch the retry, and the
+					// liveness sweep mails for any job that dies without reporting.
+					if (event.payload.kind === 'job-failed' && (await autoRetryCandidate(job))) {
+						app.log.warn(
+							{ jobId: job.id },
+							'Holding the failure mail — the build will be auto-retried'
+						)
+					} else {
+						await notifyAdmins(job, event)
+					}
+				}
 				if (event.type === 'delivery') await recordDeployedService(job, event)
 			}
 			if (gates.length) {
@@ -562,7 +701,14 @@ const plugin: FastifyPluginAsync = async app => {
 				await metrics.recordJobTokensUsed(job.id, update.tokensUsed)
 			}
 			if (row) {
-				if (row.status === 'failed') await metrics.recordJobFailed(job.id)
+				if (row.status === 'failed') {
+					await metrics.recordJobFailed(job.id)
+					// The terminal failure is the auto-retry trigger; a retry hiccup must never
+					// fail the container's last report (the row is already terminal either way)
+					await retryFailedBuild(row).catch((error: Error) =>
+						app.log.error({ err: error, jobId: job.id }, 'Auto-retry of the failed build threw')
+					)
+				}
 				return { status: row.status, killed: row.status === 'killed' }
 			}
 			// Status write refused: the admin killed the job. Usage, plan and gates still land;

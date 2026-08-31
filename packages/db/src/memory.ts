@@ -7,6 +7,7 @@
  */
 import { isActiveJobStatus, isOrderSpecFrozen, pricesEffectiveAt, toSpecStatus } from '@mf/models'
 
+import { nullTaskArnSweepSlackMinutes } from './jobs.ts'
 import { defaultModelPriceRows } from './modelPrices.ts'
 import { rateLimitRetentionMs } from './rateLimits.ts'
 
@@ -266,6 +267,44 @@ export const createMemoryRepositories = (): MemoryRepositories => {
 		return removed
 	}
 
+	/** Shared by `jobs.insert` and `jobs.insertRetry`: the one-active-per-order guard + creation */
+	const createJobRow = (job: Parameters<Repositories['jobs']['insert']>[0]): Job => {
+		const active = [...jobs.values()].some(
+			existing => existing.orderId === job.orderId && isActiveJobStatus(existing.status)
+		)
+		if (active) throw new UniqueViolation('jobs_one_active_per_order')
+		const created: Job = {
+			id: crypto.randomUUID(),
+			orderId: job.orderId,
+			orgId: job.orgId,
+			status: 'queued',
+			spec: clone(job.spec),
+			budget: clone(job.budget),
+			tokensUsed: 0,
+			createdAt: now(),
+		}
+		jobs.set(created.id, created)
+		if (job.reportTokenHash) reportTokens.set(job.reportTokenHash, created.id)
+		return created
+	}
+
+	/** Shared event append (returns the STORED row; callers clone what they hand out) */
+	const pushJobEvent = (
+		jobId: string,
+		type: JobEvent['type'],
+		payload: Record<string, unknown>
+	): JobEvent => {
+		const created: JobEvent = {
+			id: events.length + 1,
+			jobId,
+			type,
+			payload: clone(payload),
+			createdAt: now(),
+		}
+		events.push(created)
+		return created
+	}
+
 	return {
 		modelPrices: {
 			list: async () =>
@@ -330,23 +369,17 @@ export const createMemoryRepositories = (): MemoryRepositories => {
 			},
 		},
 		jobs: {
-			insert: async job => {
-				const active = [...jobs.values()].some(
-					existing => existing.orderId === job.orderId && isActiveJobStatus(existing.status)
-				)
-				if (active) throw new UniqueViolation('jobs_one_active_per_order')
-				const created: Job = {
-					id: crypto.randomUUID(),
-					orderId: job.orderId,
-					orgId: job.orgId,
-					status: 'queued',
-					spec: clone(job.spec),
-					budget: clone(job.budget),
-					tokensUsed: 0,
-					createdAt: now(),
-				}
-				jobs.set(created.id, created)
-				if (job.reportTokenHash) reportTokens.set(job.reportTokenHash, created.id)
+			insert: async job => clone(createJobRow(job)),
+			// The memory driver is single-threaded, so row + events are atomic like the SQL txn
+			// (and a throwing insert writes nothing — see `insertRetryJob` in jobs.ts)
+			insertRetry: async (job, ofJob) => {
+				const created = createJobRow(job)
+				pushJobEvent(ofJob.id, 'retry', {
+					retryJobId: created.id,
+					...(ofJob.reason !== undefined && { reason: ofJob.reason }),
+					tokensUsed: ofJob.tokensUsed,
+				})
+				pushJobEvent(created.id, 'retry', { ofJobId: ofJob.id, attempt: 2 })
 				return clone(created)
 			},
 			get: async id => clone(jobs.get(id)),
@@ -364,12 +397,17 @@ export const createMemoryRepositories = (): MemoryRepositories => {
 			listStuck: async olderThan =>
 				byCreatedDesc(
 					[...jobs.values()]
-						.filter(
-							job =>
-								isActiveJobStatus(job.status) &&
-								job.taskArn !== undefined &&
-								new Date(job.createdAt) < olderThan
-						)
+						.filter(job => {
+							if (!isActiveJobStatus(job.status)) return false
+							if (job.taskArn !== undefined) return new Date(job.createdAt) < olderThan
+							// No task recorded: age alone judges — see `listStuckJobs` (jobs.ts)
+							const budgetMs =
+								(job.budget.maxDurationMinutes + nullTaskArnSweepSlackMinutes) * 60_000
+							return (
+								!job.awaitingApproval &&
+								new Date(job.createdAt).getTime() < Date.now() - budgetMs
+							)
+						})
 						.map(clone)
 				)
 					.reverse()
@@ -413,29 +451,12 @@ export const createMemoryRepositories = (): MemoryRepositories => {
 				jobs.set(id, next)
 				return clone(next)
 			},
-			appendEvent: async (jobId, event) => {
-				const created: JobEvent = {
-					id: events.length + 1,
-					jobId,
-					type: event.type,
-					payload: clone(event.payload),
-					createdAt: now(),
-				}
-				events.push(created)
-				return clone(created)
-			},
+			appendEvent: async (jobId, event) => clone(pushJobEvent(jobId, event.type, event.payload)),
 			appendEventOnce: async (jobId, seq, event) => {
 				const key = `${jobId}:${seq}`
 				const existing = numberedEvents.get(key)
 				if (existing) return { event: clone(existing), duplicate: true }
-				const created: JobEvent = {
-					id: events.length + 1,
-					jobId,
-					type: event.type,
-					payload: clone(event.payload),
-					createdAt: now(),
-				}
-				events.push(created)
+				const created = pushJobEvent(jobId, event.type, event.payload)
 				numberedEvents.set(key, created)
 				return { event: clone(created), duplicate: false }
 			},

@@ -11,6 +11,7 @@ import {
 	ensureShared,
 	evaluateVitestReport,
 	fetchTaskBranch,
+	gatedMainRef,
 	gateCommands,
 	gateScopeForAreas,
 	gateScopeForChanges,
@@ -528,6 +529,30 @@ describe('createWorktree + fetchTaskBranch', () => {
 			await removeWorktree(repoDir, 't1')
 			await expect(stat(dir)).rejects.toThrow()
 			await removeWorktree(repoDir, 't1')
+		} finally {
+			await rm(root, { recursive: true, force: true })
+		}
+	})
+
+	it('Bases the task branch on the gated main ref, never on a mid-gate main commit', async () => {
+		const { root, dir: repoDir } = await seedRepo()
+		try {
+			// The last merge-gated commit is recorded; main then moves on to a merge commit whose
+			// gate is still running (task starts are not serialised with the merge queue)
+			const gated = (await exec('git', ['rev-parse', 'HEAD'], { cwd: repoDir })).stdout.trim()
+			await exec('git', ['update-ref', gatedMainRef, gated], { cwd: repoDir })
+			await writeFile(join(repoDir, 'ungated.txt'), 'merge under gate\n')
+			await exec('git', ['add', '-A'], { cwd: repoDir, env: gitEnv })
+			await exec('git', ['commit', '-q', '-m', 'merge under gate'], { cwd: repoDir, env: gitEnv })
+
+			const { dir, branch } = await createWorktree(repoDir, taskOf('t2'))
+
+			// The clone's task branch starts at the GATED commit: a red gate rolling main back can
+			// never leave the rejected merge inside this branch
+			const head = (await exec('git', ['rev-parse', 'HEAD'], { cwd: dir })).stdout.trim()
+			expect(head).toBe(gated)
+			expect(branch).toBe('task/t2')
+			await expect(stat(join(dir, 'ungated.txt'))).rejects.toThrow()
 		} finally {
 			await rm(root, { recursive: true, force: true })
 		}

@@ -372,12 +372,48 @@ export const ensureShared = async (dir: string) => {
 }
 
 /**
+ * Ref in the main repo recording the last commit of `main` that PASSED the merge gate — written
+ * only by `mergeTask` (merge.ts). Task clones base on it, never on live `main`: between a merge
+ * commit and its gate verdict main points at an ungated commit a red gate will roll back, and a
+ * clone taken from it would keep the rejected merge forever and re-introduce it when its own
+ * branch merges. Outside `refs/heads/`, so `git clone` never copies it into task clones and
+ * delivery never pushes it.
+ */
+export const gatedMainRef = 'refs/mf/gated'
+
+/**
+ * The commit a new task clone bases its branch on: `gatedMainRef` when it exists, else `main`
+ * (before the first merge starts, main itself is trivially gated). The re-check after reading
+ * main closes the bootstrap race with a first merge running concurrently: `mergeTask` writes
+ * the ref BEFORE its merge commit, so a ref still missing on the re-read proves the main sha
+ * read in between predates any merge commit — i.e. is a gated state.
+ */
+const gatedBaseCommit = async (repoDir: string, signal?: AbortSignal) => {
+	const gated = await exec('git', ['rev-parse', '-q', '--verify', gatedMainRef], {
+		cwd: repoDir,
+		signal,
+	})
+	if (gated.code === 0) return gated.stdout.trim()
+	const main = (await git(['rev-parse', 'refs/heads/main'], { cwd: repoDir, signal })).stdout.trim()
+	const recheck = await exec('git', ['rev-parse', '-q', '--verify', gatedMainRef], {
+		cwd: repoDir,
+		signal,
+	})
+	return recheck.code === 0 ? recheck.stdout.trim() : main
+}
+
+/**
  * A task's working copy: a full clone of the main repo (`--no-hardlinks`, so no object inode is
  * shared with the job's `.git`) on branch `task/<id>`, node_modules hard-linked in, the whole
  * tree — `.git` included — handed to the worker. The worker commits there; `fetchTaskBranch`
  * brings the branch into the main repo afterwards. The main repo's `.git` is protected first
  * (`ensureShared`), before any worker exists. Kept under `<work>/worktrees/<id>` and called a
  * worktree for the rest of the harness, though it no longer shares refs with the main repo.
+ *
+ * The task branch starts at the last merge-GATED main commit (`gatedBaseCommit`), not at the
+ * live `main` ref: task starts are not serialised with the merge queue, so live main may hold a
+ * merge commit whose gate is still running and that a red verdict rolls back. The gated commit
+ * is always an ancestor of (or equal to) main, so its objects are in the clone.
  */
 export const createWorktree = async (repoDir: string, task: Task, signal?: AbortSignal) => {
 	const dir = worktreeDir(repoDir, task.id)
@@ -385,8 +421,12 @@ export const createWorktree = async (repoDir: string, task: Task, signal?: Abort
 	await ensureShared(repoDir)
 	await removeWorktree(repoDir, task.id)
 	await exec('git', ['branch', '-D', branch], { cwd: repoDir, signal })
-	await git(['clone', '-q', '--no-hardlinks', '-b', 'main', repoDir, dir], { cwd: repoDir, signal })
-	await git(['checkout', '-q', '-b', branch], { cwd: dir, signal })
+	const base = await gatedBaseCommit(repoDir, signal)
+	await git(['clone', '-q', '--no-hardlinks', '--no-checkout', repoDir, dir], {
+		cwd: repoDir,
+		signal,
+	})
+	await git(['checkout', '-q', '-b', branch, base], { cwd: dir, signal })
 	// A clone starts without the main repo's identity; the worker commits with the job's
 	for (const key of ['user.name', 'user.email']) {
 		const value = (await exec('git', ['config', key], { cwd: repoDir, signal })).stdout.trim()

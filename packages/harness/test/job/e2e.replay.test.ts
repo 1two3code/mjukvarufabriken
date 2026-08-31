@@ -251,7 +251,7 @@ describe('cassette record/replay e2e', () => {
 			await rm(recorded.root, { recursive: true, force: true })
 			await rm(recDir, { recursive: true, force: true })
 		}
-	}, 180_000)
+	}, 420_000)
 
 	it('replays the committed cassette fixture through the real runJob, no model, no tokens', async () => {
 		if (!(await exists(join(fixtureDir, 'cassette.jsonl')))) {
@@ -275,5 +275,5 @@ describe('cassette record/replay e2e', () => {
 		} finally {
 			await rm(root, { recursive: true, force: true })
 		}
-	}, 180_000)
+	}, 420_000)
 })

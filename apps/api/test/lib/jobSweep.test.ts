@@ -1,4 +1,9 @@
-import { deadJobReason, jobSweepMinTaskAgeMs, runJobSweep } from '#/lib/jobSweep.ts'
+import {
+	deadJobReason,
+	jobSweepMinTaskAgeMs,
+	neverLaunchedReason,
+	runJobSweep,
+} from '#/lib/jobSweep.ts'
 
 import type { FastifyInstance } from 'fastify'
 import type { Job } from '@mf/models'
@@ -45,13 +50,28 @@ const createApp = (options: {
 	const listStuck = vi.fn().mockResolvedValue(candidates)
 	const appendEvent = vi.fn().mockResolvedValue(undefined)
 	const describeTasks = vi.fn().mockResolvedValue(options.states ?? new Map())
-	const log = { info: vi.fn(), warn: vi.fn() }
+	const log = { info: vi.fn(), warn: vi.fn(), error: vi.fn() }
+	const send = vi.fn().mockResolvedValue(undefined)
+	const recordJobFailed = vi.fn().mockResolvedValue(undefined)
 	const app = {
 		ecs: { configured: options.configured ?? true, describeTasks },
 		db: { jobs: { listStuck, get, update, appendEvent } },
+		email: { send },
+		metrics: { recordJobFailed },
+		secrets: { env: 'test', authAdminEmails: ['ops@example.com'] },
 		log,
 	}
-	return { app: app as unknown as FastifyInstance, listStuck, get, update, appendEvent, describeTasks, log }
+	return {
+		app: app as unknown as FastifyInstance,
+		listStuck,
+		get,
+		update,
+		appendEvent,
+		describeTasks,
+		send,
+		recordJobFailed,
+		log,
+	}
 }
 
 describe('runJobSweep', () => {
@@ -168,6 +188,108 @@ describe('runJobSweep', () => {
 		// Assert
 		expect(result).toEqual({ checked: 1, failed: 0 })
 		expect(appendEvent).not.toHaveBeenCalled()
+	})
+
+	it('Fails a job with NO recorded task on age alone, without asking ECS', async () => {
+		// Arrange: listStuck only surfaces a null-arn job once its whole wall-clock budget passed
+		const { app, update, appendEvent, describeTasks } = createApp({
+			candidates: [job('a', { taskArn: undefined })],
+		})
+
+		// Act
+		const result = await runJobSweep(app)
+
+		// Assert: failed with the never-launched reason, and no empty DescribeTasks call was made
+		expect(result).toEqual({ checked: 1, failed: 1 })
+		expect(describeTasks).not.toHaveBeenCalled()
+		expect(update).toHaveBeenCalledWith(
+			'a',
+			expect.objectContaining({ status: 'failed', reason: neverLaunchedReason })
+		)
+		expect(appendEvent).toHaveBeenCalledWith('a', {
+			type: 'failed',
+			payload: { reason: neverLaunchedReason, sweep: true },
+		})
+	})
+
+	it('Offers every job it fails to the demo auto-retry when jobService is present', async () => {
+		// Arrange
+		const { app, update } = createApp({ candidates: [job('a', { taskArn: undefined })] })
+		const retryFailedBuild = vi.fn().mockResolvedValue(undefined)
+		Object.assign(app, { jobService: { retryFailedBuild } })
+
+		// Act
+		await runJobSweep(app)
+
+		// Assert: the retry gets the FAILED row (the update result), not the stale candidate
+		expect(retryFailedBuild).toHaveBeenCalledTimes(1)
+		expect(retryFailedBuild).toHaveBeenCalledWith(await update.mock.results[0]!.value)
+		expect(retryFailedBuild.mock.calls[0]![0]).toMatchObject({ id: 'a', status: 'failed' })
+	})
+
+	it('A throwing auto-retry never breaks the sweep', async () => {
+		// Arrange
+		const { app, send } = createApp({ candidates: [job('a'), job('b')], states: new Map() })
+		const retryFailedBuild = vi.fn().mockRejectedValue(new Error('ecs down'))
+		Object.assign(app, { jobService: { retryFailedBuild } })
+
+		// Act
+		const result = await runJobSweep(app)
+
+		// Assert: both jobs still failed, both retries attempted; no sweep mail on top — a
+		// throwing retryFailedBuild has already mailed for every post-candidacy failure itself
+		expect(result).toEqual({ checked: 2, failed: 2 })
+		expect(retryFailedBuild).toHaveBeenCalledTimes(2)
+		expect(send).not.toHaveBeenCalled()
+	})
+
+	it('Records the JobsFailed metric for every job it fails — the container never reported it', async () => {
+		// Arrange
+		const { app, recordJobFailed } = createApp({
+			candidates: [job('a'), job('b', { taskArn: undefined })],
+			states: new Map(),
+		})
+
+		// Act
+		await runJobSweep(app)
+
+		// Assert
+		expect(recordJobFailed).toHaveBeenCalledTimes(2)
+		expect(recordJobFailed).toHaveBeenCalledWith('a')
+		expect(recordJobFailed).toHaveBeenCalledWith('b')
+	})
+
+	it('Mails the admins for a failed job with no retry started — the last chance anyone hears of it', async () => {
+		// Arrange: retryFailedBuild declines (not a candidate: an M job, or a dead retry attempt
+		// whose first failure's mail was HELD) — without the sweep mail the build vanishes silently
+		const { app, send } = createApp({ candidates: [job('a')], states: new Map() })
+		const retryFailedBuild = vi.fn().mockResolvedValue(undefined)
+		Object.assign(app, { jobService: { retryFailedBuild } })
+
+		// Act
+		await runJobSweep(app)
+
+		// Assert
+		expect(send).toHaveBeenCalledWith(
+			expect.objectContaining({
+				to: 'ops@example.com',
+				subject: expect.stringContaining('failed (liveness sweep)'),
+				text: expect.stringContaining('build task gone from ECS'),
+			})
+		)
+	})
+
+	it('Sends NO sweep mail when the retry launched — the rebuild outcome pages instead', async () => {
+		// Arrange
+		const { app, send } = createApp({ candidates: [job('a')], states: new Map() })
+		const retryFailedBuild = vi.fn().mockResolvedValue(job('retry-1'))
+		Object.assign(app, { jobService: { retryFailedBuild } })
+
+		// Act
+		await runJobSweep(app)
+
+		// Assert
+		expect(send).not.toHaveBeenCalled()
 	})
 
 	it('Fails only the dead jobs of a mixed batch', async () => {

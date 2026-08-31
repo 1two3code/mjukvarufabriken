@@ -1,4 +1,4 @@
-import { mkdtemp, rm, writeFile } from 'node:fs/promises'
+import { mkdir, mkdtemp, rm, writeFile } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 
@@ -58,6 +58,8 @@ const createRepo = async () => {
 describe('merge', () => {
 	let repo: Awaited<ReturnType<typeof createRepo>>
 	const controller = new AbortController()
+	/** The merge gate as a fake: green unless a test says otherwise (the test repos have no npm scripts) */
+	const verify = vi.fn()
 	const input = (id: string) => ({
 		task: task(id),
 		branch: `task/${id}`,
@@ -65,11 +67,14 @@ describe('merge', () => {
 		repoDir: repo.dir,
 		signal: controller.signal,
 		onUsage: vi.fn(),
+		verify,
 	})
 
 	beforeEach(async () => {
 		repo = await createRepo()
 		runSession.mockReset()
+		verify.mockReset()
+		verify.mockResolvedValue({ ok: true, output: 'ok' })
 	})
 	afterEach(() => rm(repo.dir, { recursive: true, force: true }))
 
@@ -98,6 +103,9 @@ describe('merge', () => {
 		expect(log.stdout).toMatch(/merge\(a\): a/)
 		// No manifest changed → no npm install, so no lockfile appears
 		expect((await exec('test', ['-e', 'package-lock.json'], { cwd: repo.dir })).code).not.toBe(0)
+		// The gated ref advanced with the green merge: task clones may now base on this commit
+		const head = (await repo.run(['rev-parse', 'HEAD'])).stdout.trim()
+		expect((await repo.run(['rev-parse', 'refs/mf/gated'])).stdout.trim()).toBe(head)
 	})
 
 	it('Runs npm install on main when the merged branch changed a package manifest', async () => {
@@ -108,6 +116,91 @@ describe('merge', () => {
 		expect(outcome).toEqual({ ok: true, tokens: 0 })
 		// npm install ran on main after the merge: a lockfile now exists (dependency-free, offline)
 		expect((await exec('test', ['-e', 'package-lock.json'], { cwd: repo.dir })).code).toBe(0)
+		// … and it is COMMITTED, so the next serialised merge starts from a clean tree and the
+		// delivered repo never ships a lock that is stale against its manifests
+		expect((await repo.run(['status', '--porcelain'])).stdout.trim()).toBe('')
+		expect((await repo.run(['ls-files', 'package-lock.json'])).stdout.trim()).toBe(
+			'package-lock.json'
+		)
+	})
+
+	it('Gates every accepted merge: a red lint/test run rolls main back to the pre-merge commit', async () => {
+		const before = (await repo.run(['rev-parse', 'HEAD'])).stdout.trim()
+		await repo.edit('task/a', 'breaks a helper another file uses\n', 'a.txt')
+		verify.mockResolvedValue({ ok: false, output: 'npm test failed (1):\n1 test failed' })
+
+		const outcome = await mergeTask(input('a'))
+
+		expect(outcome.ok).toBe(false)
+		expect(outcome.reason).toMatch(/not green after merging task\/a/)
+		expect(outcome.reason).toMatch(/1 test failed/)
+		// Rolled back: the merge commit is gone, the tree matches pre-merge main and is clean
+		expect((await repo.run(['rev-parse', 'HEAD'])).stdout.trim()).toBe(before)
+		expect((await exec('test', ['-e', 'a.txt'], { cwd: repo.dir })).code).not.toBe(0)
+		expect((await repo.run(['status', '--porcelain'])).stdout.trim()).toBe('')
+		// The gated ref never advanced past the pre-merge commit: a clone taken while the gate
+		// ran (task starts are not serialised with merges) can never carry the rejected merge
+		expect((await repo.run(['rev-parse', 'refs/mf/gated'])).stdout.trim()).toBe(before)
+	})
+
+	it('Re-syncs node_modules to the rolled-back lockfile when a manifest-touching merge goes red', async () => {
+		// Arrange: main ships a manifest + committed lockfile, with local dep `a` installed
+		// (node_modules is gitignored, exactly like a seeded customer repo)
+		const manifest = (deps: Record<string, string>) =>
+			JSON.stringify({ name: 'customer', private: true, dependencies: deps })
+		await writeFile(join(repo.dir, '.gitignore'), 'node_modules\n')
+		await mkdir(join(repo.dir, 'dep-a'))
+		await writeFile(join(repo.dir, 'dep-a/package.json'), '{"name":"a","version":"1.0.0"}')
+		await writeFile(join(repo.dir, 'package.json'), manifest({ a: 'file:./dep-a' }))
+		await exec('npm', ['install', '--no-audit', '--no-fund', '--ignore-scripts'], { cwd: repo.dir })
+		await repo.run(['add', '-A'])
+		await repo.run(['commit', '-q', '-m', 'deps: a'])
+		const before = (await repo.run(['rev-parse', 'HEAD'])).stdout.trim()
+		// The branch adds dep `b`; its merge gate goes red AFTER syncDependencies installed it
+		await repo.run(['checkout', '-q', '-b', 'task/g'])
+		await mkdir(join(repo.dir, 'dep-b'))
+		await writeFile(join(repo.dir, 'dep-b/package.json'), '{"name":"b","version":"1.0.0"}')
+		await writeFile(join(repo.dir, 'package.json'), manifest({ a: 'file:./dep-a', b: 'file:./dep-b' }))
+		await repo.run(['add', '-A'])
+		await repo.run(['commit', '-q', '-m', 'edit task/g'])
+		await repo.run(['checkout', '-q', 'main'])
+		verify.mockResolvedValue({ ok: false, output: 'npm test failed (1)' })
+
+		const outcome = await mergeTask(input('g'))
+
+		expect(outcome.ok).toBe(false)
+		expect((await repo.run(['rev-parse', 'HEAD'])).stdout.trim()).toBe(before)
+		expect((await repo.run(['status', '--porcelain'])).stdout.trim()).toBe('')
+		// The rejected merge's install put `b` into main's node_modules; a plain reset would keep
+		// it there and every later gate could import a package the shipped lockfile never declares.
+		// The restore re-installed against the rolled-back lockfile: `b` pruned, `a` intact.
+		expect((await exec('test', ['-e', 'node_modules/b'], { cwd: repo.dir })).code).not.toBe(0)
+		expect((await exec('test', ['-e', 'node_modules/a'], { cwd: repo.dir })).code).toBe(0)
+	})
+
+	it('Scopes the merge gate to the task areas and hands it the merged diff', async () => {
+		await repo.edit('task/a', 'from a\n', 'a.txt')
+
+		await mergeTask({ ...input('a'), task: { ...task('a'), areas: ['apps/app'] } })
+
+		expect(verify).toHaveBeenCalledWith(repo.dir, controller.signal, {
+			areas: ['apps/app'],
+			changed: ['a.txt'],
+		})
+	})
+
+	it('Cleans a dirty main (stray edits + untracked scratch) before merging', async () => {
+		await repo.edit('task/a', 'from a\n', 'a.txt')
+		// A previous step left main dirty: an uncommitted lockfile-style edit and untracked scratch
+		await writeFile(join(repo.dir, 'file.txt'), 'uncommitted local change\n')
+		await writeFile(join(repo.dir, 'scratch.txt'), 'leftover repair scratch\n')
+
+		const outcome = await mergeTask(input('a'))
+
+		expect(outcome).toEqual({ ok: true, tokens: 0 })
+		expect(await repo.read()).toBe('base\n')
+		expect((await exec('test', ['-e', 'scratch.txt'], { cwd: repo.dir })).code).not.toBe(0)
+		expect((await repo.run(['status', '--porcelain'])).stdout.trim()).toBe('')
 	})
 
 	it('Runs one repair session on conflict and completes the merge when resolved', async () => {
@@ -163,5 +256,44 @@ describe('merge', () => {
 		expect(await repo.read()).toBe('main change\n')
 		expect((await repo.run(['status', '--porcelain'])).stdout.trim()).toBe('')
 		expect((await repo.run(['log', '--oneline', '-1'])).stdout).not.toMatch(/merge\(d\)/)
+	})
+
+	it("Fails closed when the repair keeps main's side verbatim (the branch's work would be dropped)", async () => {
+		await repo.edit('task/e', 'e change\n')
+		await repo.edit('main', 'main change\n')
+		// The repair "resolves" the conflict by discarding task/e's side entirely: no markers left,
+		// so the old marker scan would have accepted it and shipped without the branch's work
+		runSession.mockImplementation(async ({ cwd }) => {
+			await writeFile(join(cwd, 'file.txt'), 'main change\n')
+			await git(['add', '-A'], { cwd, env: gitEnv })
+			return { ok: true, tokens: 10, result: 'resolved (kept main only)' }
+		})
+
+		const outcome = await mergeTask(input('e'))
+
+		expect(outcome.ok).toBe(false)
+		expect(outcome.reason).toMatch(/discarded the branch's changes.*file\.txt/)
+		expect(await repo.read()).toBe('main change\n')
+		expect((await repo.run(['status', '--porcelain'])).stdout.trim()).toBe('')
+		expect((await repo.run(['log', '--oneline', '-1'])).stdout).not.toMatch(/merge\(e\)/)
+	})
+
+	it('Rolls the repaired merge back too when the merge gate goes red', async () => {
+		await repo.edit('task/f', 'f change\n')
+		await repo.edit('main', 'main change\n')
+		const before = (await repo.run(['rev-parse', 'HEAD'])).stdout.trim()
+		runSession.mockImplementation(async ({ cwd }) => {
+			await writeFile(join(cwd, 'file.txt'), 'main change + f change\n')
+			return { ok: true, tokens: 10, result: 'resolved' }
+		})
+		verify.mockResolvedValue({ ok: false, output: 'npm run lint failed (1)' })
+
+		const outcome = await mergeTask(input('f'))
+
+		expect(outcome.ok).toBe(false)
+		expect(outcome.reason).toMatch(/not green after merging task\/f/)
+		expect((await repo.run(['rev-parse', 'HEAD'])).stdout.trim()).toBe(before)
+		expect(await repo.read()).toBe('main change\n')
+		expect((await repo.run(['status', '--porcelain'])).stdout.trim()).toBe('')
 	})
 })

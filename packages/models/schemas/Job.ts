@@ -35,6 +35,7 @@ export const jobEventType = [
 	'failed',
 	'killed',
 	'log',
+	'retry',
 ] as const
 export type JobEventType = (typeof jobEventType)[number]
 
@@ -168,6 +169,12 @@ export const NotifyPayloadSchema = z.object({
 	to: z.literal('admins'),
 	subject: z.string().min(1).max(notifySubjectMaxLength),
 	text: z.string().max(notifyTextMaxLength),
+	/**
+	 * What the notification is about, when the sender can say. `job-failed` marks the
+	 * orchestrator's build-failure notification — the api holds that mail (only that mail) for a
+	 * job it is about to auto-retry, so a human is paged on the second failure, not the first.
+	 */
+	kind: z.enum(['job-failed']).optional(),
 })
 export type NotifyPayload = z.infer<typeof NotifyPayloadSchema>
 

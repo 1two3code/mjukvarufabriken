@@ -1,3 +1,4 @@
+import { nullTaskArnSweepSlackMinutes } from '#/jobs.ts'
 import {
 	createMemoryRepositories,
 	memoryRateLimitMaxKeys,
@@ -53,6 +54,37 @@ describe('memory repositories', () => {
 			const updated = await repos.jobs.update(job.id, { gates: [gate], gateWaivers: ['a.ts:1'] })
 
 			expect(updated).toMatchObject({ gates: [gate], gateWaivers: ['a.ts:1'] })
+		})
+
+		it('insertRetry writes the retry row and BOTH linking retry events (and 23505s like insert)', async () => {
+			const job = await repos.jobs.insert({ orderId: 'o1', orgId: 'org', spec, budget })
+			await repos.jobs.update(job.id, { status: 'failed', finishedAt: new Date() })
+
+			const retry = await repos.jobs.insertRetry(
+				{ orderId: 'o1', orgId: 'org', spec, budget, reportTokenHash: 'hash-r' },
+				{ id: job.id, reason: 'gates red', tokensUsed: 42 }
+			)
+
+			expect(retry).toMatchObject({ orderId: 'o1', status: 'queued' })
+			await expect(repos.jobs.listEvents(job.id)).resolves.toEqual([
+				expect.objectContaining({
+					type: 'retry',
+					payload: { retryJobId: retry.id, reason: 'gates red', tokensUsed: 42 },
+				}),
+			])
+			await expect(repos.jobs.listEvents(retry.id)).resolves.toEqual([
+				expect.objectContaining({ type: 'retry', payload: { ofJobId: job.id, attempt: 2 } }),
+			])
+
+			// The retry is active, so another insertRetry hits the one-active-per-order guard —
+			// and writes NO events (atomic with the row)
+			await expect(
+				repos.jobs.insertRetry(
+					{ orderId: 'o1', orgId: 'org', spec, budget },
+					{ id: job.id, tokensUsed: 42 }
+				)
+			).rejects.toMatchObject({ code: '23505' })
+			await expect(repos.jobs.listEvents(job.id)).resolves.toHaveLength(1)
 		})
 
 		it('Allows one active job per order and mirrors the unique violation code', async () => {
@@ -144,6 +176,30 @@ describe('memory repositories', () => {
 
 			// Age floor: a cutoff before every row excludes them all
 			expect(await repos.jobs.listStuck(new Date(0))).toHaveLength(0)
+		})
+
+		it('listStuck includes a job with NO task once it outlives its wall-clock budget plus slack', async () => {
+			vi.useFakeTimers({ toFake: ['Date'] })
+			try {
+				// Launch died before the arn was recorded (api crash between insert and update)
+				const orphan = await repos.jobs.insert({ orderId: 'o1', orgId: 'a', spec, budget })
+				// Parked at the approve-before-deliver hold: its clock is legitimately paused
+				const parked = await repos.jobs.insert({ orderId: 'o2', orgId: 'a', spec, budget })
+				await repos.jobs.update(parked.id, { awaitingApproval: true })
+
+				// Young no-arn rows are never candidates, whatever the arn cutoff says
+				expect(await repos.jobs.listStuck(new Date(Date.now() + 60_000))).toHaveLength(0)
+
+				vi.setSystemTime(
+					new Date(
+						Date.now() + (budget.maxDurationMinutes + nullTaskArnSweepSlackMinutes) * 60_000 + 1_000
+					)
+				)
+				const stuck = await repos.jobs.listStuck(new Date(0))
+				expect(stuck.map(job => job.id)).toEqual([orphan.id])
+			} finally {
+				vi.useRealTimers()
+			}
 		})
 	})
 

@@ -129,5 +129,8 @@ export const failureNotification = (
 		to: 'admins',
 		subject: `Build job ${jobId} ${status}`,
 		text: `Job ${jobId} ended with status ${status}.\n\nReason:\n${reason ?? '-'}\n\nGates:\n${gates}`,
+		// Lets the api tell this mail apart from other notify events (delivery degradations stay
+		// unmarked): it holds `job-failed` mails for a job it is about to auto-retry.
+		...(status === 'failed' ? { kind: 'job-failed' as const } : {}),
 	}
 }
