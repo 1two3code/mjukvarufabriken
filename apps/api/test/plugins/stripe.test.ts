@@ -12,6 +12,7 @@ const checkoutInput: CheckoutInput = {
 	orderId: 'order-1',
 	orderName: 'Gym booking',
 	kind: 'deposit',
+	share: 0.5,
 	amountSek: 7_500,
 	vatSek: 1_875,
 	customerEmail: 'anna@example.com',
@@ -274,6 +275,9 @@ describe('Stripe plugin (paymentProvider)', () => {
 			expect(body.get('payment_method_types[1]')).toBe('klarna')
 			expect(body.get('line_items[0][price_data][unit_amount]')).toBe('750000')
 			expect(body.get('line_items[0][price_data][currency]')).toBe('sek')
+			expect(body.get('line_items[0][price_data][product_data][name]')).toBe(
+				'Gym booking — Handpenning 50 % / Deposit 50 %'
+			)
 			expect(body.get('line_items[1][price_data][unit_amount]')).toBe('187500')
 			expect(body.get('line_items[1][price_data][product_data][name]')).toContain('Moms 25 %')
 			expect(body.get('line_items[0][price_data][product_data][tax_code]')).toBe('txcd_10000000')
@@ -282,6 +286,42 @@ describe('Stripe plugin (paymentProvider)', () => {
 			expect(body.get('metadata[orderId]')).toBe('order-1')
 			expect(body.get('invoice_creation[enabled]')).toBe('true')
 			expect(body.get('customer_email')).toBe('anna@example.com')
+		})
+
+		it('Labels a full-upfront charge "Payment 100 %", never "Deposit 50 %"', async () => {
+			// Arrange — a 500 kr demo build: the whole price in one Checkout (share 1)
+			const mock = networkMock
+				.post('https://api.stripe.com/v1/checkout/sessions')
+				.reply(200, { id: 'cs_test_2', url: 'https://checkout.stripe.com/c/pay/cs_test_2' })
+
+			// Act
+			await app.paymentProvider.createCheckoutSession({
+				...checkoutInput,
+				share: 1,
+				amountSek: 500,
+				vatSek: 125,
+			})
+
+			// Assert — the Checkout page and the invoice/receipt it produces state the real charge
+			const body = new URLSearchParams(await mock.spy.requests[0]!.text())
+			const name = body.get('line_items[0][price_data][product_data][name]')
+			expect(name).toBe('Gym booking — Betalning 100 % / Payment 100 %')
+		})
+
+		it('Labels the balance payment of a 50/50 order as "Balance 50 %"', async () => {
+			// Arrange
+			const mock = networkMock
+				.post('https://api.stripe.com/v1/checkout/sessions')
+				.reply(200, { id: 'cs_test_3', url: 'https://checkout.stripe.com/c/pay/cs_test_3' })
+
+			// Act
+			await app.paymentProvider.createCheckoutSession({ ...checkoutInput, kind: 'balance' })
+
+			// Assert
+			const body = new URLSearchParams(await mock.spy.requests[0]!.text())
+			expect(body.get('line_items[0][price_data][product_data][name]')).toBe(
+				'Gym booking — Slutbetalning 50 % / Balance 50 %'
+			)
 		})
 
 		it('Reads the hosted invoice and receipt urls off the expanded session', async () => {

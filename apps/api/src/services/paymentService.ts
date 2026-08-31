@@ -1,7 +1,13 @@
 import { createHash } from 'node:crypto'
 
 import fp from 'fastify-plugin'
-import { canTransitionOrder, paymentAmounts, requiredPaymentKinds, usdCentsOf } from '@mf/models'
+import {
+	canTransitionOrder,
+	paymentAmounts,
+	paymentShareFor,
+	requiredPaymentKinds,
+	usdCentsOf,
+} from '@mf/models'
 
 import { EntityInvalid, EntityNotFound } from '#/lib/entityError.ts'
 import { InvalidWebhookSignature } from '#/plugins/stripe.ts'
@@ -425,6 +431,7 @@ const plugin: FastifyPluginAsync = async app => {
 				orderId,
 				orderName: order.name || orderId,
 				kind,
+				share: paymentShareFor(order.priceSek, kind),
 				amountSek: amounts.amountSek,
 				vatSek: amounts.vatSek,
 				customerEmail: await customerEmail(session),

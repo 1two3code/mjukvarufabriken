@@ -51,6 +51,7 @@ describe('Payment Service', () => {
 				orderId: order.id,
 				orderName: 'Gym booking',
 				kind: 'deposit',
+				share: 0.5,
 				amountSek: 2_000,
 				vatSek: 500,
 				customerEmail: 'farnsworth@planetexpress.example',
@@ -100,6 +101,11 @@ describe('Payment Service', () => {
 				vatSek: 125,
 				totalSek: 625,
 			})
+			// The provider is told this is the whole price (share 1) so the Stripe Checkout page
+			// and its invoice/receipt are labelled "Payment 100 %", not "Deposit 50 %"
+			expect(app.paymentProvider.createCheckoutSession).toHaveBeenCalledWith(
+				expect.objectContaining({ share: 1, amountSek: 500, vatSek: 125 })
+			)
 
 			// Even a delivered full-upfront order has no balance to pay
 			const delivered = await createOrder('delivered', 500)
