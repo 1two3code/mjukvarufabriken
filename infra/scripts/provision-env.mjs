@@ -105,13 +105,26 @@ log(`✓ ${ASSUME ? 'assumed OrganizationAccountAccessRole in' : 'authenticated 
 // MARK: P4 — subdomain hosted zone + NS delegation
 log(`\n[P4] hosted zone ${subdomain}`)
 const zones = awsJson(['route53', 'list-hosted-zones-by-name', '--dns-name', subdomain]).HostedZones || []
-let zone = zones.find(z => z.Name === `${subdomain}.`)
+const matchingZones = zones.filter(z => z.Name === `${subdomain}.`)
+// list-hosted-zones-by-name is eventually consistent — the only guard against duping the zone was
+// this list, which a re-run right after a just-created zone could still miss (hardening audit
+// 2026-08-30, finding G1). More than one match means it already happened; fail loudly rather than
+// silently picking one and risking certs/delegation landing in a zone the internet isn't routed to.
+if (matchingZones.length > 1) {
+	fail(
+		`${matchingZones.length} hosted zones already exist for ${subdomain} (${matchingZones.map(z => z.Id).join(', ')}) — resolve the duplicate by hand before re-running`
+	)
+}
+let zone = matchingZones[0]
 let zoneId
 if (zone) {
 	zoneId = zone.Id.replace('/hostedzone/', '')
 	log(`  exists: ${zoneId}`)
 } else if (APPLY) {
-	const created = awsJson(['route53', 'create-hosted-zone', '--name', subdomain, '--caller-reference', `mf-${env}-${Date.now()}`])
+	// A deterministic caller-reference (not Date.now()) makes a re-run that races the list's
+	// eventual consistency idempotent: Route53 returns the EXISTING zone for a repeat of the same
+	// (name, caller-reference) pair instead of creating a second one with a different NS set.
+	const created = awsJson(['route53', 'create-hosted-zone', '--name', subdomain, '--caller-reference', `mf-${env}-zone`])
 	zoneId = created.HostedZone.Id.replace('/hostedzone/', '')
 	log(`  created: ${zoneId}`)
 } else {
@@ -126,16 +139,29 @@ if (zoneId !== '<new-zone-id>') {
 	nsRecords = (rrs.find(r => r.Type === 'NS' && r.Name === `${subdomain}.`)?.ResourceRecords || []).map(r => r.Value)
 }
 if (parentZoneId) {
-	log(`  delegating ${subdomain} in parent zone ${parentZoneId}`)
+	// Guard against a mistyped --parent-zone-id silently UPSERTing an NS record into an unrelated
+	// zone (hardening audit 2026-08-30, finding D1): the parent zone must actually be an ancestor
+	// of the subdomain we're delegating. Read-only, so it runs in dry-run too.
+	const parentZoneName = awsJson(['route53', 'get-hosted-zone', '--id', parentZoneId], { env: process.env }).HostedZone
+		?.Name
+	if (!parentZoneName || !`${subdomain}.`.endsWith(parentZoneName)) {
+		fail(
+			`--parent-zone-id ${parentZoneId} is zone '${parentZoneName ?? '?'}', which does not own ${subdomain} — refusing to write an NS record there`
+		)
+	}
+	log(`  delegating ${subdomain} in parent zone ${parentZoneId} (${parentZoneName})`)
 	const batch = JSON.stringify({
 		Changes: [{ Action: 'UPSERT', ResourceRecordSet: { Name: subdomain, Type: 'NS', TTL: 300, ResourceRecords: nsRecords.length ? nsRecords.map(v => ({ Value: v })) : [{ Value: '<ns>' }] } }],
 	})
 	try {
 		// The root zone lives in the management account — use the ORIGINAL creds, not the assumed target.
 		awsWrite(['route53', 'change-resource-record-sets', '--hosted-zone-id', parentZoneId, '--change-batch', batch], { env: process.env })
-	} catch {
+	} catch (e) {
 		log(`  ! could not write to parent zone (different account?) — add this NS delegation by hand:`)
 		nsRecords.forEach(v => log(`      ${subdomain}. NS ${v}`))
+		// The delegation genuinely didn't happen — fail loudly instead of exiting 0 as if it had
+		// (finding D1); the manual fallback printed above is still the right next step.
+		fail(`NS delegation write to parent zone ${parentZoneId} failed: ${e.message}`)
 	}
 } else {
 	log(`  no --parent-zone-id — add this NS delegation to the root zone by hand:`)
@@ -146,7 +172,18 @@ if (parentZoneId) {
 const ensureCert = (certRegion, primaryDomain, sans, label) => {
 	log(`\n[P5] ${label} cert (${certRegion}) for ${[primaryDomain, ...sans].join(', ')}`)
 	const list = awsJson(['acm', 'list-certificates'], { region: certRegion }).CertificateSummaryList || []
-	let arn = list.find(c => c.DomainName === primaryDomain)?.CertificateArn
+	// Reuse only a cert that (a) is still on a path to ISSUED — not a terminal FAILED/
+	// VALIDATION_TIMED_OUT one from an earlier aborted run, which would dead-end every re-run
+	// (hardening audit 2026-08-30, finding C1) — and (b) actually covers every SAN we need, not
+	// just the primary domain (finding C3): reusing a cert missing the portal SAN would adopt a
+	// cert CloudFront serves the portal on with a TLS SNI mismatch in every browser.
+	const reusable = list.find(
+		c =>
+			c.DomainName === primaryDomain &&
+			(c.Status === 'ISSUED' || c.Status === 'PENDING_VALIDATION') &&
+			sans.every(san => (c.SubjectAlternativeNameSummaries || []).includes(san))
+	)
+	let arn = reusable?.CertificateArn
 	if (arn) {
 		log(`  exists: ${arn}`)
 	} else if (APPLY) {
@@ -185,7 +222,21 @@ const ensureCert = (certRegion, primaryDomain, sans, label) => {
 				sh('aws', ['acm', 'wait', 'certificate-validated', '--certificate-arn', arn, '--region', certRegion], targetEnv)
 				log(`  ISSUED`)
 			} catch {
-				log(`  ! not ISSUED within the wait window — records are in place, ACM validates on its own; re-run to confirm`)
+				// The waiter times out well before ACM's real 72h validation window closes, so a timeout
+				// here doesn't necessarily mean the cert failed — re-check the actual status before
+				// deciding. Finding C2 (hardening audit 2026-08-30): the old code logged a soft warning
+				// and kept going with exit 0, publishing a not-yet-ISSUED ARN that CloudFront/ALB then
+				// reject at deploy time — and re-runs kept publishing the same stuck ARN. Fail loudly
+				// instead so the ARN is never written to config/GitHub with a status that can't deploy.
+				const status = awsJson(['acm', 'describe-certificate', '--certificate-arn', arn], {
+					region: certRegion,
+				}).Certificate.Status
+				if (status !== 'ISSUED') {
+					fail(
+						`${label} cert ${arn} is ${status}, not ISSUED, after the wait window — records are in place, ACM validates on its own; re-run this script once it clears (or if it's FAILED/VALIDATION_TIMED_OUT, delete it in ACM and re-run to request a fresh one)`
+					)
+				}
+				log(`  ISSUED (confirmed after the wait window timed out)`)
 			}
 		}
 	}
