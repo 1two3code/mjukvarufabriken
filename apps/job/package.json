@@ -13,8 +13,8 @@
     "#/*": "./src/*"
   },
   "dependencies": {
-    "@anthropic-ai/sdk": "^0.121.0",
-    "@aws-sdk/client-secrets-manager": "^3.1119.0",
+    "@anthropic-ai/sdk": "^0.122.0",
+    "@aws-sdk/client-secrets-manager": "^3.1120.0",
     "@mf/db": "*",
     "@mf/harness": "*",
     "@mf/models": "*"
