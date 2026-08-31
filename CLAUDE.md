@@ -1,6 +1,8 @@
 Read PLAN.md first. Work milestone by milestone, tick boxes only when verified.
 Anything needing external approval goes to TODO-EXTERNAL.md, never blocks the road.
 Append /cost to TOKENS.md at the end of every session.
+After any harness job run (dogfood or customer, success or failure): append every defect it
+surfaced to docs/LEARNINGS.md and sweep that file's OPEN entries before starting the next paid run.
 
 ## Git workflow
 
