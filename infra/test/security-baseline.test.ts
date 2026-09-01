@@ -220,6 +220,33 @@ describe('security baseline', () => {
 				)
 			})
 
+			// EC2 rejects security-group rule descriptions containing characters outside its allowed
+			// set, and `cdk synth` does not validate them — so a stray character is only discovered
+			// when CloudFormation tries to create the rule and the whole stack rolls back. That cost
+			// a dev deploy on 2026-09-01 (an arrow in 'load balancer -> app'). Cheap to pin here.
+			it('uses only characters EC2 accepts in security-group rule descriptions', () => {
+				const allowed = /^[a-zA-Z0-9. _\-:/()#,@[\]+=&;{}!$*]*$/
+				const descriptions = [
+					...Object.values(resources.findResources('AWS::EC2::SecurityGroup')).flatMap(group => [
+						...((group.Properties?.SecurityGroupIngress ?? []) as { Description?: string }[]),
+						...((group.Properties?.SecurityGroupEgress ?? []) as { Description?: string }[]),
+					]),
+					...Object.values(resources.findResources('AWS::EC2::SecurityGroupIngress')).map(
+						rule => rule.Properties ?? {}
+					),
+					...Object.values(resources.findResources('AWS::EC2::SecurityGroupEgress')).map(
+						rule => rule.Properties ?? {}
+					),
+				]
+					.map(rule => (rule as { Description?: string }).Description)
+					.filter((text): text is string => typeof text === 'string')
+
+				assert.ok(descriptions.length > 0, 'some rule descriptions exist')
+				for (const text of descriptions) {
+					assert.ok(allowed.test(text), `rejected by EC2: ${JSON.stringify(text)}`)
+				}
+			})
+
 			// The delivered app reaches its own provisioned database through a security group WE own
 			// (passed to CreateExpressGatewayService as networkConfiguration), never by opening 5432
 			// to the VPC. That distinction is the whole point: a VPC-wide rule would also have handed
