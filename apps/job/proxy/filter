@@ -6,3 +6,14 @@ api.github.com
 codeload.github.com
 objects.githubusercontent.com
 raw.githubusercontent.com
+# The delivered app's own preview URL. The post-deploy acceptance check (Gate C) probes the LIVE
+# service from inside this container — SPA HTML, bundle asset, token-aware API calls — so without
+# this the check cannot reach the very thing it exists to verify, and every delivery withholds its
+# URL. ECS Express hands out `<id>.<region>.on.aws`, which is not known until after the deploy, so
+# the pattern has to cover the domain rather than one host.
+#
+# TRADEOFF, deliberately taken: this also lets build code reach any OTHER Express service in AWS.
+# Those are other apps' HTTP endpoints, not credentials, and untrusted customers are still barred
+# by the standing Gate B ban. The tight version is Gate B's C1 fence (own SG, deny-by-default,
+# per-job rules) — docs/backlog/hardening-2026-08-30/c1-egress-fence.md.
+*.on.aws
