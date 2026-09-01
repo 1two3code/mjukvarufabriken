@@ -566,6 +566,13 @@ describe('createWorktree + fetchTaskBranch', () => {
 		const { root, dir: repoDir } = await seedRepo()
 		try {
 			const { dir, branch } = await createWorktree(repoDir, taskOf('t1'))
+			// Auto-gc off at BOTH ends: a repack racing a local clone's file-by-file object copy is
+			// what produced the 2026-09-01 CI failures, including a clone that exited 0 with a
+			// silently incomplete object store ("unable to read tree").
+			const sourceGc = await exec('git', ['config', '--get', 'gc.auto'], { cwd: repoDir })
+			expect(sourceGc.stdout.trim()).toBe('0')
+			const cloneGc = await exec('git', ['config', '--get', 'gc.auto'], { cwd: dir })
+			expect(cloneGc.stdout.trim()).toBe('0')
 			expect(dir).toBe(worktreeDir(repoDir, 't1'))
 			expect(branch).toBe('task/t1')
 			// A full clone, not a linked worktree: .git is a directory with its own refs
