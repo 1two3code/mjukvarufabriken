@@ -58,7 +58,17 @@ export type StartAnthropicForwardProxyOptions = {
 
 /** Headers a caller might send that must never reach upstream unmodified, or that Node re-derives itself */
 const strippedRequestHeaders = /^(x-api-key|authorization|host|content-length)$/i
-const strippedResponseHeaders = /^(content-length|transfer-encoding|connection)$/i
+/**
+ * `content-encoding` MUST be stripped: `fetch` (undici) transparently decompresses the upstream
+ * body, so `upstreamResponse.body` yields DECODED bytes while the header still says `gzip`.
+ * Forwarding it hands the caller plain JSON labelled as compressed — it fails to inflate and the
+ * request dies as `TypeError: terminated`, with no usage recorded because nothing was ever parsed.
+ * Found by the first real build after this proxy landed (dogfood run 1, 2026-09-01): every job
+ * failed at `planning failed: terminated` after ~45s — the model had done the work, and only the
+ * response framing was wrong. The unit tests missed it because their stub upstream returns plain
+ * bodies with no `content-encoding` at all.
+ */
+const strippedResponseHeaders = /^(content-length|content-encoding|transfer-encoding|connection)$/i
 
 /**
  * Fallback pricing when a 2xx response carries no parseable usage: ~4 bytes/token over the
