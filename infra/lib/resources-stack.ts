@@ -96,6 +96,15 @@ export class ResourcesStack extends Stack {
 	/** Shared bucket delivered preview apps store objects in, each under its own `preview/<job>/` prefix */
 	readonly previewBucket: Bucket
 	/**
+	 * Security group the DELIVERED preview apps run in. Passing our own network configuration to
+	 * `CreateExpressGatewayService` (the API accepts one; we previously let AWS choose) is what makes
+	 * a precise RDS rule possible at all — an Express-chosen group is created per service and cannot
+	 * be referenced from here, so the only alternative was opening 5432 to the whole VPC, which
+	 * would also have handed it to the build job and broken the M3 invariant that keeps the job off
+	 * the database.
+	 */
+	readonly previewAppSecurityGroup: SecurityGroup
+	/**
 	 * Permissions boundary every per-app preview role must carry. It is the ceiling on what such a
 	 * role can EVER hold — the api creates those roles, so a bug (or a compromise) in the api still
 	 * cannot mint a role more powerful than "objects in the preview bucket".
@@ -603,6 +612,28 @@ export class ResourcesStack extends Stack {
 			],
 		})
 
+		this.previewAppSecurityGroup = new SecurityGroup(this, 'PreviewAppSecurityGroup', {
+			vpc: this.vpc,
+			description: 'Delivered preview apps (ECS Express tasks)',
+			allowAllOutbound: true,
+		})
+		// The Express-managed load balancer fronts these tasks and its own group is not knowable
+		// here, so ingress is scoped to the container port from inside the VPC rather than to a
+		// security group. That is a far narrower opening than the alternative it replaces.
+		this.previewAppSecurityGroup.addIngressRule(
+			Peer.ipv4(this.vpc.vpcCidrBlock),
+			Port.tcp(8080),
+			'Express-managed load balancer -> delivered app'
+		)
+		// The delivered app reaching its OWN provisioned database (docs/DELIVERED-DB.md). Scoped to
+		// this group alone: the build job is deliberately NOT included, so the M3 invariant that
+		// keeps the job off the database survives — `security-baseline.test.ts` asserts it.
+		this.databaseSecurityGroup.addIngressRule(
+			this.previewAppSecurityGroup,
+			Port.tcp(5432),
+			'delivered preview app -> its own provisioned database'
+		)
+
 		// The job container: apps/job/Dockerfile (harness + golden template). `JOB_ID`, the per-job
 		// `JOB_TOKEN`, `API_URL` and the final `NO_PROXY` (this list + the api host, `JOB_NO_PROXY`
 		// on the api — the ALB lives in mf-<env>, which depends on this stack; with the C1 fence on
@@ -650,6 +681,12 @@ export class ResourcesStack extends Stack {
 				ECR_REPOSITORY_URI: this.deliverablesRepository.repositoryUri,
 				CODEBUILD_PROJECT: this.deliveryBuildProject.projectName,
 				EXPRESS_EXECUTION_ROLE_ARN: this.expressExecutionRole.roleArn,
+				// Our own network configuration for the delivered service, so it lands in a security
+				// group we can write RDS rules against (see PreviewAppSecurityGroup).
+				EXPRESS_SECURITY_GROUP_ID: this.previewAppSecurityGroup.securityGroupId,
+				EXPRESS_SUBNET_IDS: this.vpc
+					.selectSubnets({ subnetType: SubnetType.PRIVATE_WITH_EGRESS })
+					.subnetIds.join(','),
 				EXPRESS_INFRASTRUCTURE_ROLE_ARN: this.expressInfrastructureRole.roleArn,
 				ECS_CLUSTER: this.jobsCluster.clusterName,
 				// The preview api verifies tokens against our api (it publishes a JWKS); only known

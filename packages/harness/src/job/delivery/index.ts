@@ -156,6 +156,12 @@ const notConfigured = (what: string) => async () => {
  * configuration turns into a step failure at delivery time (never a crash at start-up), so a
  * job without a GitHub token still runs its build and gates and fails closed at delivery.
  */
+/** `a,b,c` env lists → `['a','b','c']`; empty/absent → undefined, so the caller's default applies */
+const splitList = (value: string | undefined) => {
+	const items = (value ?? '').split(',').map(entry => entry.trim()).filter(Boolean)
+	return items.length ? items : undefined
+}
+
 export const createLiveDeliveryClients = ({
 	githubApp,
 	githubOrg = process.env.GITHUB_ORG || defaultGitHubOrg,
@@ -230,6 +236,11 @@ export const createLiveDeliveryClients = ({
 						}),
 						executionRoleArn: expressExecutionRoleArn!,
 						infrastructureRoleArn: expressInfrastructureRoleArn!,
+						// Our own subnets + security group, so the delivered app can reach the database
+						// provisioned for it (docs/DELIVERED-DB.md). Absent → AWS chooses the network and
+						// a DB-backed app is unreachable from its own data.
+						subnetIds: splitList(process.env.EXPRESS_SUBNET_IDS),
+						securityGroupIds: splitList(process.env.EXPRESS_SECURITY_GROUP_ID),
 						cluster,
 						previewAuth,
 						region,

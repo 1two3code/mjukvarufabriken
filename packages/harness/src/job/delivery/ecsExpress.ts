@@ -130,6 +130,14 @@ export type EcsExpressOptions = {
 	imageBuilder: ImageBuilderLike
 	/** `AmazonECSTaskExecutionRolePolicy` role — pulls the ECR image, writes container logs */
 	executionRoleArn: string
+	/**
+	 * Subnets and security group the delivered task runs in. Supplying our own means the app lands
+	 * in a group we control, which is what allows a precise RDS ingress rule (docs/DELIVERED-DB.md)
+	 * instead of opening the database to the whole VPC. Omitted → AWS chooses, and a DB-backed app
+	 * cannot reach its own database.
+	 */
+	subnetIds?: string[]
+	securityGroupIds?: string[]
 	/** Role with `AmazonECSInfrastructureRoleforExpressGatewayServices` — provisions the managed ALB */
 	infrastructureRoleArn: string
 	/** ECS cluster the Express service runs on (default `default`) */
@@ -171,6 +179,8 @@ export type EcsExpressOptions = {
 export const createEcsExpressDeployClient = ({
 	imageBuilder,
 	executionRoleArn,
+	subnetIds,
+	securityGroupIds,
 	infrastructureRoleArn,
 	cluster = 'default',
 	previewAuth,
@@ -262,6 +272,18 @@ export const createEcsExpressDeployClient = ({
 				// (docs/PREVIEW-RESOURCES.md). Scoped to that app's own prefix; omitted entirely when
 				// the app needs no storage, so a delivery that touches nothing carries no role at all.
 				...(taskRoleArn && { taskRoleArn }),
+				// Express takes subnets/security groups FLAT — not the standard `awsvpcConfiguration`
+				// wrapper the rest of ECS uses (`ExpressGatewayServiceNetworkConfiguration`).
+				...(subnetIds && subnetIds.length > 0
+					? {
+							networkConfiguration: {
+								subnets: subnetIds,
+								...(securityGroupIds && securityGroupIds.length > 0
+									? { securityGroups: securityGroupIds }
+									: {}),
+							},
+						}
+					: {}),
 				healthCheckPath: '/health',
 				cpu: '256',
 				memory: '512',
