@@ -91,6 +91,43 @@ repair-session staging. **Graduated to:** sandbox/orchestrator fixes in
 
 <!-- New entries above the seed section, newest first. -->
 
+## 2026-09-01 — job fab01a96 (Ögonblick, M) — dogfood run 2, DELIVERED without a URL
+All five gates green (verify, acceptance-tests, review, licence, acceptance-check); repo pushed and
+bundle uploaded; **7.73 M budget-tokens (~USD 19)**, ~1 h 50 m wall clock. The generated app is a
+real PWA — react-router, `vite-plugin-pwa` manifest + service worker, camera capture, S3-backed
+gallery with `sharp` thumbnails. `deployUrl: null` — the deploy was *correctly skipped*.
+
+- **Phase:** delivery
+- **Symptom:** `deploy` step failed closed: `object storage provisioning failed: POST /storage → 500`.
+  Api-side: `Cannot read properties of undefined (reading 'provision')`.
+- **Root cause:** `previewStorageService` (#87) was never registered in `apps/api/src/server.ts`.
+  Routes are autoloaded; **services are imported and `.register()`ed by hand**, so a service can be
+  written, unit-tested and given a working route while not existing at runtime — and the symptom is
+  a 500, not a 404, which reads like a bug *in* the service rather than a missing wire.
+- **Graduated to:** gate/test — #92. Static drift guard (`apps/api/test/serviceRegistration.test.ts`)
+  reads `src/services/*Service.ts` and fails naming any service missing from `server.ts`.
+  Mutation-verified.
+- **Cross-check:** **1 396 tests passed over the top of this.** `createTestApp()` auto-mocks services
+  from `__mocks__/`, so the real registration list is never exercised by any test. Same lesson as
+  run 1's proxy stub, in a different costume: *the test double was more complete than the system,
+  so the missing piece was invisible.* Both now have deterministic guards.
+
+### What went RIGHT (worth recording, not just defects)
+- **Gate C's fail-closed rule did its job on its first real outing.** Faced with a missing storage
+  capability, delivery refused to ship an app whose every upload would 500, and still delivered the
+  repo and bundle. The customer gets no broken URL — exactly the designed behaviour.
+- The five-gate chain passed on a genuinely non-trivial app (PWA + camera + object storage) that
+  exercises surface nothing else has: service worker, `getUserMedia`, binary upload, thumbnailing.
+- `detectStorageNeed` fired correctly — it saw `@aws-sdk/client-s3` / `@fastify/multipart` in the
+  generated `package.json` and demanded provisioning, which is what surfaced the missing service.
+
+### Efficiency re-measurement (closes the OPEN item from the wave-3 entry)
+7.73 M budget-tokens for an M-class, 3-feature/11-criterion app. The 2026-08-26 S-class baseline was
+190 k + 1.25 M for a much smaller spec, so this is the first M-class datapoint rather than a
+like-for-like comparison — **the wave-3 savings estimate still has no clean before/after**. Recording
+the number so the next M-class run has a baseline; the estimate stays unverified.
+
+
 ## 2026-09-01 — job 7bee3234 (Ögonblick, shared event-camera PWA, M) — dogfood run 1, FAILED
 First run driven end-to-end through the **portal** as a customer (magic link → order → spec chat →
 freeze → Stripe test payment → webhook auto-start), not seeded through the api. That path itself
