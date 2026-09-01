@@ -4,6 +4,7 @@ import { ProtectedLayout } from '#/layouts/templates/ProtectedLayout.tsx'
 import { PublicLayout } from '#/layouts/templates/PublicLayout.tsx'
 import { AdminCustomersPage } from '#/pages/AdminCustomersPage.tsx'
 import { AdminJobsPage } from '#/pages/AdminJobsPage.tsx'
+import { AdminMarginPage } from '#/pages/AdminMarginPage.tsx'
 import { AdminOverviewPage } from '#/pages/AdminOverviewPage.tsx'
 import { AdminPricingPage } from '#/pages/AdminPricingPage.tsx'
 import { AdminResidentPage } from '#/pages/AdminResidentPage.tsx'
@@ -39,7 +40,7 @@ export const router = createBrowserRouter([
 			{ path: '/admin/customers', element: <AdminCustomersPage /> },
 			{ path: '/admin/resident', element: <AdminResidentPage /> },
 			{ path: '/admin/pricing', element: <AdminPricingPage /> },
-			// /admin/margin (M12, when built): per-customer margin + aggregate P&L over time
+			{ path: '/admin/margin', element: <AdminMarginPage /> },
 			{ path: '/orders/:orderId/spec', element: <SpecPage /> },
 			{ path: '/orders/:orderId/job', element: <JobPage /> },
 		],

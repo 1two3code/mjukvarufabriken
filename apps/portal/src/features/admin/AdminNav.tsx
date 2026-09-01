@@ -9,7 +9,7 @@ const links = [
 	{ to: '/admin/customers', key: 'customers', end: false },
 	{ to: '/admin/resident', key: 'resident', end: false },
 	{ to: '/admin/pricing', key: 'pricing', end: false },
-	// Margin (M12, per-customer + aggregate P&L): another tab here once it's built
+	{ to: '/admin/margin', key: 'margin', end: false },
 ] as const
 
 /** Shared tab nav across every /admin/* section */

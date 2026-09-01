@@ -1,0 +1,50 @@
+.title {
+	margin-bottom: var(--spacing-xs);
+	font-size: var(--font-size-l);
+}
+
+.fields {
+	display: flex;
+	flex-wrap: wrap;
+	gap: var(--spacing-xs);
+	align-items: flex-end;
+}
+
+.field {
+	display: flex;
+	flex-direction: column;
+	gap: var(--spacing-xxs);
+}
+
+.label {
+	composes: composable-caption-font from global;
+	color: var(--secondary-text-color);
+}
+
+.input {
+	min-width: 9rem;
+	padding: var(--spacing-xxs) var(--spacing-xs);
+	border: var(--border-width-xs) solid var(--divider-color);
+	border-radius: var(--border-radius-s);
+
+	font: inherit;
+	color: inherit;
+
+	background: var(--content-background);
+}
+
+/* A read-only fact rendered in the knob row: input-sized, but visibly not editable */
+.fact {
+	min-width: 9rem;
+	padding: var(--spacing-xxs) var(--spacing-xs);
+	border: var(--border-width-xs) dashed var(--divider-color);
+	border-radius: var(--border-radius-s);
+
+	color: var(--secondary-text-color);
+}
+
+.note {
+	margin-top: var(--spacing-xs);
+	font-size: var(--font-size-s);
+	color: var(--secondary-text-color);
+}
