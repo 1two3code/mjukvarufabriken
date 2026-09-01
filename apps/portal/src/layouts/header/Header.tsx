@@ -6,6 +6,7 @@ import { NavLink } from 'react-router-dom'
 import { useAppDispatch, useAppSelector } from '#/app/hooks.ts'
 import { useLogoutMutation } from '#/features/auth/authApiSlice.ts'
 import { clearSession, selectRefreshToken, selectSession } from '#/features/session/sessionSlice.ts'
+import { LanguageToggle } from '#/features/language/LanguageToggle.tsx'
 import { ThemeToggle } from '#/features/theme/ThemeToggle.tsx'
 
 import { Has } from '#/layouts/Has.tsx'
@@ -40,6 +41,7 @@ export function Header() {
 				</Has>
 			</nav>
 			<div className={styles.right}>
+				<LanguageToggle />
 				<ThemeToggle />
 				<span className={styles.user} title={session.user.email}>
 					<span className={styles.userName}>{session.user.email}</span>

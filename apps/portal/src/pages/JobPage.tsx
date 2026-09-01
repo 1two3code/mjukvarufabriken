@@ -2,9 +2,9 @@ import styles from './JobPage.module.css'
 
 import { useTranslation } from 'react-i18next'
 import { Link, useParams } from 'react-router-dom'
-import { isActiveJobStatus } from '@mf/models'
 
-import { useGetJobQuery, useGetOrderJobsQuery } from '#/features/jobs/jobsApiSlice.ts'
+import { jobsApiSlice, useGetJobQuery, useGetOrderJobsQuery } from '#/features/jobs/jobsApiSlice.ts'
+import { jobPollingInterval } from '#/features/jobs/polling.ts'
 import { Deliverables } from '#/features/jobs/Deliverables.tsx'
 import { GateReports } from '#/features/jobs/GateReports.tsx'
 import { JobEventLog } from '#/features/jobs/JobEventLog.tsx'
@@ -12,17 +12,21 @@ import { JobStatusCard } from '#/features/jobs/JobStatusCard.tsx'
 
 import { Spinner } from '#/components/Spinner.tsx'
 
-const pollingInterval = 3000
-
 export function JobPage() {
 	const { t } = useTranslation()
 	const { orderId = '' } = useParams()
 	const { data: jobs, isLoading, isError } = useGetOrderJobsQuery(orderId, { skip: !orderId })
 	const latestId = jobs?.[0]?.id
-	const latestActive = jobs?.[0] ? isActiveJobStatus(jobs[0].status) : false
+
+	// The already-cached detail row — no extra request, no extra subscription. The job list above
+	// is fetched once and never polled, so deciding from it alone kept the 3 s poll running for
+	// ever once a job finished; the row the poll refreshes is the one that knows it is done.
+	const { data: polled } = jobsApiSlice.endpoints.getJob.useQueryState(latestId ?? '', {
+		skip: !latestId,
+	})
 	const { data: job } = useGetJobQuery(latestId ?? '', {
 		skip: !latestId,
-		pollingInterval: latestActive ? pollingInterval : 0,
+		pollingInterval: jobPollingInterval(polled, jobs),
 	})
 
 	if (isLoading) return <Spinner center />

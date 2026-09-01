@@ -42,6 +42,16 @@ export const jobsApiSlice = appApi
 			}),
 			killJob: build.mutation<Job, string>({
 				query: jobId => ({ url: `/admin/jobs/${jobId}/kill`, method: 'POST' }),
+				// The upsert echoes the killed row into the open job view immediately; the tags then
+				// refresh everything else that still shows the pre-kill status — the order's job list
+				// (order page and the "a build is running" affordances) and the event log, which gains
+				// a `killed` event. Without them an admin kills a runaway build and the rest of the
+				// portal keeps saying `building` until a reload.
+				invalidatesTags: (result, _error, jobId) => [
+					{ type: 'job', id: jobId },
+					{ type: 'jobEvents', id: jobId },
+					...(result ? [{ type: 'job' as const, id: `order-${result.orderId}` }] : []),
+				],
 				async onQueryStarted(jobId, { dispatch, queryFulfilled }) {
 					const { data } = await queryFulfilled
 					dispatch(jobsApiSlice.util.upsertQueryData('getJob', jobId, data))
