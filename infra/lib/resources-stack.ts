@@ -623,7 +623,7 @@ export class ResourcesStack extends Stack {
 		this.previewAppSecurityGroup.addIngressRule(
 			Peer.ipv4(this.vpc.vpcCidrBlock),
 			Port.tcp(8080),
-			'Express-managed load balancer -> delivered app'
+			'Express-managed load balancer to delivered app'
 		)
 		// The delivered app reaching its OWN provisioned database (docs/DELIVERED-DB.md). Scoped to
 		// this group alone: the build job is deliberately NOT included, so the M3 invariant that
@@ -631,7 +631,7 @@ export class ResourcesStack extends Stack {
 		this.databaseSecurityGroup.addIngressRule(
 			this.previewAppSecurityGroup,
 			Port.tcp(5432),
-			'delivered preview app -> its own provisioned database'
+			'delivered preview app to its own provisioned database'
 		)
 
 		// The job container: apps/job/Dockerfile (harness + golden template). `JOB_ID`, the per-job
