@@ -398,6 +398,11 @@ describe('offline build-job e2e', () => {
 				'f1.c0': { evidence: ['apps/api/test/acceptance/f1.c0.test.ts'], status: 'met' },
 			})
 
+			// ORC-01, end to end: the manifest HANDOVER.md points at survives the gate chain (the
+			// acceptance-check gate's `git clean -qfd` used to delete it) and is in what we push
+			const tracked = await exec('git', ['ls-tree', '-r', '--name-only', 'HEAD'], { cwd: repoDir })
+			expect(tracked.stdout).toContain('THIRD-PARTY-LICENCES.md')
+
 			// The pushed repo + preview were the fakes, so zero network happened
 			expect((delivery.github as FakeGitHub).pushes).toHaveLength(1)
 		} finally {

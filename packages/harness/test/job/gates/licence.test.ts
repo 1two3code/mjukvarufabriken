@@ -518,6 +518,8 @@ describe('licenceGate', () => {
 
 		const tracked = (await git(root, ['ls-tree', '-r', '--name-only', 'HEAD'])).stdout.trim()
 		expect(tracked).toBe(licenceFileName)
+		// And nothing else was even staged — a later `commitAll` must not inherit a loaded index
+		expect((await git(root, ['diff', '--cached', '--name-only'])).stdout.trim()).toBe('')
 	})
 
 	it('Commits nothing on a re-run with an identical manifest and stays green', async () => {
