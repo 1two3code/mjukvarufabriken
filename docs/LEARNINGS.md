@@ -90,3 +90,54 @@ repair-session staging. **Graduated to:** sandbox/orchestrator fixes in
 ---
 
 <!-- New entries above the seed section, newest first. -->
+
+## 2026-09-01 — job 7bee3234 (Ögonblick, shared event-camera PWA, M) — dogfood run 1, FAILED
+First run driven end-to-end through the **portal** as a customer (magic link → order → spec chat →
+freeze → Stripe test payment → webhook auto-start), not seeded through the api. That path itself
+worked flawlessly; everything below is what it exposed.
+
+- **Phase:** plan
+- **Symptom:** `planning failed: terminated` after ~45 s, `tokensUsed: 0`, no gate ran. The egress
+  proxy log shows the CONNECT tunnel to `api.anthropic.com` established and held for the full 45 s,
+  so the request went out and the model did the work.
+- **Root cause:** `fetch` (undici) transparently DECOMPRESSES a gzip response but leaves
+  `content-encoding: gzip` on the headers. `apps/job/src/anthropicForwardProxy.ts` (Gate B A1, #65)
+  stripped `content-length` and `transfer-encoding` but not `content-encoding`, so the caller got
+  plain JSON labelled as compressed, failed to inflate (`Z_DATA_ERROR: incorrect header check`) and
+  undici surfaced it as `TypeError: terminated`. Only the response framing was wrong.
+- **Graduated to:** sandbox/infra + test — #90. The regression test now mimics undici (decoded body,
+  header still present) and reproduces the exact production error without the fix.
+- **Cross-check:** the six existing proxy tests could never have caught it — their stub upstream
+  returns plain bodies with **no `content-encoding` at all**, so the header-forwarding path was
+  untested against a compressed response. Lesson: a fake that is *simpler* than the real dependency
+  silently deletes the failure mode. **Every build since #65 merged (2026-08-31 09:00) would have
+  failed identically**; none ran, so the factory was broken and silent for a day.
+
+- **Phase:** delivery
+- **Symptom:** the delivered app is named after the spec's goal SENTENCE, not the order. Slug
+  `skapa-en-installerbar-pwa-som-fungerar-som-en-dela-7bee3234`, app name a truncated Swedish
+  paragraph — while the order is called "Ögonblick".
+- **Root cause:** `deliveryTarget()` derives slug/appName from `spec.goal` when the order name is
+  available and is the obviously better source.
+- **Graduated to:** **OPEN** — a customer's repo would carry that name. Small fix, real
+  delivery-quality defect.
+
+- **Phase:** ops
+- **Symptom:** dev had been running stale code for hours; five consecutive `deploy.yml` runs failed,
+  silently. Nothing alarmed.
+- **Root cause:** CloudFormation cross-stack deadlock — `resources-dev` drops the `JobLogGroup`
+  export (wave 11 #44 removed the MetricFilters that consumed it) while the deployed `ops-dev` still
+  imports it, and the pipeline deploys producer→consumer, which is exactly backwards for REMOVING an
+  export. Cleared by deploying `ops-dev` alone first.
+- **Graduated to:** **OPEN** — two gaps: (a) nothing alerts on a failed deploy, so dev can sit stale
+  indefinitely; (b) the ordering hazard will recur the next time an export is removed.
+
+### Calibration notes from the same run (not defects)
+- The spec classified **M**, not the **S** PLAN.md predicted: the engine extracted 11 acceptance
+  criteria from the same content PLAN.md counted as 6. Size (and therefore budget and price) is
+  sensitive to how finely criteria are split — worth knowing before quoting.
+- The spec engine answered in **Swedish** to an English prompt. Defensible default for a Swedish
+  company, but it is an unmade product decision.
+- Efficiency re-measurement (the OPEN item below) could **not** be done: the run spent 0 tokens.
+  It carries to run 2.
+
