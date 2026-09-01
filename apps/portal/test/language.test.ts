@@ -135,8 +135,9 @@ describe('Portal language selection', () => {
 			for (const locale of ['en', 'sv'] as const) {
 				const values = loadLocale(locale)
 				expect(values['language.action.switch'], locale).toBeTruthy()
-				for (const language of languages)
+				for (const language of languages) {
 					expect(values[`language.${language}`], locale).toBeTruthy()
+				}
 			}
 		})
 	})

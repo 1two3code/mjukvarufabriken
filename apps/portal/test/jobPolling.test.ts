@@ -51,8 +51,9 @@ const makeJob = (status: JobStatus): Job => ({ id: 'job-1', status }) as unknown
 describe('Job polling', () => {
 	describe('isPollableJobStatus', () => {
 		it('Stops only at the three terminal statuses', () => {
-			for (const status of terminalJobStatus)
+			for (const status of terminalJobStatus) {
 				expect(isPollableJobStatus(status), status).toBe(false)
+			}
 			for (const status of ['queued', 'planning', 'building', 'verifying'] as const) {
 				expect(isPollableJobStatus(status), status).toBe(true)
 			}
