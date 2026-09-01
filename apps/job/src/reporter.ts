@@ -15,6 +15,7 @@ import type {
 	JobReportTokenResponse,
 	JobReportUpdate,
 	JobReportUpdateResponse,
+	JobStorageResponse,
 	NewJobEvent,
 } from '@mf/models'
 
@@ -40,6 +41,12 @@ export type JobReporter = {
 	 * Absent in db mode (local `job:dev`), where delivery fails closed instead.
 	 */
 	provisionDatabase?: () => Promise<{ databaseUrl: string }>
+	/**
+	 * Provisions the delivered app's object storage through the api (docs/PREVIEW-RESOURCES.md):
+	 * its own prefix in the shared preview bucket plus a role scoped to that prefix, which the
+	 * deploy passes as the task role. Absent in db mode, where delivery fails closed instead.
+	 */
+	provisionStorage?: () => Promise<JobStorageResponse>
 	/**
 	 * Mints a short-lived preview access token via the api so the post-deploy live acceptance
 	 * check can exercise auth-gated routes of the delivered app. Absent in db mode.
@@ -201,6 +208,11 @@ export const createApiReporter = ({
 			),
 		provisionDatabase: async () => {
 			const result = await request<JobDatabaseResponse>('/database', 'POST')
+			if (!result) throw new ApiReportError(404, 'job not found')
+			return result
+		},
+		provisionStorage: async () => {
+			const result = await request<JobStorageResponse>('/storage', 'POST')
 			if (!result) throw new ApiReportError(404, 'job not found')
 			return result
 		},

@@ -6,6 +6,7 @@ import {
 	buildEnvManifest,
 	detectDatabaseNeed,
 	detectRequiredEnv,
+	detectStorageNeed,
 	isPlaceholderValue,
 	isSelfIssuedSecret,
 	parseRequiredEnv,
@@ -242,5 +243,50 @@ describe('detectDatabaseNeed', () => {
 		const need = await detectDatabaseNeed(repoDir, [])
 		expect(need.needed).toBe(true)
 		expect(need.evidence[0]).toContain('migrations/')
+	})
+})
+
+describe('detectStorageNeed', () => {
+	let repoDir: string
+	beforeEach(async () => {
+		repoDir = await mkdtemp(join(tmpdir(), 'mf-storeneed-'))
+	})
+	afterEach(() => rm(repoDir, { recursive: true, force: true }))
+
+	it('a repo with no storage signal needs nothing', async () => {
+		expect(await detectStorageNeed(repoDir, ['DATABASE_URL'])).toEqual({
+			needed: false,
+			evidence: [],
+		})
+	})
+
+	it('a declared bucket env var is a need', async () => {
+		const need = await detectStorageNeed(repoDir, ['S3_BUCKET'])
+		expect(need.needed).toBe(true)
+		expect(need.evidence[0]).toContain('S3_BUCKET')
+	})
+
+	it('an S3 client dependency is a need', async () => {
+		await mkdir(join(repoDir, 'apps', 'api'), { recursive: true })
+		await writeFile(
+			join(repoDir, 'apps', 'api', 'package.json'),
+			JSON.stringify({ dependencies: { '@aws-sdk/client-s3': '^3', fastify: '^5' } })
+		)
+		const need = await detectStorageNeed(repoDir, [])
+		expect(need.needed).toBe(true)
+		expect(need.evidence[0]).toContain('@aws-sdk/client-s3')
+	})
+
+	// The photo-PWA shape: an app that accepts uploads has to put them somewhere, and on a preview
+	// the container's disk dies with the next deployment — so an upload middleware alone is a need.
+	it('an upload middleware alone is a need', async () => {
+		await mkdir(join(repoDir, 'apps', 'api'), { recursive: true })
+		await writeFile(
+			join(repoDir, 'apps', 'api', 'package.json'),
+			JSON.stringify({ dependencies: { '@fastify/multipart': '^9' } })
+		)
+		const need = await detectStorageNeed(repoDir, [])
+		expect(need.needed).toBe(true)
+		expect(need.evidence[0]).toContain('@fastify/multipart')
 	})
 })

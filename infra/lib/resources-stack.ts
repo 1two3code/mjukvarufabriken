@@ -93,6 +93,14 @@ export class ResourcesStack extends Stack {
 	readonly expressExecutionRole: Role
 	/** Infrastructure role ECS Express assumes to provision the managed ALB per delivery (M5) */
 	readonly expressInfrastructureRole: Role
+	/** Shared bucket delivered preview apps store objects in, each under its own `preview/<job>/` prefix */
+	readonly previewBucket: Bucket
+	/**
+	 * Permissions boundary every per-app preview role must carry. It is the ceiling on what such a
+	 * role can EVER hold — the api creates those roles, so a bug (or a compromise) in the api still
+	 * cannot mint a role more powerful than "objects in the preview bucket".
+	 */
+	readonly previewRoleBoundary: ManagedPolicy
 	/** Hosts the job container reaches without the egress proxy; WebStack appends the api host */
 	readonly jobNoProxyHosts: string[]
 	/** `/mf/<env>/jobs` — JSON lines from the job + proxy containers (see docs/RUNBOOK.md) */
@@ -554,6 +562,44 @@ export class ResourcesStack extends Stack {
 					// print it as ".../AmazonECSInfrastructureRoleforExpressGatewayServices", which 404s)
 					'service-role/AmazonECSInfrastructureRoleForExpressGatewayServices'
 				),
+			],
+		})
+
+		// MARK: Preview object storage (docs/PREVIEW-RESOURCES.md)
+		// A delivered app that takes uploads needs somewhere to put them. One shared bucket, one
+		// prefix per job, and — the part that matters — one IAM role per job scoped to that prefix,
+		// created by the api at delivery time. ECS has no session-tag/ABAC passthrough for task
+		// roles (containers-roadmap#2426), so a single shared role could only be scoped to
+		// `preview/*`: every delivered app able to read every other's objects, separated by nothing
+		// but convention. Per-job roles make IAM the fence instead.
+		this.previewBucket = new Bucket(this, 'PreviewBucket', {
+			encryption: BucketEncryption.S3_MANAGED,
+			blockPublicAccess: BlockPublicAccess.BLOCK_ALL,
+			enforceSSL: true,
+			removalPolicy: RemovalPolicy.DESTROY,
+			autoDeleteObjects: true,
+			lifecycleRules: [
+				// Preview objects belong to a preview. Nothing here is the customer's system of
+				// record — the delivered repo is — so they expire rather than accumulate forever.
+				{ id: 'expire-preview-objects', expiration: Duration.days(90) },
+			],
+		})
+
+		// The ceiling on every per-app role the api mints. A permissions boundary caps the EFFECTIVE
+		// permissions of a role regardless of what policy is attached to it, so even a bug in
+		// previewStorageService cannot produce a role that reaches outside this bucket.
+		this.previewRoleBoundary = new ManagedPolicy(this, 'PreviewRoleBoundary', {
+			managedPolicyName: `mf-preview-boundary-${environment.name}`,
+			description: 'Ceiling for per-delivery preview app roles: objects in the preview bucket only',
+			statements: [
+				new PolicyStatement({
+					actions: ['s3:GetObject', 's3:PutObject', 's3:DeleteObject', 's3:AbortMultipartUpload'],
+					resources: [`${this.previewBucket.bucketArn}/preview/*`],
+				}),
+				new PolicyStatement({
+					actions: ['s3:ListBucket'],
+					resources: [this.previewBucket.bucketArn],
+				}),
 			],
 		})
 

@@ -190,6 +190,12 @@ export class WebStack extends Stack {
 					EMAIL_TRANSPORT: environment.email.transport,
 					DATABASE_SECRET_ARN: resources.databaseSecret.secretArn,
 					ARTIFACTS_BUCKET: resources.artifactsBucket.bucketName,
+					// Per-delivery preview storage: the bucket delivered apps write into, and the
+					// boundary every minted per-app role must carry (the api's own IAM grant is
+					// conditioned on it, so a role created without it is refused by IAM, not by us)
+					PREVIEW_BUCKET: resources.previewBucket.bucketName,
+					PREVIEW_ROLE_BOUNDARY_ARN: resources.previewRoleBoundary.managedPolicyArn,
+					AWS_ACCOUNT_ID: Stack.of(this).account,
 					JOBS_CLUSTER_ARN: resources.jobsCluster.clusterArn,
 					// Family, not ARN: RunTask resolves the latest revision and there is no cross-stack
 					// export that changes on every job image rebuild
@@ -339,6 +345,52 @@ export class WebStack extends Stack {
 				conditions: { StringEquals: { 'cloudwatch:namespace': `mf/${environment.name}` } },
 			})
 		)
+
+		// Per-delivery preview storage (docs/PREVIEW-RESOURCES.md). The api mints one small IAM role
+		// per delivered app, scoped to that app's own prefix. Giving the api IAM-write is the price
+		// of real (IAM-enforced, not convention-enforced) isolation between delivered apps, so the
+		// grant is fenced four ways:
+		//   1. name    — only roles called `mf-preview-app-*`
+		//   2. path    — only under `/mf-preview/`, which nothing else in the account uses
+		//   3. boundary— `iam:PermissionsBoundary` MUST equal the preview boundary policy, so a
+		//                minted role can never hold more than "objects in the preview bucket";
+		//                without this condition the whole fence is decorative
+		//   4. actions — create/read/tag and inline-policy writes only; no attach of managed
+		//                policies, no boundary edits, no role deletion outside the path
+		const previewRoleArn = `arn:aws:iam::${Stack.of(this).account}:role/mf-preview/mf-preview-app-*`
+		taskRole.addToPrincipalPolicy(
+			new PolicyStatement({
+				sid: 'MintPreviewAppRoles',
+				actions: ['iam:CreateRole', 'iam:TagRole'],
+				resources: [previewRoleArn],
+				conditions: {
+					StringEquals: {
+						'iam:PermissionsBoundary': resources.previewRoleBoundary.managedPolicyArn,
+					},
+				},
+			})
+		)
+		taskRole.addToPrincipalPolicy(
+			new PolicyStatement({
+				sid: 'ScopePreviewAppRoles',
+				// PutRolePolicy is the prefix scoping itself; GetRole is the redelivery path. Neither
+				// can widen the role beyond the boundary attached at creation.
+				actions: ['iam:PutRolePolicy', 'iam:GetRole', 'iam:DeleteRolePolicy', 'iam:DeleteRole'],
+				resources: [previewRoleArn],
+			})
+		)
+		// ECS must be able to hand the minted role to the delivered task. Fenced to the same path,
+		// and to ECS alone — PassRole is how a PassRole grant becomes privilege escalation, so it
+		// carries the service condition rather than standing open.
+		taskRole.addToPrincipalPolicy(
+			new PolicyStatement({
+				sid: 'PassPreviewAppRolesToEcs',
+				actions: ['iam:PassRole'],
+				resources: [previewRoleArn],
+				conditions: { StringEquals: { 'iam:PassedToService': 'ecs-tasks.amazonaws.com' } },
+			})
+		)
+		resources.previewBucket.grantReadWrite(taskRole)
 
 		// MARK: DNS
 		// MARK: Same-origin API — CloudFront forwards /bff/* on both SPAs to the ALB (no CORS needed)

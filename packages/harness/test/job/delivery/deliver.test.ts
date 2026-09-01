@@ -870,4 +870,101 @@ describe('deliver', () => {
 		expect(outcome.ok).toBe(false)
 		expect(outcome.reason).toBe('github: GITHUB_APP (id/key/installation) is not configured (TODO-EXTERNAL)')
 	})
+
+	// MARK: Object storage (docs/PREVIEW-RESOURCES.md)
+
+	it('Skips the deploy when the app needs object storage and no provisioner is configured', async () => {
+		// Arrange — the photo-PWA shape: uploads with nowhere to put them
+		await mkdir(join(repoDir, 'apps/api'), { recursive: true })
+		await writeFile(
+			join(repoDir, 'apps/api/package.json'),
+			JSON.stringify({ dependencies: { '@aws-sdk/client-s3': '^3' } })
+		)
+		const deploy = createFakeDeployClient()
+		const boot = createFakeBootCheck()
+		const { clients } = createClients({ deploy, boot })
+
+		// Act
+		const outcome = await deliver(createInput(repoDir), clients)
+
+		// Assert — fail closed rather than shipping an app that silently loses every upload
+		expect(deploy.deployments).toEqual([])
+		expect(boot.calls).toEqual([])
+		expect(outcome.deliverable?.deployUrl).toBeNull()
+		const deployStep = outcome.steps.find(step => step.step === 'deploy')
+		expect(deployStep).toMatchObject({ step: 'deploy', ok: false })
+		expect(deployStep!.reason).toContain('needs object storage')
+	})
+
+	it('Provisions storage and passes the prefix-scoped role as the task role', async () => {
+		// Arrange
+		await mkdir(join(repoDir, 'apps/api'), { recursive: true })
+		await writeFile(
+			join(repoDir, 'apps/api/package.json'),
+			JSON.stringify({ dependencies: { '@aws-sdk/client-s3': '^3' } })
+		)
+		const deploy = createFakeDeployClient()
+		const storageProvisioner = {
+			provision: vi.fn().mockResolvedValue({
+				bucket: 'mf-preview-test',
+				prefix: 'preview/1111222233334444/',
+				region: 'eu-north-1',
+				roleArn: 'arn:aws:iam::123456789012:role/mf-preview/mf-preview-app-1111222233334444',
+			}),
+		}
+		const { clients } = createClients({ deploy, storageProvisioner })
+
+		// Act
+		const outcome = await deliver(createInput(repoDir), clients)
+
+		// Assert — the container is told the NAMES, never a credential, and runs AS the scoped role
+		expect(storageProvisioner.provision).toHaveBeenCalledTimes(1)
+		expect(deploy.taskRoleArns).toEqual([
+			'arn:aws:iam::123456789012:role/mf-preview/mf-preview-app-1111222233334444',
+		])
+		expect(deploy.envs[0]).toMatchObject({
+			S3_BUCKET: 'mf-preview-test',
+			S3_PREFIX: 'preview/1111222233334444/',
+			AWS_REGION: 'eu-north-1',
+		})
+		const envString = JSON.stringify(deploy.envs[0])
+		expect(envString).not.toContain('AWS_SECRET_ACCESS_KEY')
+		expect(envString).not.toContain('AWS_ACCESS_KEY_ID')
+		expect(outcome.deliverable?.deployUrl).toBeTruthy()
+	})
+
+	it('Skips the deploy when storage provisioning fails', async () => {
+		// Arrange
+		await mkdir(join(repoDir, 'apps/api'), { recursive: true })
+		await writeFile(
+			join(repoDir, 'apps/api/package.json'),
+			JSON.stringify({ dependencies: { multer: '^1' } })
+		)
+		const deploy = createFakeDeployClient()
+		const storageProvisioner = { provision: vi.fn().mockRejectedValue(new Error('IAM denied')) }
+		const { clients } = createClients({ deploy, storageProvisioner })
+
+		// Act
+		const outcome = await deliver(createInput(repoDir), clients)
+
+		// Assert
+		expect(deploy.deployments).toEqual([])
+		const deployStep = outcome.steps.find(step => step.step === 'deploy')
+		expect(deployStep!.reason).toContain('object storage provisioning failed')
+		expect(deployStep!.reason).toContain('IAM denied')
+	})
+
+	it('Leaves an app that needs no storage without a task role', async () => {
+		// Arrange — nothing in the repo suggests uploads
+		const deploy = createFakeDeployClient()
+		const storageProvisioner = { provision: vi.fn() }
+		const { clients } = createClients({ deploy, storageProvisioner })
+
+		// Act
+		await deliver(createInput(repoDir), clients)
+
+		// Assert — no role minted, and the deploy carries none
+		expect(storageProvisioner.provision).not.toHaveBeenCalled()
+		expect(deploy.taskRoleArns).toEqual([undefined])
+	})
 })

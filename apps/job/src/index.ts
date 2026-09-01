@@ -189,6 +189,9 @@ try {
 		...(reporter.provisionDatabase && {
 			dbProvisioner: { provision: () => reporter.provisionDatabase!() },
 		}),
+		...(reporter.provisionStorage && {
+			storageProvisioner: { provision: () => reporter.provisionStorage!() },
+		}),
 		...(reporter.mintPreviewToken && {
 			mintPreviewToken: () => reporter.mintPreviewToken!().catch(() => undefined),
 		}),

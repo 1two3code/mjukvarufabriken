@@ -65,6 +65,13 @@ export type DeployClient = {
 		 * falls back to the fixed generated app-secret set (older callers / static deliveries).
 		 */
 		env?: Record<string, string>
+		/**
+		 * IAM role the delivered task runs AS (not the execution role, which only pulls the image).
+		 * Set when the app was provisioned object storage: the role is scoped to that app's prefix
+		 * alone, so the container reads its credentials from the task metadata endpoint and IAM —
+		 * not convention — stops it reaching another delivered app's objects.
+		 */
+		taskRoleArn?: string
 		signal?: AbortSignal
 	}) => Promise<{
 		url: string
@@ -115,6 +122,23 @@ export type DbProvisioner = {
 	provision: (input?: { signal?: AbortSignal }) => Promise<{ databaseUrl: string }>
 }
 
+/**
+ * Provisions the delivered app's object storage through the api (docs/PREVIEW-RESOURCES.md): a
+ * prefix in the shared preview bucket plus an IAM role scoped to exactly that prefix, which the
+ * deploy then passes as the delivered task's role. Same credential shape as {@link DbProvisioner}
+ * — the build container holds nothing, it only receives the names back. Absent (local db-mode
+ * runs, older callers) → an app that needs storage fails closed rather than shipping one whose
+ * uploads 500 or, worse, land on container-local disk and vanish on the next deployment.
+ */
+export type StorageProvisioner = {
+	provision: (input?: { signal?: AbortSignal }) => Promise<{
+		bucket: string
+		prefix: string
+		region: string
+		roleArn: string
+	}>
+}
+
 export type ArtifactStore = {
 	/** Which backend backs the store — real S3, dry-run logger, in-memory fake, or unconfigured */
 	kind: 's3' | 'dry-run' | 'fake' | 'none'
@@ -155,6 +179,8 @@ export type DeliveryClients = {
 	liveCheck?: LiveCheck
 	/** Provisions the delivered app's database when it needs one (docs/DELIVERED-DB.md) */
 	dbProvisioner?: DbProvisioner
+	/** Provisions the delivered app's object storage when it needs it (docs/PREVIEW-RESOURCES.md) */
+	storageProvisioner?: StorageProvisioner
 	/** GitHub organisation that owns customer repos (default `mjukvaruhuset`) */
 	githubOrg?: string
 	/** IdP for the preview api; without it the Express deploy step is not attempted */

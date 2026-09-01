@@ -123,6 +123,25 @@ export const JobDatabaseResponseSchema = z.object({
 })
 export type JobDatabaseResponse = z.infer<typeof JobDatabaseResponseSchema>
 
+// MARK: POST /internal/jobs/:jobId/storage
+/**
+ * Per-delivery object storage (docs/PREVIEW-RESOURCES.md): the api creates a prefix in the shared
+ * preview bucket plus a dedicated IAM role scoped to exactly that prefix, and returns both. The
+ * role is passed to ECS Express as the delivered service's `taskRoleArn`, so the container gets
+ * its credentials from the task metadata endpoint — no keys in env, and IAM (not convention)
+ * stops one delivered app reaching another's objects.
+ */
+export const JobStorageResponseSchema = z.object({
+	/** Shared preview bucket every delivered app writes into, each under its own prefix */
+	bucket: z.string().min(1),
+	/** This app's prefix, `preview/<jobId>/` — the ONLY keys its role may touch */
+	prefix: z.string().min(1),
+	region: z.string().min(1),
+	/** Role ECS Express runs the delivered task as; scoped to `prefix` and nothing else */
+	roleArn: z.string().min(1),
+})
+export type JobStorageResponse = z.infer<typeof JobStorageResponseSchema>
+
 // MARK: POST /internal/jobs/:jobId/preview-token
 /**
  * Short-lived access token for the delivered preview app (audience = the preview audience the
