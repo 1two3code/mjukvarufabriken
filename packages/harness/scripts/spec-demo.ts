@@ -25,6 +25,10 @@ const engine = createSpecEngine({ client: new Anthropic({ apiKey }) })
 const draft: Pick<SpecDraft, 'spec' | 'messages'> = { spec: {}, messages: [] }
 let totalIn = 0
 let totalOut = 0
+// Counted separately: `input_tokens` is only the uncached remainder, so summing it alone would
+// under-report the turn's real input by whatever the cached system prefix covers.
+let totalCacheRead = 0
+let totalCacheWrite = 0
 
 console.log(`model: ${engine.model}\n`)
 for (const [index, userMessage] of turns.entries()) {
@@ -32,6 +36,8 @@ for (const [index, userMessage] of turns.entries()) {
 	const turn = await engine.nextTurn(draft, userMessage)
 	totalIn += turn.usage.inputTokens
 	totalOut += turn.usage.outputTokens
+	totalCacheRead += turn.usage.cacheReadInputTokens
+	totalCacheWrite += turn.usage.cacheCreationInputTokens
 	const now = new Date().toISOString()
 	draft.messages.push(
 		{ role: 'user', content: userMessage, createdAt: now },
@@ -49,4 +55,6 @@ console.log('=== resulting spec')
 console.log(JSON.stringify(draft.spec, null, 2))
 const price = estimatePrice(draft.spec)
 console.log(`\n=== size ${price.sizeClass} → ${price.priceSek.toLocaleString('sv-SE')} SEK ex moms`)
-console.log(`tokens: ${totalIn} in / ${totalOut} out`)
+console.log(
+	`tokens: ${totalIn} in (uncached) / ${totalCacheRead} cache read / ${totalCacheWrite} cache write / ${totalOut} out`
+)

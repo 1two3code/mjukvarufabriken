@@ -86,23 +86,23 @@ describe('createSpecEngine', () => {
 			disable_parallel_tool_use: true,
 		})
 		expect(params.tools).toEqual([expect.objectContaining({ name: specToolName, strict: true })])
-		// The draft spec rides on the final user turn (see `toMessageParams`), not the system prompt
 		expect(params.messages).toEqual([
-			{
-				role: 'user',
-				content: [
-					{ type: 'text', text: expect.stringContaining('Current draft spec') },
-					{ type: 'text', text: 'Jag vill ha en bokningsapp för mitt gym' },
-				],
-			},
+			{ role: 'user', content: 'Jag vill ha en bokningsapp för mitt gym' },
 		])
-		expect(JSON.stringify(params.system)).not.toContain('Current draft spec')
+		// The draft spec is a system block, behind the one cache breakpoint (see `createSpecEngine`)
+		expect(JSON.stringify(params.system)).toContain('Current draft spec')
+		expect(JSON.stringify(params.messages)).not.toContain('Current draft spec')
 		expect(turn).toEqual({
 			assistantMessage: 'Tack! Några frågor...',
 			spec: { goal: 'En bokningsapp för ett litet gym' },
 			openQuestions: ['Vilka är användarna?', 'Vilka funktioner behövs?'],
 			complete: false,
-			usage: { inputTokens: 100, outputTokens: 50 },
+			usage: {
+				inputTokens: 100,
+				outputTokens: 50,
+				cacheReadInputTokens: 0,
+				cacheCreationInputTokens: 0,
+			},
 		})
 	})
 
@@ -166,7 +166,7 @@ describe('createSpecEngine', () => {
 			content: 'I want a booking app for my gym',
 		})
 		expect(secondCall.messages[1]?.role).toBe('assistant')
-		expect(JSON.stringify(secondCall.messages)).toContain('Current draft spec')
+		expect(JSON.stringify(secondCall.system)).toContain('Current draft spec')
 
 		expect(turn2.complete).toBe(true)
 		expect(turn2.openQuestions).toEqual([])
@@ -228,7 +228,7 @@ describe('createSpecEngine', () => {
 			const messages = history(specHistoryWindow * 2)
 
 			// Act
-			const params = toMessageParams(messages, 'latest', {})
+			const params = toMessageParams(messages, 'latest')
 
 			// Assert — the window plus the new user turn, and it is the TAIL that survives
 			expect(params).toHaveLength(specHistoryWindow + 1)
@@ -239,7 +239,7 @@ describe('createSpecEngine', () => {
 
 		it('Never starts the replay on an assistant message', () => {
 			// Arrange — an odd window lands mid-turn, on `m1` (assistant)
-			const params = toMessageParams(history(6), 'latest', {}, 5)
+			const params = toMessageParams(history(6), 'latest', 5)
 
 			// Assert — the dangling assistant reply is dropped, so the first message is a user one
 			expect(params[0]?.role).toBe('user')
@@ -247,26 +247,25 @@ describe('createSpecEngine', () => {
 			expect(params).toHaveLength(5)
 		})
 
-		it('Puts a cache breakpoint on the last replayed message and nowhere else', () => {
-			// Act
-			const params = toMessageParams(history(4), 'latest', {})
+		it('Puts no cache breakpoint on the sliding window, which can never be a stable prefix', () => {
+			// Arrange — a full window, then the next turn's (two messages appended, two dropped)
+			const turnN = toMessageParams(history(specHistoryWindow + 4), 'latest')
+			const turnNext = toMessageParams(history(specHistoryWindow + 6), 'newer')
 
-			// Assert — only the newest replayed message carries the breakpoint, so each turn extends
-			// a cached prefix instead of re-billing the whole transcript
-			const breakpoints = params.flatMap(message =>
+			// Assert — the first message block already differs, so a breakpoint anywhere in the
+			// transcript would bill a cache WRITE every turn and never be read back
+			expect(textOf(turnN[0]!)).not.toBe(textOf(turnNext[0]!))
+			const breakpoints = [...turnN, ...turnNext].flatMap(message =>
 				typeof message.content === 'string'
 					? []
 					: message.content.filter(block => 'cache_control' in block && block.cache_control)
 			)
-			expect(breakpoints).toHaveLength(1)
-			expect(breakpoints[0]).toMatchObject({ text: 'm3', cache_control: { type: 'ephemeral' } })
+			expect(breakpoints).toEqual([])
 		})
 
-		it('Sends only the draft spec and the message when there is no history', () => {
-			const params = toMessageParams([], 'first message', { goal: 'A booking app' })
-			expect(params).toHaveLength(1)
-			expect(textOf(params[0]!)).toContain('A booking app')
-			expect(textOf(params[0]!)).toContain('first message')
+		it('Sends only the new message when there is no history', () => {
+			const params = toMessageParams([], 'first message')
+			expect(params).toEqual([{ role: 'user', content: 'first message' }])
 		})
 	})
 

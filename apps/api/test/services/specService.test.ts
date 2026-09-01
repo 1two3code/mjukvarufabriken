@@ -304,6 +304,45 @@ describe('Spec Service', () => {
 				app.db.rateLimits.count(specChatRateLimitScope.order, 'order-1', since)
 			).resolves.toBe(1)
 		})
+
+		it('Rate limits globally, so minting fresh orgs does not bypass the ceiling either', async () => {
+			// Arrange — a brand new org (sign-up is open and free, so this costs an abuser nothing),
+			// but the deployment as a whole has already used its window on other orgs
+			const fresh: BackendSession = { userId: 'user-fresh', role: 'user', orgId: 'org-fresh' }
+			await seed(createEmptyDraft('order-new', 'org-fresh'))
+			const now = new Date()
+			for (let i = 0; i < specChatLimits.maxTurnsGlobal; i++) {
+				await app.db.rateLimits.record(specChatRateLimitScope.org, `org-${i}`, now)
+			}
+
+			// Act & Assert
+			await expect(app.specService.sendMessage('order-new', 'hi', fresh)).rejects.toBeInstanceOf(
+				SpecRateLimited
+			)
+			expect(app.anthropic.messages.create).not.toHaveBeenCalled()
+		})
+
+		it('Records the hit before counting, so a concurrent burst cannot outrun the ceiling', async () => {
+			// Arrange — one order, far more concurrent turns than its window allows
+			await seed(createEmptyDraft('order-1', 'org-1'))
+			const burst = specChatLimits.maxTurnsPerOrder * 2
+
+			// Act — all of them are in flight before any of them finishes
+			const results = await Promise.allSettled(
+				Array.from({ length: burst }, () => app.specService.sendMessage('order-1', 'hi', user))
+			)
+
+			// Assert — with a count-then-record limiter every one of these would read a count of 0,
+			// pass, and spend a paid model call. Recording first makes the race over-count instead.
+			expect(vi.mocked(app.anthropic.messages.create).mock.calls.length).toBeLessThanOrEqual(
+				specChatLimits.maxTurnsPerOrder
+			)
+			expect(
+				results.filter(
+					result => result.status === 'rejected' && result.reason instanceof SpecRateLimited
+				).length
+			).toBeGreaterThanOrEqual(burst - specChatLimits.maxTurnsPerOrder)
+		})
 	})
 
 	describe('freeze', () => {

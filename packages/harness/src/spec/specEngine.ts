@@ -33,7 +33,17 @@ export type SpecTurn = {
 	spec: PartialSpec
 	openQuestions: string[]
 	complete: boolean
-	usage: { inputTokens: number; outputTokens: number }
+	/**
+	 * Every input bucket, not just `input_tokens`. A cached prefix is billed under
+	 * `cache_read_input_tokens` / `cache_creation_input_tokens`, so `input_tokens` alone is the
+	 * *uncached remainder* — reporting it as the turn's input under-states what was spent.
+	 */
+	usage: {
+		inputTokens: number
+		outputTokens: number
+		cacheReadInputTokens: number
+		cacheCreationInputTokens: number
+	}
 }
 
 export type SpecEngine = {
@@ -55,7 +65,7 @@ export const specSystemPrompt = `You are Mjukvaruhuset's spec engineer. Mjukvaru
 Your job: turn the conversation with the customer into a precise, buildable spec.
 
 Rules:
-- Extract and refine the spec from the WHOLE conversation, not only the latest message. Keep everything the customer already told you; refine wording, never drop content unless the customer changed their mind.
+- Extract and refine the spec from the whole conversation, not only the latest message. Only the most recent turns are replayed to you — the current draft spec below is the authoritative record of everything the customer has already told you. Keep all of it; refine wording, never drop content unless the customer changed their mind.
 - Never invent requirements. If something is unknown, leave it out and ask.
 - Ask at most 3 targeted questions per turn, only about information that is missing for a complete spec: a clear goal (at least one sentence), who the users are, each feature with concrete acceptance criteria, explicit non-goals (what is out of scope) and stack constraints (or an explicit "no constraints").
 - When the customer answers "none" / "no constraints" / "nothing out of scope", record that as an empty list — it still counts as answered.
@@ -163,19 +173,24 @@ export const specHistoryWindow = 20
 const ephemeral = { type: 'ephemeral' } as const
 
 /**
- * The conversation for one turn: the tail of the stored history, then the current draft spec and
- * the new customer message as the final user turn.
+ * The conversation for one turn: the tail of the stored history, then the new customer message.
  *
- * Two deliberate details:
- * - the draft spec goes AFTER the history, not into the system prompt. It changes every turn, and
- *   prompt caching is prefix-based — with it in front, nothing behind it could ever be cached.
- * - the last replayed message carries a cache breakpoint, so the steady-state cost of a long chat
- *   is a cache read of the transcript rather than full-price input tokens on every turn.
+ * Deliberately carries NO `cache_control` breakpoint. Prompt caching is a prefix match, and a
+ * sliding window is not a stable prefix: once the window is full every turn appends two messages
+ * and drops two off the front, so the request's very first message block differs from the previous
+ * turn's and the match fails at block 0. A breakpoint on the transcript would therefore bill the
+ * whole window as a cache *write* (1.25× base input) on every turn and never read it back — about
+ * 25 % MORE than simply resending it. The only content that is byte-identical AND at the same
+ * position across turns is the tool schema and the system prompt, which is where the one
+ * breakpoint sits (see {@link createSpecEngine}); the draft spec stays in the system array behind
+ * it, where it costs the same as it always did.
+ *
+ * The cost defect audit P1-2 names — per-turn cost linear in the transcript, total cost quadratic,
+ * and eventual permanent 500s once the context window overflowed — is closed by the window itself.
  */
 export const toMessageParams = (
 	messages: ChatMessage[],
 	userMessage: string,
-	spec: PartialSpec,
 	window: number = specHistoryWindow
 ): Anthropic.MessageParam[] => {
 	const recent = window > 0 ? messages.slice(-window) : []
@@ -183,20 +198,8 @@ export const toMessageParams = (
 	// the assistant's reply.
 	const history = recent[0]?.role === 'assistant' ? recent.slice(1) : recent
 	return [
-		...history.map((message, index) => ({
-			role: message.role,
-			content:
-				index === history.length - 1
-					? [{ type: 'text' as const, text: message.content, cache_control: ephemeral }]
-					: message.content,
-		})),
-		{
-			role: 'user',
-			content: [
-				{ type: 'text', text: draftContext(spec) },
-				{ type: 'text', text: userMessage },
-			],
-		},
+		...history.map(message => ({ role: message.role, content: message.content })),
+		{ role: 'user', content: userMessage },
 	]
 }
 
@@ -237,10 +240,16 @@ export const createSpecEngine = ({
 		const response = await client.messages.create({
 			model: resolvedModel,
 			max_tokens: maxTokens,
-			system: [{ type: 'text', text: specSystemPrompt, cache_control: ephemeral }],
+			// The breakpoint sits on the one block that is identical on every turn. Tools render
+			// before `system`, so it caches the tool schema with it. `draftContext` follows it
+			// because it changes every turn — behind the only breakpoint, it invalidates nothing.
+			system: [
+				{ type: 'text', text: specSystemPrompt, cache_control: ephemeral },
+				{ type: 'text', text: draftContext(draft.spec) },
+			],
 			tools: [specTool],
 			tool_choice: { type: 'tool', name: specToolName, disable_parallel_tool_use: true },
-			messages: toMessageParams(draft.messages, userMessage, draft.spec),
+			messages: toMessageParams(draft.messages, userMessage),
 		})
 
 		const output = SpecToolOutputSchema.parse(findToolInput(response))
@@ -256,6 +265,8 @@ export const createSpecEngine = ({
 			usage: {
 				inputTokens: response.usage.input_tokens,
 				outputTokens: response.usage.output_tokens,
+				cacheReadInputTokens: response.usage.cache_read_input_tokens ?? 0,
+				cacheCreationInputTokens: response.usage.cache_creation_input_tokens ?? 0,
 			},
 		}
 	}

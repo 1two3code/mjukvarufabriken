@@ -13,12 +13,21 @@ import type { BackendSession, ChatMessage, SpecDraft } from '@mf/models'
  * granted to the plain `user` role and `POST /bff/orders` mints orders without a quota, so until
  * these landed any signed-in customer could drive unbounded model spend from the portal.
  *
- * Three layers, cheapest first:
+ * Four layers, cheapest first:
  * - `maxTurns` — a hard lifetime cap per draft. A spec that is not settled in this many turns is a
  *   conversation that has gone wrong, not one that needs another 500 turns.
  * - `maxTurnsPerOrder` — burst control within the window, so one order cannot be hammered.
- * - `maxTurnsPerOrg` — the ceiling that actually binds: an order-scoped limit alone is bypassed by
- *   minting more orders, which costs the caller nothing.
+ * - `maxTurnsPerOrg` — an order-scoped limit alone is bypassed by minting more orders, which costs
+ *   the caller nothing.
+ * - `maxTurnsGlobal` — the only ceiling that actually bounds total spend. Per-org is bypassed one
+ *   level up, exactly as per-order is bypassed by minting orders: sign-up is open and free, and
+ *   `userService.findOrCreateByEmail` mints a fresh user AND a fresh org for any new address on
+ *   first sign-in, so a new account resets the per-org window. This is the deployment-wide blast
+ *   radius, sized well above what any plausible number of real customers chatting at once needs
+ *   (four orgs can each saturate their own window simultaneously before it engages) and low enough
+ *   that a scripted abuser cannot run the bill up without bound. Raise it when real traffic
+ *   approaches it, not before. Same shape as `contactRateLimit.globalMax`, and counted the same
+ *   way: the org scope with no key.
  *
  * The window must stay inside `rateLimitRetentionMs` — `rateLimitWindowStart` throws if it does not.
  */
@@ -26,6 +35,7 @@ export const specChatLimits = {
 	maxTurns: 60,
 	maxTurnsPerOrder: 20,
 	maxTurnsPerOrg: 60,
+	maxTurnsGlobal: 240,
 	windowMinutes: 10,
 } as const
 
@@ -39,7 +49,7 @@ export class SpecTurnLimitReached extends Error {
 	}
 }
 
-/** Too many turns within the window, for this order or across the org. Retry later. */
+/** Too many turns within the window — for this order, this org or the deployment. Retry later. */
 export class SpecRateLimited extends Error {
 	constructor(orderId: string) {
 		super(`Spec chat for order ${orderId} is rate limited`)
@@ -57,8 +67,8 @@ declare module 'fastify' {
 			/**
 			 * Runs one spec-engine turn and stores the updated draft. Throws EntityInvalid when frozen,
 			 * {@link SpecTurnLimitReached} once the draft has used its lifetime turn budget and
-			 * {@link SpecRateLimited} when the per-order or per-org window is full — all three before
-			 * any model call, so a refused turn costs nothing.
+			 * {@link SpecRateLimited} when the per-order, per-org or global window is full — all of
+			 * them before any model call, so a refused turn costs nothing.
 			 */
 			sendMessage: (orderId: string, content: string, session: BackendSession) => Promise<SpecDraft>
 			/** Freezes a complete draft and fixes its price. Throws EntityInvalid when incomplete. */
@@ -96,27 +106,47 @@ const plugin: FastifyPluginAsync = async app => {
 	const sizePrices = async () => sizePricesFromTiers(await db.pricingTiers.list())
 
 	/**
-	 * Counts one turn against both windows and refuses when either is full. The hit is recorded
-	 * BEFORE the engine call, like the contact-form limiter: the tokens are spent the moment the
-	 * request goes out, so a turn that then fails must still count — otherwise a caller who makes
-	 * the engine fail gets unlimited free retries.
+	 * Counts one turn against the order, org and global windows and refuses when any is full.
+	 *
+	 * RECORD FIRST, then count — deliberately the opposite order to a naive limiter. Counting first
+	 * is check-then-act: with no atomicity and no in-flight accounting between the route and the
+	 * engine, N concurrent requests all read a count taken before any of their INSERTs commit, all
+	 * pass, and all spend a paid Anthropic call. The ceiling would then bind only on sequential
+	 * callers, and sustained spend would be set by whatever concurrency the caller can open against
+	 * the BFF rather than by the numbers above. Inserting the hit before reading turns that race
+	 * into an over-COUNT (a turn refused that a serial caller would have been allowed, self-healing
+	 * as the window slides) instead of an over-ADMIT (unbounded paid calls). A strict guarantee
+	 * would need a conditional INSERT or an advisory lock keyed on the org; this is the cheap fix
+	 * that fails in the safe direction.
+	 *
+	 * Recording before the engine call is also what the contact-form limiter does, and for the same
+	 * reason: the tokens are spent the moment the request goes out, so a turn that then fails must
+	 * still count — otherwise a caller who makes the engine fail gets unlimited free retries.
+
 	 */
 	const countTurn = async (orderId: string, orgId: string) => {
 		// Throws if the window ever outgrows what the pruner retains (a silently bypassed limit)
 		const now = new Date()
 		const since = rateLimitWindowStart(windowMs, now)
-		const [perOrder, perOrg] = await Promise.all([
-			db.rateLimits.count(specChatRateLimitScope.order, orderId, since),
-			db.rateLimits.count(specChatRateLimitScope.org, orgId, since),
-		])
-		if (perOrder >= specChatLimits.maxTurnsPerOrder || perOrg >= specChatLimits.maxTurnsPerOrg) {
-			app.log.warn({ orderId, orgId, perOrder, perOrg }, 'Spec chat rate limit hit')
-			throw new SpecRateLimited(orderId)
-		}
 		await Promise.all([
 			db.rateLimits.record(specChatRateLimitScope.order, orderId, now),
 			db.rateLimits.record(specChatRateLimitScope.org, orgId, now),
 		])
+		// `key: undefined` counts every org's hits — the deployment-wide total, no extra row needed
+		const [perOrder, perOrg, global] = await Promise.all([
+			db.rateLimits.count(specChatRateLimitScope.order, orderId, since),
+			db.rateLimits.count(specChatRateLimitScope.org, orgId, since),
+			db.rateLimits.count(specChatRateLimitScope.org, undefined, since),
+		])
+		// Each count already includes this turn's own hit, so a full window shows as `>`, not `>=`
+		if (
+			perOrder > specChatLimits.maxTurnsPerOrder ||
+			perOrg > specChatLimits.maxTurnsPerOrg ||
+			global > specChatLimits.maxTurnsGlobal
+		) {
+			app.log.warn({ orderId, orgId, perOrder, perOrg, global }, 'Spec chat rate limit hit')
+			throw new SpecRateLimited(orderId)
+		}
 	}
 
 	const get: FastifyInstance['specService']['get'] = async (orderId, session) => {
@@ -132,7 +162,10 @@ const plugin: FastifyPluginAsync = async app => {
 		sendMessage: async (orderId, content, session) => {
 			const draft = await get(orderId, session)
 			if (draft.status === 'frozen') throw new EntityInvalid('spec', orderId)
-			// Two stored messages per turn (the customer's and the engine's reply)
+			// Two stored messages per turn (the customer's and the engine's reply). This read is
+			// check-then-act against `updateUnlessFrozen` below, so concurrent turns can overshoot
+			// the cap; `countTurn` is the layer that bounds spend under concurrency, and concurrent
+			// turns on one draft already clobber each other's messages (last write wins).
 			if (draft.messages.length >= specChatLimits.maxTurns * 2) {
 				throw new SpecTurnLimitReached(orderId)
 			}
