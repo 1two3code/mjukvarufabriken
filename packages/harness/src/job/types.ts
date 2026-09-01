@@ -205,6 +205,15 @@ export type OrchestratorHooks = {
 	/** Polled every `pollIntervalMs`; returning true aborts the job with status `killed` */
 	isKilled?: () => Promise<boolean>
 	/**
+	 * Called once at start with a report function for usage observed at the job's Anthropic
+	 * forward proxy (hardening audit 2026-08-30, Gate B finding D1). Everything fed into it counts
+	 * against the token budget on a separate proxy-observed ledger (`BudgetTracker.addObserved`) —
+	 * a superset of the SDK-counted total, so out-of-band `curl` spend a worker makes directly
+	 * against the proxy burns the same budget and trips the same abort, without double counting
+	 * the SDK sessions' own traffic.
+	 */
+	attachProxyUsage?: (report: OnUsage) => void
+	/**
 	 * Called once when the job reaches the approve-before-deliver hold (W9), before it starts
 	 * waiting — the container persists the awaiting-approval state so the api can expose it.
 	 */

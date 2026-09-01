@@ -3,6 +3,7 @@ import { buildEnvManifest, detectDatabaseNeed } from './envManifest.ts'
 import { curateWorkflows, stripInternalGitArtifacts } from './curate.ts'
 import { writeDocs } from './docs.ts'
 import { defaultGitHubOrg } from './github.ts'
+import { scanRepoForSecrets, secretScanReason } from './secretScan.ts'
 import { acceptanceReportOf } from './types.ts'
 
 import { git } from '#job/exec.ts'
@@ -164,6 +165,31 @@ export const deliver = async (
 	}
 	if (aborted()) return aborted()!
 
+	// MARK: secret scan (hardening A2) — deterministic, injection-proof, fails the delivery
+	// closed BEFORE anything leaves the building (repo push, bundle upload). Scans exactly what
+	// is delivered: the committed tree + the git history (binaries and merge-commit blobs
+	// included). Runs in dry-run too (it is local). The one delivered artifact git does not
+	// cover — the untracked dist/ output `uploadSite` ships — gets its own scan inside
+	// `uploadSite`, which blocks that upload the same way.
+	try {
+		const scan = await scanRepoForSecrets(repoDir, {
+			knownSecrets: clients.knownSecrets,
+			signal,
+		})
+		if (!scan.ok) {
+			const reason = secretScanReason(scan)
+			await step({ step: 'secret-scan', ok: false, reason })
+			return fail(reason)
+		}
+		await step({ step: 'secret-scan', ok: true })
+	} catch (error) {
+		// Fail closed: a scan that cannot run is a scan that did not pass
+		const reason = `secret scan could not run: ${(error as Error).message}`
+		await step({ step: 'secret-scan', ok: false, reason })
+		return fail(reason)
+	}
+	if (aborted()) return aborted()!
+
 	// MARK: repo
 	let transferPending = target.customerGithubLogin
 		? undefined
@@ -278,7 +304,7 @@ export const deliver = async (
 	if (aborted()) return aborted()!
 	let siteUrl: string | null = null
 	try {
-		const site = await uploadSite(jobId, repoDir, artifacts, signal)
+		const site = await uploadSite(jobId, repoDir, artifacts, signal, clients.knownSecrets)
 		siteUrl = site.url
 		if (site.reason) deployReason = deployReason ? `${deployReason}\n${site.reason}` : site.reason
 	} catch (error) {

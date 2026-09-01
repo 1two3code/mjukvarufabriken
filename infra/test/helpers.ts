@@ -15,7 +15,7 @@ import { WebStack } from '../lib/web-stack.ts'
 import type { EnvironmentName } from '../lib/config.ts'
 
 /** A throw-away directory standing in for a built SPA (BucketDeployment needs the path to exist) */
-const createFakeDist = () => {
+export const createFakeDist = () => {
 	const dir = mkdtempSync(path.join(tmpdir(), 'mf-dist-'))
 	writeFileSync(path.join(dir, 'index.html'), '<html></html>')
 	return dir

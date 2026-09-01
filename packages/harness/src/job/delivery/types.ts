@@ -159,6 +159,12 @@ export type DeliveryClients = {
 	githubOrg?: string
 	/** IdP for the preview api; without it the Express deploy step is not attempted */
 	previewAuth?: PreviewAuth
+	/**
+	 * The job's own live secret values (Anthropic key, GitHub App private key, report token, …) —
+	 * the delivery secret scan (hardening A2) fails closed when any of them appears in the
+	 * delivered tree or history. Values only; never logged, never delivered.
+	 */
+	knownSecrets?: string[]
 	/** Log instead of calling GitHub / ECS Express / S3 (`--dry-run`); events say so */
 	dryRun?: boolean
 }

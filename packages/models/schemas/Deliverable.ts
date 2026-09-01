@@ -4,12 +4,14 @@ import { DeployedServiceReportSchema } from './DeployedService.ts'
 
 // MARK: Enums
 /**
- * Delivery steps in run order; each one is emitted as a `delivery` job event. `acceptance` is
- * the post-deploy end-to-end check: the LIVE preview URL is probed like a customer would use it
- * (SPA HTML + assets, headless render, token-aware API probes). It only runs when a service was
- * actually stood up, so older events without it stay valid.
+ * Delivery steps in run order; each one is emitted as a `delivery` job event. `secret-scan` is
+ * the deterministic credential scan of the committed tree + history (hardening A2) — it runs
+ * after `docs` (so the scanned tree is exactly what is pushed) and fails the delivery closed.
+ * `acceptance` is the post-deploy end-to-end check: the LIVE preview URL is probed like a
+ * customer would use it (SPA HTML + assets, headless render, token-aware API probes). It only
+ * runs when a service was actually stood up, so older events without it stay valid.
  */
-export const deliveryStep = ['docs', 'repo', 'deploy', 'acceptance', 'bundle'] as const
+export const deliveryStep = ['docs', 'secret-scan', 'repo', 'deploy', 'acceptance', 'bundle'] as const
 export type DeliveryStep = (typeof deliveryStep)[number]
 
 // MARK: Files

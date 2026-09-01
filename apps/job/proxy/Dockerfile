@@ -7,6 +7,10 @@ RUN apk add --no-cache tinyproxy
 
 COPY tinyproxy.conf /etc/tinyproxy/tinyproxy.conf
 COPY filter /etc/tinyproxy/filter
+COPY entrypoint.sh /entrypoint.sh
 
 EXPOSE 8888
-CMD ["tinyproxy", "-d", "-c", "/etc/tinyproxy/tinyproxy.conf"]
+# The entrypoint appends FILTER_ALLOW_EXTRA (comma-separated hosts) to the filter — the C1
+# fence routes job->api reports through this proxy and the api host is per-environment.
+# Without the env var it starts tinyproxy on the static filter, byte-identical behaviour.
+ENTRYPOINT ["/bin/sh", "/entrypoint.sh"]

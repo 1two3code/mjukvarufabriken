@@ -65,6 +65,22 @@ export type EnvironmentConfig = {
 		memoryMiB: number
 		/** M5: log GitHub / ECS Express / S3 delivery calls instead of making them (until the roles are ready) */
 		deliveryDryRun?: boolean
+		/**
+		 * C1 hard egress fence (hardening audit 2026-08-30) — DEFAULT OFF, dev deploys untouched.
+		 * On: the egress proxy runs as its OWN Fargate service/SG (not a sidecar sharing the job
+		 * ENI), the job SG becomes deny-by-default (egress only to the proxy, the VPC interface
+		 * endpoints and the S3 gateway prefix list), and interface endpoints are created for the
+		 * AWS APIs the job calls directly (NO_PROXY set). What flipping this requires:
+		 * docs/backlog/hardening-2026-08-30/c1-egress-fence.md.
+		 */
+		egressFence?: boolean
+		/**
+		 * The region's AWS-managed S3 prefix list id (`pl-…`, from
+		 * `aws ec2 describe-managed-prefix-lists --filters Name=prefix-list-name,Values=com.amazonaws.<region>.s3`).
+		 * Required when `egressFence` is on: the deny-by-default job SG needs it to reach the S3
+		 * gateway endpoint (artifact uploads AND the Fargate image pull's ECR layer store).
+		 */
+		s3PrefixListId?: string
 	}
 	/** Alerting thresholds (M9); alarms notify `adminEmails` through the `mf-alerts-<env>` topic */
 	alerts: {
@@ -104,6 +120,14 @@ const region = account ? process.env.MF_REGION || process.env.CDK_DEFAULT_REGION
 
 const auth = { audience: 'mjukvaruhuset' }
 const emailFrom = 'noreply@mjukvaruhuset.se'
+
+// C1 egress fence, operator-flippable per deploy without a source edit (MF_EGRESS_FENCE=1 plus
+// MF_S3_PREFIX_LIST_ID=pl-…). Unset → {} → the flag stays off and every synth/deploy is
+// byte-identical to before the fence existed. See config type + c1-egress-fence.md for details.
+const egressFence =
+	process.env.MF_EGRESS_FENCE === '1'
+		? { egressFence: true, s3PrefixListId: process.env.MF_S3_PREFIX_LIST_ID }
+		: {}
 
 export const config: Config = {
 	serviceName: 'mf',
@@ -147,7 +171,7 @@ export const config: Config = {
 				allocatedStorageGb: 20,
 				backupRetentionDays: 7,
 			},
-			jobs: { cpu: 2048, memoryMiB: 4096 }, // deliveryDryRun off 2026-08-28 — dev delivers for real now
+			jobs: { cpu: 2048, memoryMiB: 4096, ...egressFence }, // deliveryDryRun off 2026-08-28 — dev delivers for real now
 			alerts: {
 				jobTokensThreshold: 20_000_000,
 				monthlyBudgetUsd: 150,
@@ -195,7 +219,7 @@ export const config: Config = {
 				allocatedStorageGb: 20,
 				backupRetentionDays: 7,
 			},
-			jobs: { cpu: 2048, memoryMiB: 4096 },
+			jobs: { cpu: 2048, memoryMiB: 4096, ...egressFence },
 			alerts: {
 				jobTokensThreshold: 20_000_000,
 				monthlyBudgetUsd: 150,
@@ -214,7 +238,7 @@ export const config: Config = {
 				allocatedStorageGb: 20,
 				backupRetentionDays: 30,
 			},
-			jobs: { cpu: 2048, memoryMiB: 4096 },
+			jobs: { cpu: 2048, memoryMiB: 4096, ...egressFence },
 			alerts: {
 				jobTokensThreshold: 20_000_000,
 				monthlyBudgetUsd: 400,

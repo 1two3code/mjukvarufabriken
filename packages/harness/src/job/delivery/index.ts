@@ -41,6 +41,7 @@ export * from './ecsExpress.ts'
 export * from './github.ts'
 export * from './imageBuild.ts'
 export * from './prose.ts'
+export * from './secretScan.ts'
 export * from './types.ts'
 
 // MARK: Slug
@@ -113,6 +114,8 @@ export type LiveDeliveryOptions = {
 	 * credentials) so the post-deploy acceptance check can exercise auth-gated routes.
 	 */
 	mintPreviewToken?: PreviewTokenMinter
+	/** The job's own live secret values, for the delivery secret scan (A2) — see DeliveryClients */
+	knownSecrets?: string[]
 	/** Log instead of calling GitHub / ECS Express / S3 */
 	dryRun?: boolean
 	log?: (line: string) => void
@@ -163,6 +166,7 @@ export const createLiveDeliveryClients = ({
 	workerModel,
 	dbProvisioner,
 	mintPreviewToken,
+	knownSecrets,
 	dryRun = false,
 	log = line => console.log(JSON.stringify({ message: line })),
 }: LiveDeliveryOptions): DeliveryClients => {
@@ -188,6 +192,7 @@ export const createLiveDeliveryClients = ({
 			dbProvisioner,
 			githubOrg,
 			previewAuth,
+			knownSecrets,
 			dryRun: true,
 		}
 	}
@@ -243,6 +248,7 @@ export const createLiveDeliveryClients = ({
 		dbProvisioner,
 		githubOrg,
 		previewAuth,
+		knownSecrets,
 	}
 }
 

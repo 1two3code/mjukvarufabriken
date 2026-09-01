@@ -28,6 +28,37 @@ describe('BudgetTracker', () => {
 		expect(tracker.reason).toBe('duration exceeded')
 	})
 
+	it('Proxy-observed usage lives on its own ledger — never double counted into used/usage', () => {
+		const tracker = new BudgetTracker(budget)
+		tracker.add({ inputTokens: 300, outputTokens: 100 }, 'claude-sonnet-5')
+		// The proxy sees the SDK's own traffic again (superset) — observed overlaps, used does not grow
+		tracker.addObserved({ inputTokens: 300, outputTokens: 100 })
+		expect(tracker.used).toBe(400)
+		expect(tracker.observed).toBe(400)
+		expect(tracker.usage).toEqual({
+			'claude-sonnet-5': {
+				inputTokens: 300,
+				outputTokens: 100,
+				cacheReadInputTokens: 0,
+				cacheCreationInputTokens: 0,
+			},
+		})
+		expect(tracker.aborted).toBe(false)
+	})
+
+	it('Out-of-band spend observed at the proxy trips the same budget abort (cache reads at 10 %)', () => {
+		const tracker = new BudgetTracker(budget)
+		tracker.addObserved({ inputTokens: 400, outputTokens: 100, cacheReadInputTokens: 200 })
+		expect(tracker.observed).toBe(520)
+		expect(tracker.aborted).toBe(false)
+		tracker.addObserved({ inputTokens: 481, outputTokens: 0 })
+		expect(tracker.aborted).toBe(true)
+		expect(tracker.reason).toBe('budget exceeded')
+		// Enforcement only: the SDK-counted total and the billing basis are untouched
+		expect(tracker.used).toBe(0)
+		expect(tracker.usage).toEqual({})
+	})
+
 	it('adjust ignores non-positive deltas', () => {
 		const tracker = new BudgetTracker(budget)
 		tracker.adjust(-5)

@@ -22,6 +22,9 @@ export const runJob = async (
 	const emit = (event: Parameters<typeof hooks.emit>[0]) => hooks.emit(event).catch(() => {})
 	const persistTokens = () => hooks.onTokens?.(budget.used, budget.usage).catch(() => {})
 	const onUsage: OnUsage = (usage, model) => budget.add(usage, model)
+	// Egress-proxy metering (D1): proxy-observed usage lands on its own ledger so out-of-band
+	// calls burn the same budget without double counting the SDK sessions (see BudgetTracker).
+	hooks.attachProxyUsage?.(usage => budget.addObserved(usage))
 
 	// Poll the kill switch + wall clock while work is in flight
 	const poll = setInterval(async () => {

@@ -28,7 +28,7 @@ import { gitIdentity, seedRepo } from '#/repo.ts'
 import { createApiReporter, createDbReporter } from '#/reporter.ts'
 
 import type { NewJobEvent } from '@mf/models'
-import type { SpecEngineClient } from '@mf/harness'
+import type { OnUsage, SpecEngineClient, TokenUsage } from '@mf/harness'
 import type { JobReporter } from '#/reporter.ts'
 
 const log = (message: string, extra?: Record<string, unknown>) =>
@@ -58,7 +58,18 @@ for (const key of [
 // on the way out; workers get ANTHROPIC_BASE_URL pointed at it plus a harmless placeholder token
 // (sessionEnv, worker.ts) — never the key itself. `packages/harness` sandboxEnv also denies
 // ANTHROPIC_API_KEY by name now (defense in depth for any other exec(asWorker:true) path).
-const anthropicProxy = await startAnthropicForwardProxy({ apiKey: config.anthropicApiKey })
+// D1 spend metering: every request the proxy relays (SDK sessions AND any out-of-band curl a
+// worker fires at ANTHROPIC_BASE_URL) reports its observed usage here. The budget only exists
+// once runJob starts, so samples arriving before then are buffered and flushed on attach.
+let reportProxyUsage: OnUsage | undefined
+const bufferedProxyUsage: { usage: TokenUsage; model?: string }[] = []
+const anthropicProxy = await startAnthropicForwardProxy({
+	apiKey: config.anthropicApiKey,
+	onUsage: sample => {
+		if (reportProxyUsage) reportProxyUsage(sample.usage, sample.model)
+		else bufferedProxyUsage.push({ usage: sample.usage, model: sample.model })
+	},
+})
 process.env.ANTHROPIC_BASE_URL = anthropicProxy.url
 process.env.ANTHROPIC_AUTH_TOKEN = 'unused-forwarded-by-local-proxy'
 Object.assign(process.env, gitIdentity)
@@ -178,6 +189,13 @@ try {
 		...(reporter.mintPreviewToken && {
 			mintPreviewToken: () => reporter.mintPreviewToken!().catch(() => undefined),
 		}),
+		// A2 secret scan: the job's own live secret values — any of them appearing in the delivered
+		// tree or git history fails the delivery closed (values are matched, never logged/delivered)
+		knownSecrets: [
+			config.anthropicApiKey,
+			config.delivery.githubApp?.privateKey,
+			config.report.mode === 'api' ? config.report.token : config.report.databaseUrl,
+		].filter((value): value is string => Boolean(value)),
 	})
 	// Record seam (off unless `MF_CASSETTE`/`--record <dir>`): wrap the planner client and the Agent
 	// SDK `query()` so this one live run writes a cassette that replays offline with no tokens.
@@ -224,6 +242,12 @@ try {
 				},
 				onTokens: async (tokensUsed, usage) => {
 					await reporter.update({ tokensUsed, usage })
+				},
+				// D1: hand the budget's proxy-observed ledger to the forward proxy's metering stream
+				attachProxyUsage: report => {
+					reportProxyUsage = report
+					for (const sample of bufferedProxyUsage) report(sample.usage, sample.model)
+					bufferedProxyUsage.length = 0
 				},
 				// Kill switch: the api flips the row to `killed`; the orchestrator aborts on the next poll
 				isKilled: async () => killedByApi || (await reporter.isKilled()),

@@ -212,11 +212,20 @@ export class WebStack extends Stack {
 			'AUTH_ISSUER',
 			environment.auth.issuer ?? apiUrl ?? albUrl
 		)
-		// Build jobs report to the api (M3 hardening): the url plus the host the job's NO_PROXY
-		// must bypass the egress proxy for. Both go to the job task through the api's RunTask
-		// override — the task definition lives in the resources stack, which cannot reference this
-		// ALB. The job security group allows 443/80 egress anywhere and the public ALB accepts
-		// 80/443 from anywhere, so the reports arrive through the NAT gateway with no extra rule.
+		// Build jobs report to the api (M3 hardening): the url plus — fence off — the host the
+		// job's NO_PROXY must bypass the egress proxy for. Both go to the job task through the
+		// api's RunTask override — the task definition lives in the resources stack, which cannot
+		// reference this ALB. Fence OFF: the job SG allows 443/80 egress anywhere and the public
+		// ALB accepts 80/443 from anywhere, so the reports arrive through the NAT gateway with no
+		// extra rule. Fence ON (C1): the job SG is deny-by-default, and NO security-group rule can
+		// open the NAT path back up — an egress rule that references the ALB's SG only matches
+		// traffic addressed to the ALB ENIs' PRIVATE IPs, while `jobApiHost` (the api domain or
+		// the ALB DNS name of an internet-facing ALB) resolves to its PUBLIC IPs, so such a rule
+		// is dead weight and the reports would be dropped at the job ENI. Instead the reports ride
+		// the egress proxy like all other internet traffic: the api host is NOT put in NO_PROXY
+		// (below) and the proxy's allowlist admits it (`FILTER_ALLOW_EXTRA` on the proxy service,
+		// resources-stack — which is also why the fence requires `domain`: the ALB DNS name is not
+		// known to that stack). Route: job → proxy SG → NAT → public ALB, TLS end-to-end (CONNECT).
 		const jobApiHost = domain ? domain.apiDomainName : api.loadBalancer.loadBalancerDnsName
 		if (!apiUrl) {
 			// The ALB only terminates TLS with the domain's certificate; until then the per-job
@@ -229,7 +238,12 @@ export class WebStack extends Stack {
 		api.taskDefinition.defaultContainer!.addEnvironment('JOB_API_URL', apiUrl ?? albUrl)
 		api.taskDefinition.defaultContainer!.addEnvironment(
 			'JOB_NO_PROXY',
-			[...resources.jobNoProxyHosts, jobApiHost].join(',')
+			// Fence on: the api host must go THROUGH the proxy (the deny-by-default job SG has no
+			// route to the ALB's public IPs) — so it must not be in NO_PROXY. See the comment above.
+			(environment.jobs.egressFence
+				? resources.jobNoProxyHosts
+				: [...resources.jobNoProxyHosts, jobApiHost]
+			).join(',')
 		)
 
 		// MARK: Api task role — least privilege (reviewed M9). What each grant is for:
