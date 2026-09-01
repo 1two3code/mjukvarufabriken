@@ -1,13 +1,15 @@
 import {
 	createSpecEngine,
 	defaultSpecModel,
+	specHistoryWindow,
 	specToolName,
 	SpecToolOutputSchema,
+	toMessageParams,
 	toPartialSpec,
 } from '#spec/specEngine.ts'
 
 import type Anthropic from '@anthropic-ai/sdk'
-import type { SpecDraft } from '@mf/models'
+import type { ChatMessage, SpecDraft } from '@mf/models'
 import type { SpecEngineClient, SpecToolOutput } from '#spec/specEngine.ts'
 
 // MARK: Fake client
@@ -87,12 +89,20 @@ describe('createSpecEngine', () => {
 		expect(params.messages).toEqual([
 			{ role: 'user', content: 'Jag vill ha en bokningsapp för mitt gym' },
 		])
+		// The draft spec is a system block, behind the one cache breakpoint (see `createSpecEngine`)
+		expect(JSON.stringify(params.system)).toContain('Current draft spec')
+		expect(JSON.stringify(params.messages)).not.toContain('Current draft spec')
 		expect(turn).toEqual({
 			assistantMessage: 'Tack! Några frågor...',
 			spec: { goal: 'En bokningsapp för ett litet gym' },
 			openQuestions: ['Vilka är användarna?', 'Vilka funktioner behövs?'],
 			complete: false,
-			usage: { inputTokens: 100, outputTokens: 50 },
+			usage: {
+				inputTokens: 100,
+				outputTokens: 50,
+				cacheReadInputTokens: 0,
+				cacheCreationInputTokens: 0,
+			},
 		})
 	})
 
@@ -195,6 +205,68 @@ describe('createSpecEngine', () => {
 	it('Rejects malformed tool input', async () => {
 		const { client } = createFakeClient(toolUseMessage({ goal: 42 }))
 		await expect(createSpecEngine({ client }).nextTurn(emptyDraft(), 'hi')).rejects.toThrow()
+	})
+
+	// MARK: History window (audit P1-2)
+
+	describe('toMessageParams', () => {
+		/** `count` stored messages, alternating user → assistant, numbered so order is visible */
+		const history = (count: number): ChatMessage[] =>
+			Array.from({ length: count }, (_, index) => ({
+				role: index % 2 === 0 ? ('user' as const) : ('assistant' as const),
+				content: `m${index}`,
+				createdAt: '2026-08-26T00:00:00.000Z',
+			}))
+
+		const textOf = (message: Anthropic.MessageParam) =>
+			typeof message.content === 'string'
+				? message.content
+				: message.content.map(block => (block.type === 'text' ? block.text : '')).join('')
+
+		it('Replays at most specHistoryWindow stored messages, dropping the oldest turns', () => {
+			// Arrange — 40 stored messages, twice the window
+			const messages = history(specHistoryWindow * 2)
+
+			// Act
+			const params = toMessageParams(messages, 'latest')
+
+			// Assert — the window plus the new user turn, and it is the TAIL that survives
+			expect(params).toHaveLength(specHistoryWindow + 1)
+			expect(textOf(params[0]!)).toBe(`m${specHistoryWindow}`)
+			expect(params.map(textOf)).not.toContain('m0')
+			expect(textOf(params.at(-1)!)).toContain('latest')
+		})
+
+		it('Never starts the replay on an assistant message', () => {
+			// Arrange — an odd window lands mid-turn, on `m1` (assistant)
+			const params = toMessageParams(history(6), 'latest', 5)
+
+			// Assert — the dangling assistant reply is dropped, so the first message is a user one
+			expect(params[0]?.role).toBe('user')
+			expect(textOf(params[0]!)).toBe('m2')
+			expect(params).toHaveLength(5)
+		})
+
+		it('Puts no cache breakpoint on the sliding window, which can never be a stable prefix', () => {
+			// Arrange — a full window, then the next turn's (two messages appended, two dropped)
+			const turnN = toMessageParams(history(specHistoryWindow + 4), 'latest')
+			const turnNext = toMessageParams(history(specHistoryWindow + 6), 'newer')
+
+			// Assert — the first message block already differs, so a breakpoint anywhere in the
+			// transcript would bill a cache WRITE every turn and never be read back
+			expect(textOf(turnN[0]!)).not.toBe(textOf(turnNext[0]!))
+			const breakpoints = [...turnN, ...turnNext].flatMap(message =>
+				typeof message.content === 'string'
+					? []
+					: message.content.filter(block => 'cache_control' in block && block.cache_control)
+			)
+			expect(breakpoints).toEqual([])
+		})
+
+		it('Sends only the new message when there is no history', () => {
+			const params = toMessageParams([], 'first message')
+			expect(params).toEqual([{ role: 'user', content: 'first message' }])
+		})
 	})
 
 	it('toPartialSpec keeps only answered fields', () => {

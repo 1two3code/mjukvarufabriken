@@ -33,7 +33,17 @@ export type SpecTurn = {
 	spec: PartialSpec
 	openQuestions: string[]
 	complete: boolean
-	usage: { inputTokens: number; outputTokens: number }
+	/**
+	 * Every input bucket, not just `input_tokens`. A cached prefix is billed under
+	 * `cache_read_input_tokens` / `cache_creation_input_tokens`, so `input_tokens` alone is the
+	 * *uncached remainder* — reporting it as the turn's input under-states what was spent.
+	 */
+	usage: {
+		inputTokens: number
+		outputTokens: number
+		cacheReadInputTokens: number
+		cacheCreationInputTokens: number
+	}
 }
 
 export type SpecEngine = {
@@ -55,7 +65,7 @@ export const specSystemPrompt = `You are Mjukvaruhuset's spec engineer. Mjukvaru
 Your job: turn the conversation with the customer into a precise, buildable spec.
 
 Rules:
-- Extract and refine the spec from the WHOLE conversation, not only the latest message. Keep everything the customer already told you; refine wording, never drop content unless the customer changed their mind.
+- Extract and refine the spec from the whole conversation, not only the latest message. Only the most recent turns are replayed to you — the current draft spec below is the authoritative record of everything the customer has already told you. Keep all of it; refine wording, never drop content unless the customer changed their mind.
 - Never invent requirements. If something is unknown, leave it out and ask.
 - Ask at most 3 targeted questions per turn, only about information that is missing for a complete spec: a clear goal (at least one sentence), who the users are, each feature with concrete acceptance criteria, explicit non-goals (what is out of scope) and stack constraints (or an explicit "no constraints").
 - When the customer answers "none" / "no constraints" / "nothing out of scope", record that as an empty list — it still counts as answered.
@@ -146,13 +156,52 @@ export type SpecToolOutput = z.infer<typeof SpecToolOutputSchema>
 
 // MARK: Helpers
 
-const toMessageParams = (
+/**
+ * How many stored messages (two per turn — the customer's and the engine's reply) are replayed to
+ * the model. Older turns are dropped rather than resent: every turn used to spread the WHOLE
+ * history, so a draft's cost per turn grew linearly and its total cost quadratically with no upper
+ * bound, and a long enough chat eventually overflowed the context window and made the order's spec
+ * endpoint fail permanently (audit P1-2).
+ *
+ * Dropping old turns is safe because the accumulated state does not live in the transcript: the
+ * draft spec is replayed in full on every turn by {@link draftContext}, and the system prompt tells
+ * the engine to refine that draft rather than start over. The window only bounds how much verbatim
+ * conversational context the model sees.
+ */
+export const specHistoryWindow = 20
+
+const ephemeral = { type: 'ephemeral' } as const
+
+/**
+ * The conversation for one turn: the tail of the stored history, then the new customer message.
+ *
+ * Deliberately carries NO `cache_control` breakpoint. Prompt caching is a prefix match, and a
+ * sliding window is not a stable prefix: once the window is full every turn appends two messages
+ * and drops two off the front, so the request's very first message block differs from the previous
+ * turn's and the match fails at block 0. A breakpoint on the transcript would therefore bill the
+ * whole window as a cache *write* (1.25× base input) on every turn and never read it back — about
+ * 25 % MORE than simply resending it. The only content that is byte-identical AND at the same
+ * position across turns is the tool schema and the system prompt, which is where the one
+ * breakpoint sits (see {@link createSpecEngine}); the draft spec stays in the system array behind
+ * it, where it costs the same as it always did.
+ *
+ * The cost defect audit P1-2 names — per-turn cost linear in the transcript, total cost quadratic,
+ * and eventual permanent 500s once the context window overflowed — is closed by the window itself.
+ */
+export const toMessageParams = (
 	messages: ChatMessage[],
-	userMessage: string
-): Anthropic.MessageParam[] => [
-	...messages.map(message => ({ role: message.role, content: message.content })),
-	{ role: 'user', content: userMessage },
-]
+	userMessage: string,
+	window: number = specHistoryWindow
+): Anthropic.MessageParam[] => {
+	const recent = window > 0 ? messages.slice(-window) : []
+	// The API requires the first message to be `user`; a window landing mid-turn would start on
+	// the assistant's reply.
+	const history = recent[0]?.role === 'assistant' ? recent.slice(1) : recent
+	return [
+		...history.map(message => ({ role: message.role, content: message.content })),
+		{ role: 'user', content: userMessage },
+	]
+}
 
 const draftContext = (spec: PartialSpec) =>
 	`Current draft spec (JSON, may be partial — refine it, do not start over):\n${JSON.stringify(spec, null, 2)}`
@@ -191,8 +240,11 @@ export const createSpecEngine = ({
 		const response = await client.messages.create({
 			model: resolvedModel,
 			max_tokens: maxTokens,
+			// The breakpoint sits on the one block that is identical on every turn. Tools render
+			// before `system`, so it caches the tool schema with it. `draftContext` follows it
+			// because it changes every turn — behind the only breakpoint, it invalidates nothing.
 			system: [
-				{ type: 'text', text: specSystemPrompt, cache_control: { type: 'ephemeral' } },
+				{ type: 'text', text: specSystemPrompt, cache_control: ephemeral },
 				{ type: 'text', text: draftContext(draft.spec) },
 			],
 			tools: [specTool],
@@ -213,6 +265,8 @@ export const createSpecEngine = ({
 			usage: {
 				inputTokens: response.usage.input_tokens,
 				outputTokens: response.usage.output_tokens,
+				cacheReadInputTokens: response.usage.cache_read_input_tokens ?? 0,
+				cacheCreationInputTokens: response.usage.cache_creation_input_tokens ?? 0,
 			},
 		}
 	}

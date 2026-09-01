@@ -38,6 +38,8 @@
   "api.error.specFrozen": "This spec is frozen and can no longer be changed.",
   "api.error.specIncomplete": "The spec is not complete yet and cannot be frozen.",
   "api.error.specNotFrozen": "Freeze the spec before starting a build.",
+  "api.error.specRateLimited": "Too many spec messages just now. Wait a moment and try again.",
+  "api.error.specTurnLimit": "This spec conversation has reached its length limit. Freeze the spec, or contact us to continue.",
   "common.action.cancel": "Cancel",
   "common.action.close": "Close",
   "common.action.save": "Save",

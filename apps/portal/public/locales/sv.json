@@ -38,6 +38,8 @@
   "api.error.specFrozen": "Specen är fryst och kan inte längre ändras.",
   "api.error.specIncomplete": "Specen är inte komplett ännu och kan inte frysas.",
   "api.error.specNotFrozen": "Frys specen innan du startar ett bygge.",
+  "api.error.specRateLimited": "För många specmeddelanden just nu. Vänta en stund och försök igen.",
+  "api.error.specTurnLimit": "Den här speckonversationen har nått sin längdgräns. Frys specen, eller kontakta oss för att fortsätta.",
   "common.action.cancel": "Avbryt",
   "common.action.close": "Stäng",
   "common.action.save": "Spara",
