@@ -21,10 +21,15 @@ export const createFakeDist = () => {
 	return dir
 }
 
-/** Synthesises the three stacks of one environment the same way bin/app.ts does */
-export const synthEnvironment = (name: EnvironmentName) => {
+/**
+ * Synthesises the three stacks of one environment the same way bin/app.ts does.
+ *
+ * `context` seeds the App's context — used to pin behaviour that would otherwise depend on a CDK
+ * feature flag (see infra/test/deploy-guard.test.ts).
+ */
+export const synthEnvironment = (name: EnvironmentName, context?: Record<string, unknown>) => {
 	const environment = config.environments.find(e => e.name === name)!
-	const app = new App()
+	const app = new App({ context })
 	const repositoryRoot = createRelativePath(import.meta.url, '../..')
 	const resources = new ResourcesStack(app, `resources-${name}`, { environment, repositoryRoot })
 	const web = new WebStack(app, `mf-${name}`, {

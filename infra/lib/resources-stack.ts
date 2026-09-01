@@ -520,10 +520,16 @@ export class ResourcesStack extends Stack {
 				},
 			}),
 		})
-		// Per-job source zips live under this prefix (see `uploadSource`); the override reads them
+		// Per-job source zips live under this prefix (see `uploadSource`); the override reads them.
+		// This one prefixed grant is the ONLY artifacts-bucket access the build role gets: it already
+		// emits the bucket-level s3:GetBucket*/s3:List* on the bare bucket ARN that an S3 source
+		// needs, plus s3:GetObject* on `delivery-source/*`. Never add an unscoped
+		// `grantRead(this.deliveryBuildProject)` — `objectsKeyPattern` defaults to `'*'`, which would
+		// hand a privileged CodeBuild container running AI-authored build content read access to
+		// `deliverables/<jobId>/` for EVERY job in the bucket (audit 2026-08-31, P0-1).
+		// infra/test/security-baseline.test.ts pins this.
 		this.artifactsBucket.grantRead(this.deliveryBuildProject, 'delivery-source/*')
 		this.deliverablesRepository.grantPullPush(this.deliveryBuildProject)
-		this.artifactsBucket.grantRead(this.deliveryBuildProject)
 
 		// Task-execution role for the Express service: pull the ECR image, write container logs.
 		this.expressExecutionRole = new Role(this, 'ExpressExecutionRole', {

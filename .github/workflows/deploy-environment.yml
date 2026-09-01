@@ -51,6 +51,15 @@ jobs:
           npm ci
           npm ci --prefix infra
 
+      # Outer layer of the live domain guard (audit 2026-08-31, P0-5). `infra/scripts/deploy.sh`
+      # has run this since the 2026-08-30 hardening audit; this workflow — the other path that
+      # can deploy live — never did. `bin/app.ts` now also fails closed at synth for whichever env
+      # MF_ENV names, so this step is only about failing in seconds instead of after the SPA build.
+      - name: Check live domain guard
+        if: inputs.environment == 'live'
+        working-directory: infra
+        run: npx tsx scripts/check-live-domain.ts
+
       - name: Build SPAs
         run: npm run build
 

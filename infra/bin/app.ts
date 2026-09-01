@@ -2,6 +2,7 @@ import { App, Tags } from 'aws-cdk-lib'
 
 import { config } from '../lib/config.ts'
 import { createRelativePath } from '../lib/helpers.ts'
+import { assertDeployableEnvironment } from '../lib/deploy-guard.ts'
 import { BudgetStack } from '../lib/budget-stack.ts'
 import { GithubDeployStack } from '../lib/github-deploy-stack.ts'
 import { OpsStack } from '../lib/ops-stack.ts'
@@ -31,6 +32,10 @@ Tags.of(githubDeploy).add('Service', config.serviceName)
 const onlyEnv = process.env.MF_ENV
 for (const environment of config.environments) {
 	if (onlyEnv && environment.name !== onlyEnv) continue
+	// Fail closed before a single construct exists: a real deploy (MF_ENV set) of an environment
+	// without a `domain` would come up on plain HTTP with no working sign-in (lib/deploy-guard.ts).
+	// A no-op for CI's all-env offline synth, which leaves MF_ENV unset.
+	assertDeployableEnvironment(environment, onlyEnv)
 	const env = environment.account
 		? { account: environment.account, region: environment.region }
 		: undefined

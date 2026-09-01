@@ -9,6 +9,7 @@ import {
 	OriginProtocolPolicy,
 	OriginRequestPolicy,
 	ResponseHeadersPolicy,
+	SecurityPolicyProtocol,
 	ViewerProtocolPolicy,
 } from 'aws-cdk-lib/aws-cloudfront'
 import { HttpOrigin, S3BucketOrigin } from 'aws-cdk-lib/aws-cloudfront-origins'
@@ -112,6 +113,14 @@ export class WebStack extends Stack {
 					cloudFrontCertificate && {
 						domainNames: [domainName],
 						certificate: cloudFrontCertificate,
+						// Explicit, not inherited (audit 2026-08-31, P0-5). Left out, CDK derives the TLS
+						// floor from the `@aws-cdk/aws-cloudfront:defaultSecurityPolicyTLSv1.2_2021`
+						// feature flag — and infra/cdk.json sets no feature flags at all, so the security
+						// policy of every domain we serve would hang off a CDK default we do not control
+						// (TLS_V1_2_2019 with the flag off, which still negotiates the 2019 cipher set).
+						// Only meaningful alongside a certificate: CloudFront fixes the default
+						// *.cloudfront.net certificate at its own policy and CDK warns if we set it anyway.
+						minimumProtocolVersion: SecurityPolicyProtocol.TLS_V1_2_2021,
 					}),
 			})
 
