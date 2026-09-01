@@ -1,7 +1,13 @@
 import { createHash } from 'node:crypto'
 
 import fp from 'fastify-plugin'
-import { canTransitionOrder, paymentAmounts, usdCentsOf } from '@mf/models'
+import {
+	canTransitionOrder,
+	paymentAmounts,
+	paymentShareFor,
+	requiredPaymentKinds,
+	usdCentsOf,
+} from '@mf/models'
 
 import { EntityInvalid, EntityNotFound } from '#/lib/entityError.ts'
 import { InvalidWebhookSignature } from '#/plugins/stripe.ts'
@@ -403,6 +409,10 @@ const plugin: FastifyPluginAsync = async app => {
 			if (order.status !== paymentFlow[kind].from || order.priceSek === undefined) {
 				throw new PaymentNotDue(orderId, kind)
 			}
+			// A full-upfront order (below 3 000 kr) has no balance: the deposit covered 100 %
+			if (!requiredPaymentKinds(order.priceSek).includes(kind)) {
+				throw new PaymentNotDue(orderId, kind)
+			}
 			const sameKind = payments.filter(payment => payment.kind === kind)
 			if (sameKind.some(payment => payment.status === 'paid')) {
 				throw new PaymentNotDue(orderId, kind)
@@ -421,6 +431,7 @@ const plugin: FastifyPluginAsync = async app => {
 				orderId,
 				orderName: order.name || orderId,
 				kind,
+				share: paymentShareFor(order.priceSek, kind),
 				amountSek: amounts.amountSek,
 				vatSek: amounts.vatSek,
 				customerEmail: await customerEmail(session),

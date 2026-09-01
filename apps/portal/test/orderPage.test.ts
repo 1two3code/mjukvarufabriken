@@ -6,6 +6,7 @@ import {
 	licenceGateSummary,
 	reviewGateSummary,
 } from '#/features/jobs/gateReport.ts'
+import { orderSteps, stepsFor } from '#/features/orders/OrderStepper.tsx'
 import { paymentOf } from '#/features/orders/payments.ts'
 
 import type { GateName, GateReport, Payment } from '@mf/models'
@@ -43,6 +44,13 @@ describe('Payments on the order page', () => {
 		expect(paymentOf(payments, 'deposit', 'paid')).toBe(paid)
 		expect(paymentOf(payments, 'deposit', 'pending')).toBe(retried)
 		expect(paymentOf(payments, 'balance', 'pending')).toBeUndefined()
+	})
+
+	it('Drops the balance step for a full-upfront order (below 3 000 kr)', () => {
+		expect(stepsFor(500)).toEqual(['spec', 'freeze', 'deposit', 'build', 'delivery'])
+		expect(stepsFor(3_000)).toEqual([...orderSteps])
+		// Price unknown while the spec is still open: show the full journey
+		expect(stepsFor(undefined)).toEqual([...orderSteps])
 	})
 })
 

@@ -12,6 +12,11 @@ export type CheckoutInput = {
 	orderId: string
 	orderName: string
 	kind: PaymentKind
+	/**
+	 * Share of the order price this payment covers (`paymentShareFor`): 0.5 on the 50/50 split,
+	 * 1 for a full-upfront order — it decides the line-item label on the Checkout page
+	 */
+	share: number
 	/** Net amount in SEK ex moms — shown as its own line item */
 	amountSek: number
 	/** 25 % moms — shown as a separate line item */
@@ -99,9 +104,15 @@ export const fakeSessionPrefix = 'fake_'
 /** Path of the fake provider's checkout page (see routes/bff/stripe/fakeCheckout.ts) */
 export const fakeCheckoutPath = (sessionId: string) => `/bff/stripe/fake/checkout/${sessionId}`
 
-const lineItemLabel: Record<PaymentKind, string> = {
-	deposit: 'Handpenning 50 % / Deposit 50 %',
-	balance: 'Slutbetalning 50 % / Balance 50 %',
+/**
+ * Line-item label on the Stripe Checkout page and the hosted invoice/receipt it produces.
+ * A full-upfront payment (share 1, order below the 3 000 kr threshold) covers the whole price
+ * and must say so — labelling it "Deposit 50 %" would misstate the charge on the customer's
+ * payment documents. The 50/50 split keeps the kind-specific labels.
+ */
+const lineItemLabel = (kind: PaymentKind, share: number): string => {
+	if (share === 1) return 'Betalning 100 % / Payment 100 %'
+	return kind === 'deposit' ? 'Handpenning 50 % / Deposit 50 %' : 'Slutbetalning 50 % / Balance 50 %'
 }
 
 // MARK: Providers
@@ -185,7 +196,10 @@ export const createStripeProvider = (
 					price_data: {
 						currency: 'sek',
 						unit_amount: input.amountSek * 100,
-						product_data: { name: `${input.orderName} — ${lineItemLabel[input.kind]}`, tax_code: PRODUCT_TAX_CODE },
+						product_data: {
+							name: `${input.orderName} — ${lineItemLabel(input.kind, input.share)}`,
+							tax_code: PRODUCT_TAX_CODE,
+						},
 					},
 				},
 				{

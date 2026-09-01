@@ -24,7 +24,7 @@ const createApp = () =>
 describe('Payment Service', () => {
 	let app: FastifyInstance
 
-	const createOrder = async (status: OrderStatus, priceSek = 15_000): Promise<Order> => {
+	const createOrder = async (status: OrderStatus, priceSek = 4_000): Promise<Order> => {
 		const order = await app.orderService.create('Gym booking', user)
 		const draft = (await app.db.orders.get(order.id))!
 		await app.db.orders.upsert({ ...draft, status: 'frozen', priceSek })
@@ -51,8 +51,9 @@ describe('Payment Service', () => {
 				orderId: order.id,
 				orderName: 'Gym booking',
 				kind: 'deposit',
-				amountSek: 7_500,
-				vatSek: 1_875,
+				share: 0.5,
+				amountSek: 2_000,
+				vatSek: 500,
 				customerEmail: 'farnsworth@planetexpress.example',
 				successUrl: `https://portal.example.com/orders/${order.id}?payment=success&kind=deposit`,
 				cancelUrl: `https://portal.example.com/orders/${order.id}?payment=cancelled&kind=deposit`,
@@ -63,9 +64,9 @@ describe('Payment Service', () => {
 				kind: 'deposit',
 				status: 'pending',
 				provider: 'stripe',
-				amountSek: 7_500,
-				vatSek: 1_875,
-				totalSek: 9_375,
+				amountSek: 2_000,
+				vatSek: 500,
+				totalSek: 2_500,
 				sessionId: mockSessionId,
 			})
 			await expect(app.db.orders.listPayments(order.id)).resolves.toHaveLength(1)
@@ -86,6 +87,31 @@ describe('Payment Service', () => {
 			await expect(
 				app.paymentService.checkout(delivered.id, 'balance', user)
 			).resolves.toMatchObject({ payment: { kind: 'balance' } })
+		})
+
+		it('Charges the whole price upfront for an order below 3 000 kr and never a balance', async () => {
+			// A 500 kr demo build: one Checkout for 100 %, no 50/50 split
+			const order = await createOrder('frozen', 500)
+
+			const result = await app.paymentService.checkout(order.id, 'deposit', user)
+
+			expect(result.payment).toMatchObject({
+				kind: 'deposit',
+				amountSek: 500,
+				vatSek: 125,
+				totalSek: 625,
+			})
+			// The provider is told this is the whole price (share 1) so the Stripe Checkout page
+			// and its invoice/receipt are labelled "Payment 100 %", not "Deposit 50 %"
+			expect(app.paymentProvider.createCheckoutSession).toHaveBeenCalledWith(
+				expect.objectContaining({ share: 1, amountSek: 500, vatSek: 125 })
+			)
+
+			// Even a delivered full-upfront order has no balance to pay
+			const delivered = await createOrder('delivered', 500)
+			await expect(
+				app.paymentService.checkout(delivered.id, 'balance', user)
+			).rejects.toBeInstanceOf(PaymentNotDue)
 		})
 
 		it('Expires the earlier open session of the same kind so only one can be paid', async () => {

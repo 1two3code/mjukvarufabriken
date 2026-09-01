@@ -243,6 +243,76 @@ describe('Order Service', () => {
 		})
 	})
 
+	describe('full-upfront settlement (pricing ladder 2026-08-31)', () => {
+		/** A frozen order priced `priceSek`, walked to `building` */
+		const toBuilding = async (priceSek: number) => {
+			const { id } = await app.orderService.create('x', user)
+			const draft = (await app.db.orders.get(id))!
+			await app.db.orders.upsert({ ...draft, status: 'frozen', priceSek })
+			await app.orderService.transition(id, 'deposit_paid')
+			await app.orderService.transition(id, 'building')
+			return id
+		}
+		const payUpfront = async (id: string) => {
+			const payment = await app.db.orders.insertPayment({
+				orderId: id,
+				kind: 'deposit',
+				provider: 'fake',
+				amountSek: 500,
+				vatSek: 125,
+				totalSek: 625,
+				sessionId: 'fake_full',
+			})
+			await app.db.orders.markPaymentPaid(payment.id, {})
+		}
+		const jobDelivered = (id: string) =>
+			vi.spyOn(app.db.jobs, 'list').mockResolvedValue([
+				createMockJob({ orderId: id, status: 'delivered' }),
+			])
+
+		it('Closes a delivered full-upfront order as paid (no balance step)', async () => {
+			const id = await toBuilding(500)
+			await payUpfront(id)
+			jobDelivered(id)
+
+			const detail = await app.orderService.getDetail(id, user)
+
+			expect(detail.order.status).toBe('paid')
+		})
+
+		it('Leaves a delivered full-upfront order without a paid upfront payment as delivered', async () => {
+			// The admin override path (frozen → building without a payment) still invoices normally
+			const id = await toBuilding(500)
+			jobDelivered(id)
+
+			const detail = await app.orderService.getDetail(id, user)
+
+			expect(detail.order.status).toBe('delivered')
+		})
+
+		it('Keeps the deposit/balance split for orders at the threshold and above', async () => {
+			const id = await toBuilding(3_000)
+			await payUpfront(id)
+			jobDelivered(id)
+
+			const detail = await app.orderService.getDetail(id, user)
+
+			expect(detail.order.status).toBe('delivered')
+		})
+
+		it('Also settles after an approval (awaiting_approval → delivered → paid)', async () => {
+			const id = await toBuilding(500)
+			await payUpfront(id)
+			await app.db.orders.setApproveBeforeDeliver(id, true)
+			jobDelivered(id)
+			await expect(app.orderService.getDetail(id, user)).resolves.toMatchObject({
+				order: { status: 'awaiting_approval' },
+			})
+
+			await expect(app.orderService.approve(id, user)).resolves.toMatchObject({ status: 'paid' })
+		})
+	})
+
 	describe('getDetail', () => {
 		it('Combines order, spec status, latest job summary and payments', async () => {
 			const { id } = await app.orderService.create('x', user)

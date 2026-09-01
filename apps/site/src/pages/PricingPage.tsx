@@ -8,9 +8,12 @@ import { useSiteRoute } from '#/hooks/useSiteRoute.ts'
 import { ButtonLink } from '#/components/ButtonLink.tsx'
 import { Grid, Section } from '#/components/Section.tsx'
 
-const sizes = ['s', 'm', 'l'] as const
+/** The pricing ladder (strategy 2026-08-31): free spec → demo → full build → subscription */
+const steps = ['spec', 'demo', 'build', 'managed'] as const
 const included = ['repo', 'deployment', 'handover', 'testReport'] as const
 const excluded = ['hosting', 'thirdParty'] as const
+/** What the 600 kr/mo managed subscription is made of */
+const managedPoints = ['hosting', 'support', 'editWork', 'awsResources'] as const
 
 export function PricingPage() {
 	const { t } = useTranslation()
@@ -28,7 +31,7 @@ export function PricingPage() {
 					<thead>
 						<tr>
 							<th scope="col" className={styles.headerCell}>
-								{t('pricing.table.size')}
+								{t('pricing.table.step')}
 							</th>
 							<th scope="col" className={styles.headerCell}>
 								{t('pricing.table.price')}
@@ -36,21 +39,17 @@ export function PricingPage() {
 							<th scope="col" className={styles.headerCell}>
 								{t('pricing.table.covers')}
 							</th>
-							<th scope="col" className={styles.headerCell}>
-								{t('pricing.table.example')}
-							</th>
 						</tr>
 					</thead>
 					<tbody>
-						{sizes.map(size => (
-							<tr key={size} className={styles.row}>
+						{steps.map((step, index) => (
+							<tr key={step} className={styles.row}>
 								<th scope="row" className={styles.rowHeader}>
-									<span className={styles.sizeLetter}>{size.toUpperCase()}</span>
-									{t(`pricing.size.${size}.name`)}
+									<span className={styles.sizeLetter}>{index + 1}</span>
+									{t(`pricing.step.${step}.name`)}
 								</th>
-								<td className={styles.price}>{t(`pricing.size.${size}.price`)}</td>
-								<td className={styles.cell}>{t(`pricing.size.${size}.covers`)}</td>
-								<td className={styles.cell}>{t(`pricing.size.${size}.example`)}</td>
+								<td className={styles.price}>{t(`pricing.step.${step}.price`)}</td>
+								<td className={styles.cell}>{t(`pricing.step.${step}.covers`)}</td>
 							</tr>
 						))}
 					</tbody>
@@ -83,12 +82,19 @@ export function PricingPage() {
 
 			<Section
 				variant="card"
-				eyebrow={t('pricing.resident.eyebrow')}
-				title={t('pricing.resident.title')}
-				lead={t('pricing.resident.lead')}
+				eyebrow={t('pricing.managed.eyebrow')}
+				title={t('pricing.managed.title')}
+				lead={t('pricing.managed.lead')}
 			>
-				<p className={styles.body}>{t('pricing.resident.body')}</p>
-				<p className={styles.note}>{t('pricing.resident.note')}</p>
+				<ul className={styles.list}>
+					{managedPoints.map(point => (
+						<li key={point} className={styles.listItem}>
+							<strong>{t(`pricing.managed.point.${point}.title`)}</strong>
+							<span>{t(`pricing.managed.point.${point}.body`)}</span>
+						</li>
+					))}
+				</ul>
+				<p className={styles.note}>{t('pricing.managed.note')}</p>
 			</Section>
 
 			<div className={styles.actions}>
