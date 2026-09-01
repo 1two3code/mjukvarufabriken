@@ -591,8 +591,31 @@ export const reviewGate = async (
 	const { count, tokens } = usageCounter(onUsage)
 	const skeptics = resolveSkeptics(skepticOption)
 	const refuteOptions = { model, skeptics }
-	const seed = input.seedCommit ?? (await rootCommit(repoDir, signal))
+	// `||`, not `??`: an empty `seedCommit` (a `git rev-parse` that failed upstream) would make the
+	// range `..HEAD`, which git reads as `HEAD..HEAD` — an empty diff, and a silently green gate.
+	const seed = input.seedCommit || (await rootCommit(repoDir, signal))
 	const range = `${seed}..HEAD`
+
+	// After a build, "nothing to review" is never a legitimate green: it means the range is wrong
+	// (a bad seed) or no worker committed anything (an unschedulable plan, audit ORC-10). Fail
+	// closed with the range in the summary so an operator can tell the two apart.
+	const changed = await exec('git', ['diff', '--name-only', range], { cwd: repoDir, signal })
+	if (changed.code !== 0) {
+		return {
+			ok: false,
+			tokens: tokens(),
+			summary: `cannot diff ${range}: ${tail(changed.stderr || changed.stdout, 5)}`,
+			details: { range },
+		}
+	}
+	if (!changed.stdout.trim()) {
+		return {
+			ok: false,
+			tokens: tokens(),
+			summary: `nothing to review in ${range} — no file changed since the seed commit`,
+			details: { range, findings: [] },
+		}
+	}
 
 	let reviewed: ReviewFinding[]
 	try {

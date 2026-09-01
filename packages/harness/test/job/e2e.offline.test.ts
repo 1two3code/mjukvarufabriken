@@ -526,6 +526,12 @@ describe('offline build-job e2e — failure paths', () => {
 				failureScenario: 'anonymous request → data change',
 			}
 			sessionHandler = defaultHandler({ reviewFindings: [high] })
+			// What a worker merged after the seed: the review gate is red on an empty range, so a
+			// build with nothing in `seedCommit..HEAD` never reaches the review session at all
+			const run = (args: string[]) => exec('git', args, { cwd: repoDir, env: gitEnv })
+			await writeFile(join(repoDir, 'feature.ts'), 'export const feature = () => 1\n')
+			await run(['add', '-A'])
+			await run(['commit', '-q', '-m', 'feat: worker task'])
 
 			const outcome = await reviewGate({
 				spec,

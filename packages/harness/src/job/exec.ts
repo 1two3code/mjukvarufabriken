@@ -28,6 +28,8 @@ export type ExecOptions = {
 	 * for `asWorker` with a sandbox user — the worker's children must not outlive the command)
 	 */
 	processGroup?: boolean
+	/** Cap on each captured stream, in characters (default `maxCapturedChars`) */
+	maxOutputChars?: number
 }
 
 /**
@@ -207,13 +209,59 @@ export const killProcessGroup = (pid: number | undefined) => {
 const isKillError = (error: unknown) =>
 	typeof error === 'object' && error !== null && (error as { syscall?: string }).syscall === 'kill'
 
+// MARK: Capture
+
+/**
+ * Cap on each captured stream. `spawn` has no `maxBuffer` (that is `execFile`), so before this
+ * the capture grew without limit for the whole 15-minute timeout: model-written test code that
+ * loops on `console.log` reached V8's ~512 MB single-string limit, and the `RangeError` thrown
+ * inside a `'data'` listener — long after the promise executor returned — could not be caught or
+ * rejected, so it killed the container as an `uncaughtException` (audit ORC-04). 32 MiB is far
+ * above every legitimate consumer (`npm ls --all --json --long` on a full template tree is a few
+ * MB) and far below the string limit.
+ */
+export const maxCapturedChars = 32 * 1024 * 1024
+
+/** Marks output that lost its beginning, so a truncated blob can never look complete */
+export const truncationNotice = '[output truncated: earlier bytes dropped]\n'
+
+/**
+ * Rolling tail of a child stream: keeps at most `max` characters, dropping the oldest. Chunks are
+ * kept unjoined until the buffer is twice the cap, so trimming is amortised rather than a slice
+ * per chunk.
+ */
+const capture = (max: number) => {
+	let chunks: string[] = []
+	let length = 0
+	let truncated = false
+	const trim = () => {
+		const text = chunks.join('')
+		chunks = [text.slice(-max)]
+		length = chunks[0]!.length
+		truncated = true
+	}
+	return {
+		push(chunk: string) {
+			chunks.push(chunk)
+			length += chunk.length
+			if (length > max * 2) trim()
+		},
+		value() {
+			if (length > max) trim()
+			return truncated ? truncationNotice + chunks.join('') : chunks.join('')
+		},
+	}
+}
+
 // MARK: Exec
 
 /**
  * Runs a command without a shell and captures its output; never throws on a non-zero exit. A
  * timeout or an abort kills the process (its whole group with a sandbox user) — the result then
  * has a negative code — and a refused kill (no CAP_KILL) resolves with the error in `stderr`
- * instead of rejecting, so a gate never turns into an exception.
+ * instead of rejecting, so a gate never turns into an exception. Each stream is captured up to
+ * `maxOutputChars` (see `maxCapturedChars`); beyond that the oldest output is dropped and the
+ * result carries `truncationNotice`, so no consumer can mistake a truncated blob for a whole one.
  */
 export const exec = (
 	command: string,
@@ -226,6 +274,7 @@ export const exec = (
 		asWorker = false,
 		keepCapabilities = false,
 		processGroup = asWorker && sandboxUser() !== undefined,
+		maxOutputChars = maxCapturedChars,
 	}: ExecOptions
 ): Promise<ExecResult> =>
 	new Promise((resolve, reject) => {
@@ -244,20 +293,24 @@ export const exec = (
 		const killGroup = () => grouped && killProcessGroup(child.pid)
 		const timer = setTimeout(killGroup, timeoutMs)
 		signal?.addEventListener('abort', killGroup, { once: true })
-		let stdout = ''
-		let stderr = ''
-		child.stdout.on('data', chunk => (stdout += String(chunk)))
-		child.stderr.on('data', chunk => (stderr += String(chunk)))
+		const stdout = capture(maxOutputChars)
+		const stderr = capture(maxOutputChars)
+		child.stdout.on('data', chunk => stdout.push(String(chunk)))
+		child.stderr.on('data', chunk => stderr.push(String(chunk)))
 		child.on('error', error => {
 			if (!isKillError(error)) return reject(error)
 			// kill(2) refused (EPERM): the process lives on, but the caller gets a result
-			resolve({ code: -1, stdout, stderr: `${stderr}\n${error.message}`.trim() })
+			resolve({
+				code: -1,
+				stdout: stdout.value(),
+				stderr: `${stderr.value()}\n${error.message}`.trim(),
+			})
 		})
 		child.on('close', code => {
 			clearTimeout(timer)
 			signal?.removeEventListener('abort', killGroup)
 			killGroup()
-			resolve({ code: code ?? -1, stdout, stderr })
+			resolve({ code: code ?? -1, stdout: stdout.value(), stderr: stderr.value() })
 		})
 	})
 

@@ -1,5 +1,5 @@
 import { spawn } from 'node:child_process'
-import { mkdir, readdir, rm, stat } from 'node:fs/promises'
+import { mkdir, readdir, readFile, rm, stat } from 'node:fs/promises'
 import { dirname, join, relative } from 'node:path'
 
 import { query } from '@anthropic-ai/claude-agent-sdk'
@@ -580,15 +580,24 @@ export const evaluateVitestReport = (report: VitestReport, files: string[]): Ver
 	return { ok: true, output: `${files.length} acceptance test file(s) executed and green` }
 }
 
-const jsonFromOutput = (stdout: string): VitestReport | undefined => {
-	const start = stdout.indexOf('{')
+const parseVitestReport = (json: string): VitestReport | undefined => {
+	const start = json.indexOf('{')
 	if (start < 0) return undefined
 	try {
-		return JSON.parse(stdout.slice(start)) as VitestReport
+		return JSON.parse(json.slice(start)) as VitestReport
 	} catch {
 		return undefined
 	}
 }
+
+/**
+ * Where Vitest writes the JSON report (`--outputFile`). Inside `node_modules` on purpose: the
+ * path is gitignored (so `git add -A` and `git clean -fd` ignore it) and already group-writable
+ * for the worker uid via `ensureShared`. Reading the report from disk instead of from stdout
+ * keeps the only start-anchored consumer of a captured stream out of `exec`'s truncation window —
+ * a test that prints megabytes can no longer turn a green acceptance run into "no JSON report".
+ */
+const acceptanceReportPath = join('node_modules', '.mf-acceptance-report.json')
 
 /**
  * Runs exactly the given acceptance test files through the repo's Vitest (root config, so a
@@ -601,12 +610,17 @@ export const runAcceptanceTests = async (
 ): Promise<VerifyOutcome> => {
 	if (!files.length) return { ok: false, output: 'no acceptance test files to run' }
 	await ensureShared(repoDir)
-	const result = await exec('npx', ['vitest', 'run', '--reporter=json', '--', ...files], {
-		cwd: repoDir,
-		signal,
-		asWorker: true,
-	})
-	const report = jsonFromOutput(result.stdout)
+	const reportFile = join(repoDir, acceptanceReportPath)
+	await rm(reportFile, { force: true })
+	const result = await exec(
+		'npx',
+		['vitest', 'run', '--reporter=json', `--outputFile=${acceptanceReportPath}`, '--', ...files],
+		{ cwd: repoDir, signal, asWorker: true }
+	)
+	const written = await readFile(reportFile, 'utf8').catch(() => undefined)
+	// Fall back to stdout for a Vitest that ignored `--outputFile`; a truncated capture then
+	// fails to parse and the gate stays red rather than passing on a partial report.
+	const report = parseVitestReport(written ?? result.stdout)
 	if (!report) {
 		return {
 			ok: false,

@@ -13,7 +13,7 @@ import {
 	createLiveDeliveryClients,
 	createLivePorts,
 	debugKeyOf,
-	exec,
+	git,
 	runJob,
 	sdkSessionQuery,
 	setSessionQuery,
@@ -24,6 +24,7 @@ import { Cassette, recordQuery, recordSpecEngineClient } from '@mf/harness/testi
 
 import { startAnthropicForwardProxy } from '#/anthropicForwardProxy.ts'
 import { loadConfig } from '#/config.ts'
+import { installCrashHandlers } from '#/crash.ts'
 import { gitIdentity, seedRepo } from '#/repo.ts'
 import { createApiReporter, createDbReporter } from '#/reporter.ts'
 
@@ -160,8 +161,8 @@ const fail = async (reason: string) => {
 	await reporter.close().catch(() => {})
 	process.exit(1)
 }
-process.on('SIGTERM', () => void fail('SIGTERM received'))
-process.on('unhandledRejection', error => void fail(`unhandled: ${(error as Error).message}`))
+// SIGTERM, unhandledRejection and — the one that used to be missing — uncaughtException
+installCrashHandlers(process, { fail })
 
 try {
 	const started = await setStatus({ status: 'planning', startedAt: new Date().toISOString() })
@@ -174,8 +175,10 @@ try {
 		appNameOf(job.spec.goal)
 	)
 	await reporter.update({ repositoryUrl: `file://${repoDir}` })
-	// The review gate diffs everything the workers did against this commit
-	const seedCommit = (await exec('git', ['rev-parse', 'HEAD'], { cwd: repoDir })).stdout.trim()
+	// The review gate diffs everything the workers did against this commit. `git` (= execOrThrow),
+	// not `exec`: a silent failure here used to hand the gate an empty seed, which git reads as
+	// `HEAD..HEAD` — an empty diff, and a green review of nothing (audit ORC-02).
+	const seedCommit = (await git(['rev-parse', 'HEAD'], { cwd: repoDir })).stdout.trim()
 
 	const deliveryClients = createLiveDeliveryClients({
 		...config.delivery,

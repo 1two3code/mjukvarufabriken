@@ -1,9 +1,12 @@
 import { BudgetTracker } from './budget.ts'
-import { blockedBy, readyTasks } from './dag.ts'
+import { blockedBy, readyTasks, validateDag } from './dag.ts'
 import { failureNotification, gatesFailedReason, runGates } from './gates.ts'
 
 import type { Deliverable, GateReport, Plan, Task } from '@mf/models'
 import type { JobInput, JobOutcome, OnUsage, RunJobOptions } from './types.ts'
+
+/** Not a task id: the key `failed` gets when the scheduler itself cannot make progress */
+const schedulerFailureId = '<scheduler>'
 
 /**
  * Drives one job: plan → schedule ready tasks up to `maxWorkers` in parallel → merge each finished
@@ -99,6 +102,20 @@ export const runJob = async (
 		return finish({ status: 'failed', reason: `planning failed: ${(error as Error).message}` })
 	}
 	if (budget.aborted) return abortedOutcome(plan)
+	// Validate the plan `runJob` was actually handed, not just the one `createPlanner.parsePlan`
+	// built: the replay/cassette path, `gates-demo` and any resume path bypass that check, and an
+	// unschedulable plan (a cycle, an unknown dependency) used to run zero tasks and then the full
+	// gate chain — including delivery — over an untouched repo (audit ORC-10).
+	const problem = validateDag(plan.tasks)
+	if (problem || !plan.tasks.length) {
+		return finish({
+			status: 'failed',
+			plan,
+			reason: problem
+				? `plan is not schedulable (${problem.kind}): ${problem.detail}`
+				: 'plan is not schedulable: it has no tasks',
+		})
+	}
 	await emit({ type: 'planned', payload: { plan, tokensUsed: budget.used } })
 	await persistTokens()
 
@@ -208,7 +225,13 @@ export const runJob = async (
 		)
 		const slots = job.budget.maxWorkers - running.size
 		ready.slice(0, Math.max(0, slots)).forEach(start)
-		if (running.size === 0) break
+		// Not done, nothing ready, nothing running: the plan cannot be scheduled to completion.
+		// This is a hard failure, not a reason to fall through to the gates on a repo where no
+		// task ever ran (audit ORC-10) — `validateDag` above should have caught it already.
+		if (running.size === 0) {
+			failed.set(schedulerFailureId, 'no runnable task left — the plan is not schedulable')
+			break
+		}
 		// Wait for any running task to settle (a task's promise includes its merge)
 		await Promise.race([...running.values()])
 	}
@@ -224,6 +247,17 @@ export const runJob = async (
 			status: 'failed',
 			plan,
 			reason: `${failed.size} task(s) failed:\n${reasons}${skipped}`,
+		})
+	}
+
+	// Nothing failed, so every task must have completed and merged. Anything else means the loop
+	// left work behind, and the gates would run over a partially built repo (audit ORC-10).
+	if (completed.size !== plan.tasks.length) {
+		const done = [...completed].join(', ') || 'none'
+		return finish({
+			status: 'failed',
+			plan,
+			reason: `only ${completed.size}/${plan.tasks.length} task(s) completed with no failure recorded (merged: ${done})`,
 		})
 	}
 

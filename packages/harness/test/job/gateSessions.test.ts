@@ -60,6 +60,11 @@ const gitEnv = {
 
 const gitRun = (repoDir: string, args: string[]) => exec('git', args, { cwd: repoDir, env: gitEnv })
 
+/**
+ * A repo with a seed commit and one commit on top of it — the shape the review gate is built for
+ * (`seedCommit..HEAD` must contain the workers' work; an empty range is a red gate, not a green
+ * one). `seedOf` returns the seed commit of a repo built this way.
+ */
 const initRepo = async () => {
 	const repoDir = await mkdtemp(join(tmpdir(), 'mf-gates-'))
 	await gitRun(repoDir, ['init', '-q', '-b', 'main'])
@@ -67,8 +72,15 @@ const initRepo = async () => {
 	await writeFile(join(repoDir, 'app.ts'), 'export const a = 1\n')
 	await gitRun(repoDir, ['add', '-A'])
 	await gitRun(repoDir, ['commit', '-q', '-m', 'chore: seed'])
+	// What a worker merged after the seed: without it the review gate has nothing to review
+	await writeFile(join(repoDir, 'feature.ts'), 'export const feature = () => 1\n')
+	await gitRun(repoDir, ['add', '-A'])
+	await gitRun(repoDir, ['commit', '-q', '-m', 'feat: worker task'])
 	return repoDir
 }
+
+const seedOf = async (repoDir: string) =>
+	(await gitRun(repoDir, ['rev-list', '--max-parents=0', 'HEAD'])).stdout.trim()
 
 const writeTest = async (repoDir: string, dir: string, id: string, ext = 'tsx') => {
 	await mkdir(join(repoDir, dir), { recursive: true })
@@ -482,25 +494,62 @@ const low = { ...high, severity: 'low' as const, line: 2 }
 describe('reviewGate', () => {
 	it('Runs read-only with the structured output schema and passes on no findings', async () => {
 		const prompts = queueSessions([async () => session({ structuredOutput: { findings: [] } })])
+		const seed = await seedOf(repoDir)
 
-		const outcome = await reviewGate({ ...input, seedCommit: 'abc123' })
+		const outcome = await reviewGate({ ...input, seedCommit: seed })
 
 		expect(outcome.ok).toBe(true)
 		expect(outcome.summary).toBe('0 finding(s), none high/medium open')
-		expect(outcome.details).toMatchObject({ range: 'abc123..HEAD', fixed: false })
+		expect(outcome.details).toMatchObject({ range: `${seed}..HEAD`, fixed: false })
 		expect(prompts[0]!.tools).toEqual(readOnlyTools)
 		expect(prompts[0]!.outputSchema).toBeDefined()
 		expect(prompts[0]!.systemPrompt).toContain('READ-ONLY')
-		expect(prompts[0]!.systemPrompt).toContain('git diff abc123..HEAD')
+		expect(prompts[0]!.systemPrompt).toContain(`git diff ${seed}..HEAD`)
 	})
 
 	it('Defaults the diff base to the root commit', async () => {
 		const prompts = queueSessions([async () => session({ structuredOutput: { findings: [] } })])
-		const root = (await gitRun(repoDir, ['rev-list', '--max-parents=0', 'HEAD'])).stdout.trim()
+		const root = await seedOf(repoDir)
 
 		await reviewGate(input)
 
 		expect(prompts[0]!.systemPrompt).toContain(`git diff ${root}..HEAD`)
+	})
+
+	// ORC-02: `??` did not catch `''`, so an empty seed made the range `..HEAD`, which git reads
+	// as `HEAD..HEAD` — zero findings and a green gate over an unreviewed build.
+	it('Falls back to the root commit for an empty seedCommit instead of diffing HEAD..HEAD', async () => {
+		const prompts = queueSessions([async () => session({ structuredOutput: { findings: [] } })])
+		const root = await seedOf(repoDir)
+
+		const outcome = await reviewGate({ ...input, seedCommit: '' })
+
+		expect(outcome.ok).toBe(true)
+		expect(outcome.details).toMatchObject({ range: `${root}..HEAD` })
+		expect(prompts[0]!.systemPrompt).toContain(`git diff ${root}..HEAD`)
+	})
+
+	it('Fails closed when the range is empty — after a build, "nothing to review" is never green', async () => {
+		queueSessions([])
+		const head = (await gitRun(repoDir, ['rev-parse', 'HEAD'])).stdout.trim()
+
+		const outcome = await reviewGate({ ...input, seedCommit: head })
+
+		expect(outcome.ok).toBe(false)
+		expect(outcome.summary).toBe(
+			`nothing to review in ${head}..HEAD — no file changed since the seed commit`
+		)
+		expect(runSession).not.toHaveBeenCalled()
+	})
+
+	it('Fails closed with the range in the summary when the seed commit does not exist', async () => {
+		queueSessions([])
+
+		const outcome = await reviewGate({ ...input, seedCommit: 'deadbee' })
+
+		expect(outcome.ok).toBe(false)
+		expect(outcome.summary).toContain('cannot diff deadbee..HEAD')
+		expect(runSession).not.toHaveBeenCalled()
 	})
 
 	it('Records low findings without a fix session', async () => {

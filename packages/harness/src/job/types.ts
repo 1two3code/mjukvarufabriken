@@ -135,6 +135,7 @@ export type GateInput = {
 	spec: Spec
 	plan?: Plan
 	repoDir: string
+	/** Commit the review gate diffs against; empty/absent falls back to the repo's root commit */
 	seedCommit?: string
 	/** Review finding ids waived by an admin (`Job.gateWaivers`) */
 	waivers: string[]

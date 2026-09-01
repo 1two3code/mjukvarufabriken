@@ -8,9 +8,11 @@ import {
 	killProcessGroup,
 	launch,
 	launchCommandLine,
+	maxCapturedChars,
 	redactUrlCredentials,
 	sandboxEnv,
 	sandboxUser,
+	truncationNotice,
 	workerEnv,
 } from '#job/exec.ts'
 
@@ -176,6 +178,39 @@ describe('exec', () => {
 		expect(result.code).toBe(0)
 		expect(result.stdout.trim()).toBe('unset yes x')
 		vi.unstubAllEnvs()
+	})
+
+	// ORC-04: `spawn` has no `maxBuffer`, so the capture grew for the whole 15-minute timeout.
+	// Model-written test code that loops on `console.log` reached V8's ~512 MB string limit, and
+	// the `RangeError` thrown inside the `'data'` listener killed the container.
+	it('Caps a captured stream, keeping the tail and marking the truncation', async () => {
+		const result = await exec('sh', ['-c', 'printf "%s" "$(head -c 4000 /dev/zero | tr "\\0" "a")b"'], {
+			cwd: process.cwd(),
+			maxOutputChars: 100,
+		})
+
+		expect(result.code).toBe(0)
+		expect(result.stdout).toHaveLength(truncationNotice.length + 100)
+		expect(result.stdout.startsWith(truncationNotice)).toBe(true)
+		// A rolling tail: the end of the output survives, the beginning is what is dropped
+		expect(result.stdout.endsWith('ab')).toBe(true)
+	})
+
+	it('Caps stderr the same way and leaves output below the cap untouched', async () => {
+		const big = await exec('sh', ['-c', 'head -c 4000 /dev/zero | tr "\\0" "e" >&2'], {
+			cwd: process.cwd(),
+			maxOutputChars: 100,
+		})
+		const small = await exec('sh', ['-c', 'printf hello'], {
+			cwd: process.cwd(),
+			maxOutputChars: 100,
+		})
+
+		expect(big.stderr).toHaveLength(truncationNotice.length + 100)
+		expect(big.stderr.startsWith(truncationNotice)).toBe(true)
+		expect(small.stdout).toBe('hello')
+		expect(small.stdout).not.toContain(truncationNotice)
+		expect(maxCapturedChars).toBe(32 * 1024 * 1024)
 	})
 })
 
