@@ -220,6 +220,21 @@ describe('security baseline', () => {
 				)
 			})
 
+			// The delivered app reaches its own provisioned database through a security group WE own
+			// (passed to CreateExpressGatewayService as networkConfiguration), never by opening 5432
+			// to the VPC. That distinction is the whole point: a VPC-wide rule would also have handed
+			// database access to the BUILD JOB, undoing the M3 invariant the test above pins.
+			it('lets only the preview-app security group reach the database, never the job', () => {
+				const rules = Object.values(resources.findResources('AWS::EC2::SecurityGroupIngress'))
+					.map(rule => rule.Properties ?? {})
+					.filter((rule: { FromPort?: number }) => rule.FromPort === 5432)
+				assert.ok(rules.length > 0, 'a 5432 ingress rule exists')
+				for (const rule of rules as { CidrIp?: string; SourceSecurityGroupId?: unknown }[]) {
+					assert.equal(rule.CidrIp, undefined, '5432 must never be opened to a CIDR range')
+					assert.ok(rule.SourceSecurityGroupId, '5432 ingress must reference a security group')
+				}
+			})
+
 			// The api mints one IAM role per delivered app (docs/PREVIEW-RESOURCES.md). Giving a
 			// service IAM-write is only safe while the fence holds, and the load-bearing part is the
 			// `iam:PermissionsBoundary` condition on CreateRole: without it the api could mint a role
@@ -347,10 +362,25 @@ describe('security baseline', () => {
 					...Object.values(resources.findResources('AWS::EC2::SecurityGroupEgress')),
 					...Object.values(resources.findResources('AWS::EC2::SecurityGroupIngress')),
 				]
+				// The invariant is that the JOB cannot reach postgres — not that no 5432 rule exists at
+				// all. Since docs/PREVIEW-RESOURCES.md, delivered preview apps legitimately reach
+				// their OWN provisioned database through their own security group, so the assertion
+				// names the job's group rather than counting rules. Widening this to a CIDR would
+				// silently readmit the job; the neighbouring test forbids exactly that.
+				const jobGroup = Object.entries(resources.findResources('AWS::EC2::SecurityGroup')).find(
+					([logicalId]) => logicalId.startsWith('JobSecurityGroup')
+				)?.[0]
+				assert.ok(jobGroup, 'job security group')
 				const postgresRules = rules.filter(
 					r => (r.Properties as { FromPort?: number }).FromPort === 5432
 				)
-				assert.equal(postgresRules.length, 0, 'no job <-> postgres security-group rule')
+				const reachableByJob = postgresRules.filter(r => {
+					const props = r.Properties as { CidrIp?: string; SourceSecurityGroupId?: unknown }
+					// A CIDR rule covers the whole VPC, and the job is in it
+					if (props.CidrIp) return true
+					return JSON.stringify(props.SourceSecurityGroupId ?? '').includes(jobGroup)
+				})
+				assert.equal(reachableByJob.length, 0, 'no job <-> postgres reachability on 5432')
 				const apiEnv = containersOf(web)
 					.flatMap(c => c.Environment ?? [])
 					.map(e => e.Name)
