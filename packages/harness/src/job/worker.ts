@@ -415,6 +415,54 @@ const gatedBaseCommit = async (repoDir: string, signal?: AbortSignal) => {
  * merge commit whose gate is still running and that a red verdict rolls back. The gated commit
  * is always an ancestor of (or equal to) main, so its objects are in the clone.
  */
+/**
+ * Transient `git clone` failures. Seen twice in CI within twelve hours (2026-09-01, in
+ * `e2e.offline` and then `e2e.replay`), both with the same shape:
+ *
+ *   fatal: failed to copy file to '<dest>/.git/objects/07/c945…': No such file or directory
+ *
+ * The missing path is one git is itself creating under the destination, so this is a filesystem
+ * race rather than a damaged source — the identical clone succeeds on the next attempt. It is the
+ * same class already recorded for the e2e temp-root removal ("cleanup raced a killed session's
+ * git", 6ab1eb4).
+ *
+ * Without a retry a blip fails the whole TASK: in a test that costs a CI re-run, in a real build
+ * it costs the build — a paid one, mid-flight, for a reason that has nothing to do with the code
+ * being built. That asymmetry is what makes this worth handling rather than re-running.
+ */
+export const transientCloneFailure = (message: string) =>
+	/failed to copy file|No such file or directory|Directory not empty|Resource temporarily unavailable|Interrupted system call/i.test(
+		message
+	)
+
+/** Clone attempts before giving up. Retries are near-free; a lost build is not. */
+const cloneAttempts = 3
+
+export const cloneWithRetry = async (
+	repoDir: string,
+	dir: string,
+	signal?: AbortSignal,
+	/** Seam: the tests drive the retry loop without provoking a real filesystem race */
+	clone: (from: string, to: string) => Promise<unknown> = (from, to) =>
+		git(['clone', '-q', '--no-hardlinks', '--no-checkout', from, to], { cwd: from, signal })
+) => {
+	for (let attempt = 1; ; attempt++) {
+		try {
+			await clone(repoDir, dir)
+			return
+		} catch (error) {
+			const message = (error as Error).message
+			// Never retry past an abort (kill switch / budget) or a real error — a missing source
+			// repo would otherwise be retried three times before failing with the same message.
+			if (attempt >= cloneAttempts || signal?.aborted || !transientCloneFailure(message)) throw error
+			// A failed clone leaves a partial destination behind, and git refuses to clone into a
+			// non-empty directory — so the retry has to start from nothing.
+			await rm(dir, { recursive: true, force: true })
+			await new Promise(resolve => setTimeout(resolve, 100 * attempt))
+		}
+	}
+}
+
 export const createWorktree = async (repoDir: string, task: Task, signal?: AbortSignal) => {
 	const dir = worktreeDir(repoDir, task.id)
 	const branch = `task/${task.id}`
@@ -422,10 +470,7 @@ export const createWorktree = async (repoDir: string, task: Task, signal?: Abort
 	await removeWorktree(repoDir, task.id)
 	await exec('git', ['branch', '-D', branch], { cwd: repoDir, signal })
 	const base = await gatedBaseCommit(repoDir, signal)
-	await git(['clone', '-q', '--no-hardlinks', '--no-checkout', repoDir, dir], {
-		cwd: repoDir,
-		signal,
-	})
+	await cloneWithRetry(repoDir, dir, signal)
 	await git(['checkout', '-q', '-b', branch, base], { cwd: dir, signal })
 	// A clone starts without the main repo's identity; the worker commits with the job's
 	for (const key of ['user.name', 'user.email']) {

@@ -7,7 +7,9 @@ import { addUsage, emptyUsage } from '#job/types.ts'
 import {
 	cliJsonSchema,
 	createWorkerSpawner,
+	cloneWithRetry,
 	createWorktree,
+	transientCloneFailure,
 	ensureShared,
 	evaluateVitestReport,
 	fetchTaskBranch,
@@ -493,6 +495,71 @@ const seedRepo = async () => {
 }
 
 const taskOf = (id: string): Task => ({ ...task(['apps/app']), id })
+
+describe('transientCloneFailure', () => {
+	// The exact stderr seen in CI twice on 2026-09-01 (e2e.offline, then e2e.replay)
+	it('recognises the observed filesystem race', () => {
+		expect(
+			transientCloneFailure(
+				"git clone -q --no-hardlinks --no-checkout /tmp/x/repo /tmp/x/worktrees/landing failed (128) in /tmp/x/repo:\n" +
+					"fatal: failed to copy file to '/tmp/x/worktrees/landing/.git/objects/07/c94566248ee': No such file or directory"
+			)
+		).toBe(true)
+	})
+
+	// The retry must not paper over a genuine problem: a missing source, a bad ref or a refusal
+	// should fail on the first attempt with its own message, not after three rounds of the same.
+	it('does not retry real failures', () => {
+		for (const message of [
+			"fatal: repository '/tmp/x/nope' does not exist",
+			'fatal: destination path already exists and is not an empty directory.',
+			'error: Your local changes would be overwritten',
+			'fatal: not a git repository',
+		]) {
+			expect(transientCloneFailure(message)).toBe(false)
+		}
+	})
+})
+
+describe('cloneWithRetry', () => {
+	const raceError = new Error(
+		"fatal: failed to copy file to '/tmp/x/.git/objects/07/c945': No such file or directory"
+	)
+
+	it('recovers from a transient race on a later attempt', async () => {
+		const clone = vi.fn().mockRejectedValueOnce(raceError).mockResolvedValueOnce(undefined)
+		await cloneWithRetry('/tmp/src', '/tmp/dest-recover', undefined, clone)
+		expect(clone).toHaveBeenCalledTimes(2)
+	})
+
+	it('gives up after the attempt cap rather than looping forever', async () => {
+		const clone = vi.fn().mockRejectedValue(raceError)
+		await expect(cloneWithRetry('/tmp/src', '/tmp/dest-cap', undefined, clone)).rejects.toThrow(
+			/failed to copy file/
+		)
+		expect(clone).toHaveBeenCalledTimes(3)
+	})
+
+	it('fails a real error immediately, with its own message', async () => {
+		const clone = vi
+			.fn()
+			.mockRejectedValue(new Error("fatal: repository '/tmp/nope' does not exist"))
+		await expect(cloneWithRetry('/tmp/src', '/tmp/dest-real', undefined, clone)).rejects.toThrow(
+			/does not exist/
+		)
+		expect(clone).toHaveBeenCalledTimes(1)
+	})
+
+	it('does not retry once aborted (kill switch / budget)', async () => {
+		const controller = new AbortController()
+		controller.abort()
+		const clone = vi.fn().mockRejectedValue(raceError)
+		await expect(
+			cloneWithRetry('/tmp/src', '/tmp/dest-abort', controller.signal, clone)
+		).rejects.toThrow()
+		expect(clone).toHaveBeenCalledTimes(1)
+	})
+})
 
 describe('createWorktree + fetchTaskBranch', () => {
 	it('Clones the main repo per task (own .git, node_modules linked) and fetches the branch back', async () => {
