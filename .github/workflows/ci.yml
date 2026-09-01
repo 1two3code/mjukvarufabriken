@@ -6,6 +6,16 @@ on:
   push:
     branches: [main]
 
+# Least-privilege GITHUB_TOKEN (audit 2026-08-31, P1-8). This workflow runs on `pull_request`, so it
+# checks out PR-head code and then executes it: seven `npm ci` invocations with lifecycle scripts
+# enabled, plus `docker build` on two Dockerfiles. Without this block the token falls back to
+# whatever the repo/org default scope is — write, for older defaults. Nothing here needs write:
+# `actions/upload-artifact` uses the runtime token, not GITHUB_TOKEN. deploy.yml has always declared
+# its own permissions; ci.yml — the workflow that actually runs on every PR — did not.
+# infra/test/workflows.test.ts pins this.
+permissions:
+  contents: read
+
 concurrency:
   group: ci-${{ github.ref }}
   cancel-in-progress: true

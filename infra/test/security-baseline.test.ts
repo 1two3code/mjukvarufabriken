@@ -220,6 +220,41 @@ describe('security baseline', () => {
 				)
 			})
 
+			// Mirror of the assertion above for the OTHER principal that touches the artifacts bucket.
+			// The delivery CodeBuild project is `privileged: true` and builds apps/api/Dockerfile out of
+			// an AI-authored repo, so its service role must never see another job's deliverables. An
+			// unscoped `artifactsBucket.grantRead(deliveryBuildProject)` (objectsKeyPattern defaults to
+			// '*') did exactly that until the 2026-08-31 audit (P0-1).
+			it('scopes the delivery CodeBuild role to delivery-source/* — never the whole artifacts bucket', () => {
+				const policy = Object.entries(resources.findResources('AWS::IAM::Policy')).find(
+					([logicalId]) => logicalId.startsWith('DeliveryBuildProjectRoleDefaultPolicy')
+				)?.[1]
+				assert.ok(policy, 'DeliveryBuildProject role policy')
+				const statements = (
+					policy.Properties as {
+						PolicyDocument: { Statement: { Action: unknown; Resource?: unknown }[] }
+					}
+				).PolicyDocument.Statement
+				const s3Statements = statements.filter(s =>
+					(Array.isArray(s.Action) ? s.Action : [s.Action]).some(
+						action => typeof action === 'string' && action.startsWith('s3:')
+					)
+				)
+				assert.ok(s3Statements.length > 0, 'expected an s3 grant for the CodeBuild S3 source')
+				const resourceStrings = JSON.stringify(s3Statements.flatMap(s => s.Resource))
+				// The prefixed grant must survive — CodeBuild has to read delivery-source/<jobId>.zip
+				assert.ok(
+					resourceStrings.includes('/delivery-source/*'),
+					'the delivery-source prefix must stay readable (the S3 source of the build)'
+				)
+				// …but nothing bucket-wide. The bare bucket ARN is fine (s3:GetBucket*/s3:List* need it);
+				// an object wildcard under it is not — that is `deliverables/<jobId>/` of every job.
+				assert.ok(
+					!/"\*"|"\/\*"/.test(resourceStrings),
+					'delivery CodeBuild role must not read the artifacts bucket object-wide'
+				)
+			})
+
 			it('gives the ECS Express preview roles only their managed policies (no inline grants)', () => {
 				const roles = Object.values(resources.findResources('AWS::IAM::Role')) as {
 					Properties: {
