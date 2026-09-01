@@ -275,6 +275,24 @@ describe('runJob', () => {
 		expect(fake.started).not.toContain('d')
 	})
 
+	it('Aborts on out-of-band spend fed through attachProxyUsage (D1 proxy metering)', async () => {
+		const fake = createFakePorts()
+		const { hooks, types } = createHooks({
+			// The orchestrator attaches the budget's proxy-observed ledger at start; a worker curling
+			// the proxy directly (invisible to the SDK's onUsage) then burns the same budget.
+			attachProxyUsage: report => {
+				report({ inputTokens: 1500, outputTokens: 0 })
+			},
+		})
+
+		const outcome = await runJob(job({ maxTokens: 1000 }), { ports: fake.ports, hooks })
+
+		expect(outcome.status).toBe('failed')
+		expect(outcome.reason).toBe('budget exceeded')
+		expect(fake.ports.runTask).not.toHaveBeenCalled()
+		expect(types().slice(-2)).toEqual(['failed', 'notify'])
+	})
+
 	it('Fails immediately when the planner alone exhausts the budget', async () => {
 		const fake = createFakePorts()
 		const { hooks } = createHooks()

@@ -45,6 +45,7 @@
   "delivery.step.deploy": "driftsättning",
   "delivery.step.docs": "dokumentation",
   "delivery.step.repo": "repository",
+  "delivery.step.secret-scan": "hemlighetsskanning",
   "error.body.failedToFetchSession": "Sessionen kunde inte läsas in (förfrågan {{requestId}}).",
   "error.body.pageNotFound": "Sidan du letar efter finns inte.",
   "error.label.pageNotFound": "Sidan hittades inte",

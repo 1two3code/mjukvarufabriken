@@ -1,12 +1,22 @@
 import { CfnOutput, CustomResource, Duration, RemovalPolicy, Stack } from 'aws-cdk-lib'
 import { BuildSpec, LinuxBuildImage, Project, Source } from 'aws-cdk-lib/aws-codebuild'
-import { NatProvider, Peer, Port, SecurityGroup, SubnetType, Vpc } from 'aws-cdk-lib/aws-ec2'
+import {
+	GatewayVpcEndpointAwsService,
+	InterfaceVpcEndpointAwsService,
+	NatProvider,
+	Peer,
+	Port,
+	SecurityGroup,
+	SubnetType,
+	Vpc,
+} from 'aws-cdk-lib/aws-ec2'
 import { Repository, TagStatus } from 'aws-cdk-lib/aws-ecr'
 import {
 	Cluster,
 	ContainerDependencyCondition,
 	ContainerImage,
 	CpuArchitecture,
+	FargateService,
 	FargateTaskDefinition,
 	LogDrivers,
 	OperatingSystemFamily,
@@ -254,24 +264,47 @@ export class ResourcesStack extends Stack {
 			clusterName: `mf-jobs-${environment.name}`,
 		})
 
-		// Job security group. Egress: 443/80 to anywhere — the proxy sidecar, AWS APIs and the api's
-		// ALB (the job reports through `/internal/jobs/:id` with a per-job token; M3 hardening).
-		// No Postgres: the container never holds a database credential (docs/M3-REVIEW.md #18).
-		// Fargate sidecars share the task ENI, so this SG cannot tell proxy traffic from a process
-		// that ignores HTTPS_PROXY — the domain allowlist is enforced by the sidecar (see
-		// apps/job/proxy); a hard fence needs a proxy in its own task/SG (TODO-EXTERNAL.md).
+		// Job security group. Two modes (C1 hard egress fence, hardening audit 2026-08-30 — flag
+		// `jobs.egressFence`, DEFAULT OFF so dev stays byte-identical):
+		//  off — egress 443/80 to anywhere: the proxy sidecar, AWS APIs and the api's ALB (the job
+		//        reports through `/internal/jobs/:id` with a per-job token; M3 hardening). Fargate
+		//        sidecars share the task ENI, so this SG cannot tell proxy traffic from a process
+		//        that ignores HTTPS_PROXY — the domain allowlist is enforced by the sidecar only
+		//        (`curl --noproxy '*'` bypasses it, finding C1).
+		//  on  — DENY BY DEFAULT: egress only to the proxy's own task/SG (the single way to the
+		//        internet), the VPC interface endpoints and the S3 gateway prefix list. Job status
+		//        reports to the api ride the PROXY too (the api host is added to the proxy
+		//        allowlist below and web-stack keeps it out of NO_PROXY): the ALB is
+		//        internet-facing, so an SG-to-SG rule at the job SG could never carry that traffic
+		//        — it would be addressed to the ALB's public IPs, which no SG-referenced rule
+		//        matches. The allowlist becomes a network fact instead of a convention. Flip
+		//        requirements: docs/backlog/hardening-2026-08-30/c1-egress-fence.md.
+		// No Postgres either way: the container never holds a database credential (M3-REVIEW #18).
+		const egressFence = environment.jobs.egressFence === true
+		if (egressFence && !environment.domain) {
+			// The proxy allowlist needs the api's hostname at synth time; without `domain` the api
+			// host is the ALB's generated DNS name, which lives in mf-<env> (a stack this one must
+			// not depend on) — and a fenced job could then never reach the api to claim its report
+			// token, poll the kill switch or send status. Fail the synth, not the first canary job.
+			throw new Error(
+				'jobs.egressFence requires `domain`: fenced job→api reports go through the egress ' +
+					'proxy by hostname (FILTER_ALLOW_EXTRA), so the api needs a stable domain name'
+			)
+		}
 		this.jobSecurityGroup = new SecurityGroup(this, 'JobSecurityGroup', {
 			vpc: this.vpc,
 			// Description kept verbatim from M1: changing it replaces the SG, whose id mf-dev imports
 			description: 'Build job tasks (TODO M3: egress allowlist)',
 			allowAllOutbound: false,
 		})
-		this.jobSecurityGroup.addEgressRule(Peer.anyIpv4(), Port.tcp(443), 'https (proxy + AWS APIs)')
-		this.jobSecurityGroup.addEgressRule(
-			Peer.anyIpv4(),
-			Port.tcp(80),
-			'http (registry redirects, api ALB without a domain)'
-		)
+		if (!egressFence) {
+			this.jobSecurityGroup.addEgressRule(Peer.anyIpv4(), Port.tcp(443), 'https (proxy + AWS APIs)')
+			this.jobSecurityGroup.addEgressRule(
+				Peer.anyIpv4(),
+				Port.tcp(80),
+				'http (registry redirects, api ALB without a domain)'
+			)
+		}
 
 		const jobLogGroup = new LogGroup(this, 'JobLogGroup', {
 			logGroupName: `/mf/${environment.name}/jobs`,
@@ -302,21 +335,136 @@ export class ResourcesStack extends Stack {
 			maxSessionDuration: Duration.hours(1),
 		})
 
-		// Egress allowlist sidecar: tinyproxy, FilterDefaultDeny, domains in apps/job/proxy/filter
-		// (npm, GitHub, Anthropic). Shares localhost with the job container (awsvpc).
+		// Egress allowlist proxy: tinyproxy, FilterDefaultDeny, domains in apps/job/proxy/filter
+		// (npm, GitHub, Anthropic). Flag off: a sidecar sharing localhost with the job container
+		// (awsvpc). Flag on (C1): its OWN Fargate service + SG — see the fence block below.
 		const proxyPort = 8888
-		const proxy = this.jobTaskDefinition.addContainer('egress-proxy', {
-			image: ContainerImage.fromAsset(`${repositoryRoot}/apps/job/proxy`),
-			essential: true,
-			memoryReservationMiB: 64,
-			logging: LogDrivers.awsLogs({ logGroup: jobLogGroup, streamPrefix: 'proxy' }),
-			healthCheck: {
-				command: ['CMD-SHELL', `nc -z 127.0.0.1 ${proxyPort} || exit 1`],
-				interval: Duration.seconds(10),
-				retries: 3,
-				startPeriod: Duration.seconds(5),
-			},
-		})
+		const proxyImage = ContainerImage.fromAsset(`${repositoryRoot}/apps/job/proxy`)
+		const proxyHealthCheck = {
+			command: ['CMD-SHELL', `nc -z 127.0.0.1 ${proxyPort} || exit 1`],
+			interval: Duration.seconds(10),
+			retries: 3,
+			startPeriod: Duration.seconds(5),
+		}
+		const proxy = egressFence
+			? undefined
+			: this.jobTaskDefinition.addContainer('egress-proxy', {
+					image: proxyImage,
+					essential: true,
+					memoryReservationMiB: 64,
+					logging: LogDrivers.awsLogs({ logGroup: jobLogGroup, streamPrefix: 'proxy' }),
+					healthCheck: proxyHealthCheck,
+				})
+
+		// MARK: C1 egress fence (jobs.egressFence, default OFF — nothing below exists in a normal
+		// synth). The proxy moves out of the task so the network can tell proxy traffic from a
+		// worker that ignores HTTPS_PROXY; the job SG (deny-by-default above) may then reach ONLY:
+		//   proxy SG :8888           — the single route to the internet (allowlist enforced there)
+		//   interface endpoints :443 — the direct-to-AWS NO_PROXY set (Secrets Manager, STS, ECS,
+		//                              CodeBuild) plus what Fargate itself needs (ECR api/dkr, logs)
+		//   S3 prefix list :443      — gateway endpoint: artifact uploads + ECR image layers
+		// The api ALB egress rule lives in mf-<env> (web-stack owns the ALB; it depends on this
+		// stack, so the rule cannot be added here without a cycle).
+		let egressProxyHost: string | undefined
+		if (egressFence) {
+			const endpointsSecurityGroup = new SecurityGroup(this, 'JobEndpointsSecurityGroup', {
+				vpc: this.vpc,
+				description: 'VPC interface endpoints for fenced build-job tasks (C1)',
+				allowAllOutbound: false,
+			})
+			endpointsSecurityGroup.addIngressRule(
+				this.jobSecurityGroup,
+				Port.tcp(443),
+				'fenced job tasks'
+			)
+			const endpointServices: [string, InterfaceVpcEndpointAwsService][] = [
+				['SecretsManager', InterfaceVpcEndpointAwsService.SECRETS_MANAGER],
+				['Sts', InterfaceVpcEndpointAwsService.STS],
+				['Ecs', InterfaceVpcEndpointAwsService.ECS],
+				['CodeBuild', InterfaceVpcEndpointAwsService.CODEBUILD],
+				['Logs', InterfaceVpcEndpointAwsService.CLOUDWATCH_LOGS],
+				['EcrApi', InterfaceVpcEndpointAwsService.ECR],
+				['EcrDocker', InterfaceVpcEndpointAwsService.ECR_DOCKER],
+			]
+			for (const [name, service] of endpointServices) {
+				this.vpc.addInterfaceEndpoint(`JobEndpoint${name}`, {
+					service,
+					securityGroups: [endpointsSecurityGroup],
+					subnets: { subnetType: SubnetType.PRIVATE_WITH_EGRESS },
+				})
+			}
+			this.vpc.addGatewayEndpoint('JobS3Endpoint', {
+				service: GatewayVpcEndpointAwsService.S3,
+				subnets: [{ subnetType: SubnetType.PRIVATE_WITH_EGRESS }],
+			})
+
+			// The proxy's own SG is the one place with real internet egress; ingress only from jobs
+			const proxySecurityGroup = new SecurityGroup(this, 'EgressProxySecurityGroup', {
+				vpc: this.vpc,
+				description: 'Egress allowlist proxy for build jobs (C1) - the single way out',
+				allowAllOutbound: false,
+			})
+			proxySecurityGroup.addEgressRule(Peer.anyIpv4(), Port.tcp(443), 'allowlisted https')
+			proxySecurityGroup.addEgressRule(Peer.anyIpv4(), Port.tcp(80), 'allowlisted http')
+			proxySecurityGroup.addIngressRule(
+				this.jobSecurityGroup,
+				Port.tcp(proxyPort),
+				'build job tasks'
+			)
+			this.jobSecurityGroup.addEgressRule(
+				proxySecurityGroup,
+				Port.tcp(proxyPort),
+				'egress proxy - the only internet route'
+			)
+			this.jobSecurityGroup.addEgressRule(
+				endpointsSecurityGroup,
+				Port.tcp(443),
+				'AWS APIs via VPC interface endpoints (NO_PROXY set)'
+			)
+			if (environment.jobs.s3PrefixListId) {
+				this.jobSecurityGroup.addEgressRule(
+					Peer.prefixList(environment.jobs.s3PrefixListId),
+					Port.tcp(443),
+					'S3 gateway endpoint (artifact uploads + ECR image layers)'
+				)
+			}
+
+			// Stable in-VPC DNS for the proxy: egress-proxy.mf-<env>.internal via Cloud Map
+			const namespaceName = `mf-${environment.name}.internal`
+			this.jobsCluster.addDefaultCloudMapNamespace({ name: namespaceName })
+			const proxyTaskDefinition = new FargateTaskDefinition(this, 'EgressProxyTaskDefinition', {
+				family: `mf-egress-proxy-${environment.name}`,
+				cpu: 256,
+				memoryLimitMiB: 512,
+				runtimePlatform: {
+					cpuArchitecture: CpuArchitecture.X86_64,
+					operatingSystemFamily: OperatingSystemFamily.LINUX,
+				},
+			})
+			proxyTaskDefinition.addContainer('egress-proxy', {
+				image: proxyImage,
+				essential: true,
+				portMappings: [{ containerPort: proxyPort }],
+				logging: LogDrivers.awsLogs({ logGroup: jobLogGroup, streamPrefix: 'proxy' }),
+				healthCheck: proxyHealthCheck,
+				// Fenced job→api reports ride this proxy (the deny-by-default job SG has no route to
+				// the internet-facing ALB's public IPs), so the api host joins the static allowlist
+				// (`apps/job/proxy/filter`) at container start — the entrypoint appends these lines.
+				environment: { FILTER_ALLOW_EXTRA: environment.domain!.apiDomainName },
+			})
+			new FargateService(this, 'EgressProxyService', {
+				cluster: this.jobsCluster,
+				taskDefinition: proxyTaskDefinition,
+				securityGroups: [proxySecurityGroup],
+				vpcSubnets: { subnetType: SubnetType.PRIVATE_WITH_EGRESS },
+				desiredCount: 1,
+				// A single shared proxy: a redeploy may stop it briefly (npm/git retries in the jobs
+				// ride it out); scale desiredCount before scaling job concurrency.
+				minHealthyPercent: 0,
+				cloudMapOptions: { name: 'egress-proxy' },
+			})
+			egressProxyHost = `egress-proxy.${namespaceName}`
+		}
 
 		// MARK: ECS Express Mode delivery (M5). App Runner stopped taking new customers and is not in
 		// eu-north-1; its replacement, ECS Express Mode, takes a PREBUILT image (ECR URI) and returns
@@ -405,7 +553,8 @@ export class ResourcesStack extends Stack {
 
 		// The job container: apps/job/Dockerfile (harness + golden template). `JOB_ID`, the per-job
 		// `JOB_TOKEN`, `API_URL` and the final `NO_PROXY` (this list + the api host, `JOB_NO_PROXY`
-		// on the api — the ALB lives in mf-<env>, which depends on this stack) are set per run by
+		// on the api — the ALB lives in mf-<env>, which depends on this stack; with the C1 fence on
+		// the api host is NOT in it: reports ride the proxy instead) are set per run by
 		// the api's ecs:RunTask override. Only the ECS credential/metadata endpoints, Secrets
 		// Manager, the artifacts bucket, ECS + CodeBuild (M5 delivery) and the api bypass the proxy
 		// (NO_PROXY, exact hosts — a wildcard `.amazonaws.com` would let any AWS-hosted endpoint skip
@@ -454,16 +603,20 @@ export class ResourcesStack extends Stack {
 				// The preview api verifies tokens against our api (it publishes a JWKS); only known
 				// here with a custom domain — without it the deploy step is skipped (deployUrl null)
 				...(environment.auth.issuer ? { PREVIEW_AUTH_ISSUER: environment.auth.issuer } : {}),
-				HTTP_PROXY: `http://127.0.0.1:${proxyPort}`,
-				HTTPS_PROXY: `http://127.0.0.1:${proxyPort}`,
+				HTTP_PROXY: `http://${egressProxyHost ?? '127.0.0.1'}:${proxyPort}`,
+				HTTPS_PROXY: `http://${egressProxyHost ?? '127.0.0.1'}:${proxyPort}`,
 				NO_PROXY: this.jobNoProxyHosts.join(','),
 				NODE_USE_ENV_PROXY: '1',
 			},
 		})
-		job.addContainerDependencies({
-			container: proxy,
-			condition: ContainerDependencyCondition.HEALTHY,
-		})
+		// Sidecar mode only: with the fence on the proxy is its own always-on service, so there is
+		// no in-task dependency to wait for (a job whose proxy is unreachable fails on first fetch).
+		if (proxy) {
+			job.addContainerDependencies({
+				container: proxy,
+				condition: ContainerDependencyCondition.HEALTHY,
+			})
+		}
 
 		// MARK: Job task role — reviewed M9, narrowed by M3 hardening, extended M5. The container
 		// runs customer-driven code, so it gets exactly what apps/job needs today:

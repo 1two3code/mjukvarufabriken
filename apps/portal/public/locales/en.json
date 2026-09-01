@@ -45,6 +45,7 @@
   "delivery.step.deploy": "deployment",
   "delivery.step.docs": "documentation",
   "delivery.step.repo": "repository",
+  "delivery.step.secret-scan": "secret scan",
   "error.body.failedToFetchSession": "The session could not be loaded (request {{requestId}}).",
   "error.body.pageNotFound": "The page you are looking for does not exist.",
   "error.label.pageNotFound": "Page not found",

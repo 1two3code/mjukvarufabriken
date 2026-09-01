@@ -6,6 +6,7 @@ import { exec, git, tail } from '#job/exec.ts'
 import { ensureShared } from '#job/worker.ts'
 import { transcriptsDir } from '#job/transcript.ts'
 
+import { scanDeliveredFiles, secretScanReason } from './secretScan.ts'
 import { acceptanceReportOf } from './types.ts'
 
 import type { DeliverableFile, DeliverableFileName, GateReport } from '@mf/models'
@@ -199,7 +200,8 @@ export const uploadSite = async (
 	jobId: string,
 	repoDir: string,
 	artifacts: ArtifactStore,
-	signal?: AbortSignal
+	signal?: AbortSignal,
+	knownSecrets: string[] = []
 ): Promise<SiteUploadOutcome> => {
 	await ensureShared(repoDir)
 	const build = await exec('npm', ['run', 'build', '--silent'], {
@@ -218,12 +220,23 @@ export const uploadSite = async (
 	if (!dist) return { url: null, files: 0, reason: 'no SPA build output (apps/app/dist) found' }
 	const prefix = `${deliverableKeyOf(jobId)}site/`
 	const files = await listFiles(dist)
-	for (const file of files) {
-		const key = `${prefix}${relative(dist, file).split('\\').join('/')}`
+	// Secret scan (hardening A2): dist/ is UNTRACKED build output — the repo-tree scan never sees
+	// it, yet every byte here ships to a served URL. `npm run build` is model-written code running
+	// as the worker, and pre-planted files in an unused dist/<mode> dir survive the rebuild, so
+	// scan exactly the bytes about to be uploaded and fail closed BEFORE uploading any of them.
+	const entries = await Promise.all(
+		files.map(async file => ({
+			name: relative(dist, file).split('\\').join('/'),
+			content: await readFile(file),
+		}))
+	)
+	const scan = scanDeliveredFiles(entries, knownSecrets)
+	if (!scan.ok) return { url: null, files: 0, reason: `site upload blocked — ${secretScanReason(scan)}` }
+	for (const { name, content } of entries) {
 		await artifacts.putObject({
-			key,
-			body: await readFile(file),
-			contentType: contentTypeOf(file),
+			key: `${prefix}${name}`,
+			body: content,
+			contentType: contentTypeOf(name),
 		})
 	}
 	return { url: artifacts.urlOf(`${prefix}index.html`), files: files.length }

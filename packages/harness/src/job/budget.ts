@@ -16,6 +16,8 @@ export type AbortReason = 'budget exceeded' | 'duration exceeded' | 'killed'
 export class BudgetTracker {
 	readonly controller = new AbortController()
 	private tokens = 0
+	/** Weighted tokens observed at the egress chokepoint (forward proxy) — see `addObserved` */
+	private observedTokens = 0
 	/** Raw four-bucket usage per model — never weighted, the billing basis */
 	private readonly usageByModel: JobUsage = {}
 	private abortReason: AbortReason | undefined
@@ -62,6 +64,27 @@ export class BudgetTracker {
 		this.tokens += totalTokens(usage)
 		this.usageByModel[model] = addUsage(this.usageByModel[model] ?? emptyUsage(), usage)
 		if (this.tokens > this.budget.maxTokens) this.abort('budget exceeded')
+	}
+
+	/**
+	 * Count usage observed at the egress chokepoint (the job's Anthropic forward proxy — hardening
+	 * audit 2026-08-30, Gate B finding D1). The proxy sees EVERY request that reaches the API —
+	 * the SDK sessions' own traffic (already counted via `add`/`adjust`) AND any out-of-band call a
+	 * prompt-injected worker makes with `curl` against `ANTHROPIC_BASE_URL`. The two ledgers
+	 * therefore overlap almost completely, so this is a SEPARATE total that is never added to
+	 * `used`/`usage` (no double counting of the budget or the billing basis): because the
+	 * proxy-observed total is a superset of the SDK-counted one, checking it alone against the cap
+	 * is exactly `max(sdkCounted, proxyObserved) > maxTokens` — out-of-band spend inflates it past
+	 * the cap and trips the same abort the SDK path uses.
+	 */
+	addObserved(usage: TokenUsage) {
+		this.observedTokens += totalTokens(usage)
+		if (this.observedTokens > this.budget.maxTokens) this.abort('budget exceeded')
+	}
+
+	/** Weighted tokens the egress proxy has observed (superset of `used`; enforcement, not billing) */
+	get observed() {
+		return this.observedTokens
 	}
 
 	/** Set the total for a session that reports authoritative usage at the end */

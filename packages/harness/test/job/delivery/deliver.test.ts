@@ -184,9 +184,11 @@ describe('deliver', () => {
 			'delivery',
 			'delivery',
 			'delivery',
+			'delivery',
 		])
 		expect(outcome.steps.map(step => `${step.step}:${step.ok}`)).toEqual([
 			'docs:true',
+			'secret-scan:true',
 			'repo:true',
 			'deploy:true',
 			'bundle:true',
@@ -271,7 +273,7 @@ describe('deliver', () => {
 			],
 			deliveredAt: '2026-08-26T12:00:00.000Z',
 		})
-		expect(outcome.steps[3]!.deliverable).toEqual(outcome.deliverable)
+		expect(outcome.steps[4]!.deliverable).toEqual(outcome.deliverable)
 	})
 
 	it('Leaves the transfer pending when the customer has no GitHub login', async () => {
@@ -286,7 +288,7 @@ describe('deliver', () => {
 		expect(outcome.ok).toBe(true)
 		expect(github.collaborators).toEqual([])
 		expect(outcome.deliverable?.transferPending).toBe(true)
-		expect(outcome.steps[1]).toEqual({
+		expect(outcome.steps[2]).toEqual({
 			step: 'repo',
 			ok: true,
 			url: 'https://github.com/mjukvaruhuset/gym',
@@ -305,7 +307,7 @@ describe('deliver', () => {
 		// Assert — not "no customer GitHub login": the admin must re-check the login, not ask for one
 		expect(outcome.ok).toBe(true)
 		expect(outcome.deliverable?.transferPending).toBe(true)
-		expect(outcome.steps[1]).toEqual({
+		expect(outcome.steps[2]).toEqual({
 			step: 'repo',
 			ok: true,
 			url: 'https://github.com/mjukvaruhuset/gym-booking',
@@ -382,6 +384,40 @@ describe('deliver', () => {
 		expect(child).toContain('username=x-access-token')
 	})
 
+	it('Blocks the site upload when the built dist carries a credential-shaped string', async () => {
+		// Arrange — the build script ASSEMBLES the token at build time (tr - _), so the committed
+		// tree stays clean and the repo scan passes; only the untracked dist output is dirty.
+		// This is the A2 exfil channel the dist scan closes: worker-written build code can emit
+		// anything into dist/, which ships to a served URL.
+		await writeFile(
+			join(repoDir, 'package.json'),
+			JSON.stringify({
+				name: 'customer-app',
+				scripts: {
+					build:
+						'mkdir -p apps/app/dist/live && echo "<html/>" > apps/app/dist/live/index.html && echo "sk_live-AAAAAAAAAAAAAAAA" | tr - _ > apps/app/dist/live/config.js',
+				},
+			})
+		)
+		await exec('git', ['add', '-A'], { cwd: repoDir, env: gitEnv })
+		await exec('git', ['commit', '-q', '-m', 'chore: sneaky build'], { cwd: repoDir, env: gitEnv })
+		const { artifacts, clients } = createClients()
+		const input = createInput(repoDir)
+
+		// Act
+		const outcome = await deliver(input, clients)
+
+		// Assert — repo + bundle contract intact, but not one site byte was uploaded
+		expect(outcome.ok).toBe(true)
+		expect(outcome.deliverable?.siteUrl).toBeNull()
+		expect(outcome.reason).toContain('site upload blocked')
+		expect(outcome.reason).toContain('config.js:1 (stripe-secret-key)')
+		expect([...artifacts.objects.keys()].filter(key => key.includes('/site/'))).toEqual([])
+		// Redacted: the secret value itself never reaches events or the outcome
+		expect(JSON.stringify(outcome)).not.toContain('sk_live_A')
+		expect(JSON.stringify(input.events)).not.toContain('sk_live_A')
+	})
+
 	it('Still delivers when the deploy fails: deployUrl null + a notify event for the admins', async () => {
 		// Arrange
 		const { clients } = createClients({ deploy: createFakeDeployClient(true) })
@@ -395,7 +431,7 @@ describe('deliver', () => {
 		expect(outcome.deliverable?.deployUrl).toBeNull()
 		expect(outcome.deliverable?.siteUrl).toMatch(/site\/index\.html$/)
 		expect(outcome.reason).toBe('ecs express: fake: ECS Express deploy failed')
-		expect(outcome.steps[2]).toEqual({
+		expect(outcome.steps[3]).toEqual({
 			step: 'deploy',
 			ok: false,
 			url: outcome.deliverable?.siteUrl,
@@ -423,8 +459,8 @@ describe('deliver', () => {
 		expect(outcome.ok).toBe(true)
 		expect(outcome.deliverable?.deployUrl).toBeNull()
 		expect(deploy.deployments).toEqual([])
-		expect(outcome.steps[2]).toMatchObject({ step: 'deploy', ok: false })
-		expect(outcome.steps[2]!.reason).toContain('acceptance boot')
+		expect(outcome.steps[3]).toMatchObject({ step: 'deploy', ok: false })
+		expect(outcome.steps[3]!.reason).toContain('acceptance boot')
 		const notify = input.events.find(event => event.type === 'notify')
 		expect(notify?.payload).toMatchObject({ to: 'admins' })
 	})
@@ -457,7 +493,7 @@ describe('deliver', () => {
 			expect.arrayContaining(['AUTH_JWT_SECRET', 'VAPID_PUBLIC_KEY', 'VAPID_PRIVATE_KEY', 'VAPID_SUBJECT'])
 		)
 		expect(deploy.deployments).toHaveLength(1)
-		expect(outcome.steps[2]).toMatchObject({ step: 'deploy', ok: true })
+		expect(outcome.steps[3]).toMatchObject({ step: 'deploy', ok: true })
 	})
 
 	it('Injects the app-declared required env into BOTH the boot check and the deploy container', async () => {
@@ -494,7 +530,55 @@ describe('deliver', () => {
 			event => event.type === 'log' && /MAPBOX_TOKEN/.test((event.payload as { message: string }).message)
 		)
 		expect(log).toBeTruthy()
-		expect(outcome.steps[2]).toMatchObject({ step: 'deploy', ok: true })
+		expect(outcome.steps[3]).toMatchObject({ step: 'deploy', ok: true })
+	})
+
+	it('Fails closed on a seeded credential leak — nothing is pushed, deployed or uploaded (A2)', async () => {
+		// Arrange — a worker wrote a credential-shaped string into a tracked file
+		await writeFile(
+			join(repoDir, '.env.example'),
+			'ANTHROPIC_API_KEY=sk-ant-api03-AAAAAAAAAAAAAAAAAAAAAAAA\n'
+		)
+		await exec('git', ['add', '-A'], { cwd: repoDir, env: gitEnv })
+		await exec('git', ['commit', '-q', '-m', 'feat: leak'], { cwd: repoDir, env: gitEnv })
+		const { github, deploy, artifacts, clients } = createClients()
+		const input = createInput(repoDir)
+
+		// Act
+		const outcome = await deliver(input, clients)
+
+		// Assert — the scan aborts the delivery before any external call
+		expect(outcome.ok).toBe(false)
+		expect(outcome.reason).toContain('secret scan: 1 credential-shaped string(s)')
+		expect(outcome.reason).toContain('.env.example:1 (anthropic-api-key)')
+		expect(outcome.reason).not.toContain('sk-ant-api03') // redacted
+		expect(outcome.steps.map(step => `${step.step}:${step.ok}`)).toEqual([
+			'docs:true',
+			'secret-scan:false',
+		])
+		expect(github.pushes).toEqual([])
+		expect(deploy.deployments).toEqual([])
+		expect(artifacts.objects.size).toBe(0)
+	})
+
+	it("Fails closed when the job's own known secret value appears in the tree (A2)", async () => {
+		// Arrange
+		await writeFile(join(repoDir, 'src.ts'), `const token = 'the-jobs-live-report-token-9f2'\n`)
+		await exec('git', ['add', '-A'], { cwd: repoDir, env: gitEnv })
+		await exec('git', ['commit', '-q', '-m', 'feat: sneaky'], { cwd: repoDir, env: gitEnv })
+		const { github, clients } = createClients({
+			knownSecrets: ['the-jobs-live-report-token-9f2'],
+		})
+		const input = createInput(repoDir)
+
+		// Act
+		const outcome = await deliver(input, clients)
+
+		// Assert
+		expect(outcome.ok).toBe(false)
+		expect(outcome.reason).toContain('src.ts:1 (known-secret-value)')
+		expect(outcome.reason).not.toContain('the-jobs-live-report-token-9f2') // redacted
+		expect(github.pushes).toEqual([])
 	})
 
 	it('Runs the live acceptance check after the deploy and keeps the URL when it is green', async () => {
@@ -512,6 +596,7 @@ describe('deliver', () => {
 		expect(liveCheck.calls[0]!.repoDir).toBe(repoDir)
 		expect(outcome.steps.map(step => `${step.step}:${step.ok}`)).toEqual([
 			'docs:true',
+			'secret-scan:true',
 			'repo:true',
 			'deploy:true',
 			'acceptance:true',
@@ -567,9 +652,10 @@ describe('deliver', () => {
 		expect(deploy.deployments).toEqual([])
 		expect(boot.calls).toEqual([])
 		expect(outcome.deliverable?.deployUrl).toBeNull()
-		expect(outcome.steps[2]).toMatchObject({ step: 'deploy', ok: false })
-		expect(outcome.steps[2]!.reason).toContain('needs a database')
-		expect(outcome.steps[2]!.reason).toContain('DATABASE_URL')
+		const deployStep = outcome.steps.find(step => step.step === 'deploy')
+		expect(deployStep).toMatchObject({ step: 'deploy', ok: false })
+		expect(deployStep!.reason).toContain('needs a database')
+		expect(deployStep!.reason).toContain('DATABASE_URL')
 	})
 
 	it('Provisions the database and injects DATABASE_URL into both the boot and the live container', async () => {
@@ -594,8 +680,9 @@ describe('deliver', () => {
 		expect(dbProvisioner.provision).toHaveBeenCalledTimes(1)
 		expect(boot.calls[0]!.env.DATABASE_URL).toBe(databaseUrl)
 		expect(deploy.envs[0]!.DATABASE_URL).toBe(databaseUrl)
-		expect(outcome.steps[2]).toMatchObject({ step: 'deploy', ok: true })
-		expect(outcome.steps[2]!.reason ?? '').not.toContain('DATABASE_URL')
+		const deployStep = outcome.steps.find(step => step.step === 'deploy')
+		expect(deployStep).toMatchObject({ step: 'deploy', ok: true })
+		expect(deployStep!.reason ?? '').not.toContain('DATABASE_URL')
 	})
 
 	it('Skips the deploy when database provisioning fails (never a live-but-dead URL)', async () => {
@@ -613,8 +700,9 @@ describe('deliver', () => {
 
 		// Assert
 		expect(deploy.deployments).toEqual([])
-		expect(outcome.steps[2]).toMatchObject({ step: 'deploy', ok: false })
-		expect(outcome.steps[2]!.reason).toContain('database provisioning failed')
+		const deployStep = outcome.steps.find(step => step.step === 'deploy')
+		expect(deployStep).toMatchObject({ step: 'deploy', ok: false })
+		expect(deployStep!.reason).toContain('database provisioning failed')
 	})
 
 	it('Fails closed when the push fails — no deploy, no bundle', async () => {
@@ -633,6 +721,7 @@ describe('deliver', () => {
 		expect(outcome.deliverable).toBeUndefined()
 		expect(outcome.steps.map(step => `${step.step}:${step.ok}`)).toEqual([
 			'docs:true',
+			'secret-scan:true',
 			'repo:false',
 		])
 		expect(deploy.deployments).toEqual([])
@@ -691,7 +780,7 @@ describe('deliver', () => {
 
 		// Assert
 		expect(outcome).toMatchObject({ ok: false, reason: 'aborted' })
-		expect(outcome.steps.map(step => step.step)).toEqual(['docs', 'repo'])
+		expect(outcome.steps.map(step => step.step)).toEqual(['docs', 'secret-scan', 'repo'])
 	})
 
 	it('Dry run: logs every external call instead of making it and marks the events', async () => {
