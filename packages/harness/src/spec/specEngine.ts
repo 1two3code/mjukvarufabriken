@@ -146,13 +146,59 @@ export type SpecToolOutput = z.infer<typeof SpecToolOutputSchema>
 
 // MARK: Helpers
 
-const toMessageParams = (
+/**
+ * How many stored messages (two per turn — the customer's and the engine's reply) are replayed to
+ * the model. Older turns are dropped rather than resent: every turn used to spread the WHOLE
+ * history, so a draft's cost per turn grew linearly and its total cost quadratically with no upper
+ * bound, and a long enough chat eventually overflowed the context window and made the order's spec
+ * endpoint fail permanently (audit P1-2).
+ *
+ * Dropping old turns is safe because the accumulated state does not live in the transcript: the
+ * draft spec is replayed in full on every turn by {@link draftContext}, and the system prompt tells
+ * the engine to refine that draft rather than start over. The window only bounds how much verbatim
+ * conversational context the model sees.
+ */
+export const specHistoryWindow = 20
+
+const ephemeral = { type: 'ephemeral' } as const
+
+/**
+ * The conversation for one turn: the tail of the stored history, then the current draft spec and
+ * the new customer message as the final user turn.
+ *
+ * Two deliberate details:
+ * - the draft spec goes AFTER the history, not into the system prompt. It changes every turn, and
+ *   prompt caching is prefix-based — with it in front, nothing behind it could ever be cached.
+ * - the last replayed message carries a cache breakpoint, so the steady-state cost of a long chat
+ *   is a cache read of the transcript rather than full-price input tokens on every turn.
+ */
+export const toMessageParams = (
 	messages: ChatMessage[],
-	userMessage: string
-): Anthropic.MessageParam[] => [
-	...messages.map(message => ({ role: message.role, content: message.content })),
-	{ role: 'user', content: userMessage },
-]
+	userMessage: string,
+	spec: PartialSpec,
+	window: number = specHistoryWindow
+): Anthropic.MessageParam[] => {
+	const recent = window > 0 ? messages.slice(-window) : []
+	// The API requires the first message to be `user`; a window landing mid-turn would start on
+	// the assistant's reply.
+	const history = recent[0]?.role === 'assistant' ? recent.slice(1) : recent
+	return [
+		...history.map((message, index) => ({
+			role: message.role,
+			content:
+				index === history.length - 1
+					? [{ type: 'text' as const, text: message.content, cache_control: ephemeral }]
+					: message.content,
+		})),
+		{
+			role: 'user',
+			content: [
+				{ type: 'text', text: draftContext(spec) },
+				{ type: 'text', text: userMessage },
+			],
+		},
+	]
+}
 
 const draftContext = (spec: PartialSpec) =>
 	`Current draft spec (JSON, may be partial — refine it, do not start over):\n${JSON.stringify(spec, null, 2)}`
@@ -191,13 +237,10 @@ export const createSpecEngine = ({
 		const response = await client.messages.create({
 			model: resolvedModel,
 			max_tokens: maxTokens,
-			system: [
-				{ type: 'text', text: specSystemPrompt, cache_control: { type: 'ephemeral' } },
-				{ type: 'text', text: draftContext(draft.spec) },
-			],
+			system: [{ type: 'text', text: specSystemPrompt, cache_control: ephemeral }],
 			tools: [specTool],
 			tool_choice: { type: 'tool', name: specToolName, disable_parallel_tool_use: true },
-			messages: toMessageParams(draft.messages, userMessage),
+			messages: toMessageParams(draft.messages, userMessage, draft.spec),
 		})
 
 		const output = SpecToolOutputSchema.parse(findToolInput(response))

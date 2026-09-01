@@ -2,6 +2,7 @@ import { EntityInvalid } from '#/lib/entityError.ts'
 import { AnthropicNotConfigured } from '#/plugins/anthropic.ts'
 import postSpecMessage from '#/routes/bff/orders/spec/postSpecMessage.ts'
 import { createMockSpecDraft } from '#/services/__mocks__/specService.ts'
+import { SpecRateLimited, SpecTurnLimitReached } from '#/services/specService.ts'
 
 import type { FastifyInstance } from 'fastify'
 
@@ -54,6 +55,32 @@ describe('POST /bff/orders/:orderId/spec route', () => {
 		// Assert
 		expect(response.statusCode).toBe(409)
 		expect(response.json().error.code).toBe('specFrozen')
+	})
+
+	it('Responds 409 specTurnLimit when the draft has used its turn budget', async () => {
+		// Arrange
+		vi.spyOn(app.specService, 'sendMessage').mockRejectedValue(
+			new SpecTurnLimitReached('order-1')
+		)
+
+		// Act
+		const response = await app.inject({ method: 'POST', url, payload })
+
+		// Assert — a distinct code from specFrozen: the draft is editable, the conversation is not
+		expect(response.statusCode).toBe(409)
+		expect(response.json().error.code).toBe('specTurnLimit')
+	})
+
+	it('Responds 429 specRateLimited when the order or org window is full', async () => {
+		// Arrange
+		vi.spyOn(app.specService, 'sendMessage').mockRejectedValue(new SpecRateLimited('order-1'))
+
+		// Act
+		const response = await app.inject({ method: 'POST', url, payload })
+
+		// Assert
+		expect(response.statusCode).toBe(429)
+		expect(response.json().error.code).toBe('specRateLimited')
 	})
 
 	it('Responds 503 specEngineUnavailable when no API key is configured', async () => {

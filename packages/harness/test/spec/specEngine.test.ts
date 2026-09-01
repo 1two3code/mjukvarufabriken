@@ -1,13 +1,15 @@
 import {
 	createSpecEngine,
 	defaultSpecModel,
+	specHistoryWindow,
 	specToolName,
 	SpecToolOutputSchema,
+	toMessageParams,
 	toPartialSpec,
 } from '#spec/specEngine.ts'
 
 import type Anthropic from '@anthropic-ai/sdk'
-import type { SpecDraft } from '@mf/models'
+import type { ChatMessage, SpecDraft } from '@mf/models'
 import type { SpecEngineClient, SpecToolOutput } from '#spec/specEngine.ts'
 
 // MARK: Fake client
@@ -84,9 +86,17 @@ describe('createSpecEngine', () => {
 			disable_parallel_tool_use: true,
 		})
 		expect(params.tools).toEqual([expect.objectContaining({ name: specToolName, strict: true })])
+		// The draft spec rides on the final user turn (see `toMessageParams`), not the system prompt
 		expect(params.messages).toEqual([
-			{ role: 'user', content: 'Jag vill ha en bokningsapp för mitt gym' },
+			{
+				role: 'user',
+				content: [
+					{ type: 'text', text: expect.stringContaining('Current draft spec') },
+					{ type: 'text', text: 'Jag vill ha en bokningsapp för mitt gym' },
+				],
+			},
 		])
+		expect(JSON.stringify(params.system)).not.toContain('Current draft spec')
 		expect(turn).toEqual({
 			assistantMessage: 'Tack! Några frågor...',
 			spec: { goal: 'En bokningsapp för ett litet gym' },
@@ -156,7 +166,7 @@ describe('createSpecEngine', () => {
 			content: 'I want a booking app for my gym',
 		})
 		expect(secondCall.messages[1]?.role).toBe('assistant')
-		expect(JSON.stringify(secondCall.system)).toContain('Current draft spec')
+		expect(JSON.stringify(secondCall.messages)).toContain('Current draft spec')
 
 		expect(turn2.complete).toBe(true)
 		expect(turn2.openQuestions).toEqual([])
@@ -195,6 +205,69 @@ describe('createSpecEngine', () => {
 	it('Rejects malformed tool input', async () => {
 		const { client } = createFakeClient(toolUseMessage({ goal: 42 }))
 		await expect(createSpecEngine({ client }).nextTurn(emptyDraft(), 'hi')).rejects.toThrow()
+	})
+
+	// MARK: History window (audit P1-2)
+
+	describe('toMessageParams', () => {
+		/** `count` stored messages, alternating user → assistant, numbered so order is visible */
+		const history = (count: number): ChatMessage[] =>
+			Array.from({ length: count }, (_, index) => ({
+				role: index % 2 === 0 ? ('user' as const) : ('assistant' as const),
+				content: `m${index}`,
+				createdAt: '2026-08-26T00:00:00.000Z',
+			}))
+
+		const textOf = (message: Anthropic.MessageParam) =>
+			typeof message.content === 'string'
+				? message.content
+				: message.content.map(block => (block.type === 'text' ? block.text : '')).join('')
+
+		it('Replays at most specHistoryWindow stored messages, dropping the oldest turns', () => {
+			// Arrange — 40 stored messages, twice the window
+			const messages = history(specHistoryWindow * 2)
+
+			// Act
+			const params = toMessageParams(messages, 'latest', {})
+
+			// Assert — the window plus the new user turn, and it is the TAIL that survives
+			expect(params).toHaveLength(specHistoryWindow + 1)
+			expect(textOf(params[0]!)).toBe(`m${specHistoryWindow}`)
+			expect(params.map(textOf)).not.toContain('m0')
+			expect(textOf(params.at(-1)!)).toContain('latest')
+		})
+
+		it('Never starts the replay on an assistant message', () => {
+			// Arrange — an odd window lands mid-turn, on `m1` (assistant)
+			const params = toMessageParams(history(6), 'latest', {}, 5)
+
+			// Assert — the dangling assistant reply is dropped, so the first message is a user one
+			expect(params[0]?.role).toBe('user')
+			expect(textOf(params[0]!)).toBe('m2')
+			expect(params).toHaveLength(5)
+		})
+
+		it('Puts a cache breakpoint on the last replayed message and nowhere else', () => {
+			// Act
+			const params = toMessageParams(history(4), 'latest', {})
+
+			// Assert — only the newest replayed message carries the breakpoint, so each turn extends
+			// a cached prefix instead of re-billing the whole transcript
+			const breakpoints = params.flatMap(message =>
+				typeof message.content === 'string'
+					? []
+					: message.content.filter(block => 'cache_control' in block && block.cache_control)
+			)
+			expect(breakpoints).toHaveLength(1)
+			expect(breakpoints[0]).toMatchObject({ text: 'm3', cache_control: { type: 'ephemeral' } })
+		})
+
+		it('Sends only the draft spec and the message when there is no history', () => {
+			const params = toMessageParams([], 'first message', { goal: 'A booking app' })
+			expect(params).toHaveLength(1)
+			expect(textOf(params[0]!)).toContain('A booking app')
+			expect(textOf(params[0]!)).toContain('first message')
+		})
 	})
 
 	it('toPartialSpec keeps only answered fields', () => {

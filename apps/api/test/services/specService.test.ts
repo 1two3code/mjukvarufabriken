@@ -4,7 +4,13 @@ import {
 	createMockToolUseMessage,
 } from '#/plugins/__mocks__/anthropic.ts'
 import { createMockSpec, createMockSpecDraft } from '#/services/__mocks__/specService.ts'
-import { createEmptyDraft } from '#/services/specService.ts'
+import {
+	createEmptyDraft,
+	specChatLimits,
+	specChatRateLimitScope,
+	SpecRateLimited,
+	SpecTurnLimitReached,
+} from '#/services/specService.ts'
 
 import type { FastifyInstance } from 'fastify'
 import type { BackendSession, SpecDraft } from '@mf/models'
@@ -174,6 +180,129 @@ describe('Spec Service', () => {
 			)
 			expect(app.db.orders.upsert).not.toHaveBeenCalled()
 			expect(app.db.orders.updateUnlessFrozen).not.toHaveBeenCalled()
+		})
+	})
+
+	// MARK: Spend ceilings (audit P1-2)
+
+	describe('sendMessage limits', () => {
+		/** A draft with `turns` completed turns already stored (two messages each) */
+		const draftWithTurns = (turns: number, overrides: Partial<SpecDraft> = {}): SpecDraft => ({
+			...createEmptyDraft('order-1', 'org-1'),
+			messages: Array.from({ length: turns * 2 }, (_, index) => ({
+				role: index % 2 === 0 ? ('user' as const) : ('assistant' as const),
+				content: `m${index}`,
+				createdAt: '2026-08-26T10:00:00.000Z',
+			})),
+			...overrides,
+		})
+
+		it('Refuses a turn once the draft has used its lifetime turn budget, before any model call', async () => {
+			// Arrange
+			await seed(draftWithTurns(specChatLimits.maxTurns))
+
+			// Act & Assert
+			await expect(app.specService.sendMessage('order-1', 'more', user)).rejects.toBeInstanceOf(
+				SpecTurnLimitReached
+			)
+			expect(app.anthropic.messages.create).not.toHaveBeenCalled()
+			expect(app.db.orders.updateUnlessFrozen).not.toHaveBeenCalled()
+		})
+
+		it('Still allows the last turn under the budget', async () => {
+			// Arrange
+			await seed(draftWithTurns(specChatLimits.maxTurns - 1))
+
+			// Act & Assert
+			await expect(app.specService.sendMessage('order-1', 'more', user)).resolves.toBeDefined()
+			expect(app.anthropic.messages.create).toHaveBeenCalledTimes(1)
+		})
+
+		it('Counts every turn against both the order and the org window', async () => {
+			// Arrange
+			await seed(createEmptyDraft('order-1', 'org-1'))
+			vi.spyOn(app.db.rateLimits, 'record')
+
+			// Act
+			await app.specService.sendMessage('order-1', 'hi', user)
+
+			// Assert
+			expect(app.db.rateLimits.record).toHaveBeenCalledWith(
+				specChatRateLimitScope.order,
+				'order-1',
+				expect.any(Date)
+			)
+			expect(app.db.rateLimits.record).toHaveBeenCalledWith(
+				specChatRateLimitScope.org,
+				'org-1',
+				expect.any(Date)
+			)
+		})
+
+		it('Rate limits a burst on one order without spending a model call', async () => {
+			// Arrange — the order's window is already full
+			await seed(createEmptyDraft('order-1', 'org-1'))
+			const now = new Date()
+			for (let i = 0; i < specChatLimits.maxTurnsPerOrder; i++) {
+				await app.db.rateLimits.record(specChatRateLimitScope.order, 'order-1', now)
+			}
+
+			// Act & Assert
+			await expect(app.specService.sendMessage('order-1', 'hi', user)).rejects.toBeInstanceOf(
+				SpecRateLimited
+			)
+			expect(app.anthropic.messages.create).not.toHaveBeenCalled()
+		})
+
+		it('Rate limits per org too, so minting fresh orders does not bypass the ceiling', async () => {
+			// Arrange — a brand new order, but the org has already used its window on other orders
+			await seed(createEmptyDraft('order-new', 'org-1'))
+			const now = new Date()
+			for (let i = 0; i < specChatLimits.maxTurnsPerOrg; i++) {
+				await app.db.rateLimits.record(specChatRateLimitScope.org, 'org-1', now)
+			}
+
+			// Act & Assert
+			await expect(app.specService.sendMessage('order-new', 'hi', user)).rejects.toBeInstanceOf(
+				SpecRateLimited
+			)
+			expect(app.anthropic.messages.create).not.toHaveBeenCalled()
+		})
+
+		it("Bills an admin's turn to the draft's org, not to the admin's own", async () => {
+			// Arrange
+			await seed(createMockSpecDraft({ orderId: 'order-1', orgId: 'org-2', messages: [] }))
+			vi.spyOn(app.db.rateLimits, 'record')
+
+			// Act
+			await app.specService.sendMessage('order-1', 'hi', admin)
+
+			// Assert
+			expect(app.db.rateLimits.record).toHaveBeenCalledWith(
+				specChatRateLimitScope.org,
+				'org-2',
+				expect.any(Date)
+			)
+			expect(app.db.rateLimits.record).not.toHaveBeenCalledWith(
+				specChatRateLimitScope.org,
+				'org-admin',
+				expect.any(Date)
+			)
+		})
+
+		it('Counts a turn that then fails, so a broken engine is not an unlimited free retry', async () => {
+			// Arrange
+			await seed(createEmptyDraft('order-1', 'org-1'))
+			vi.spyOn(app.anthropic.messages, 'create').mockRejectedValue(new Error('boom'))
+			const since = new Date(Date.now() - 60_000)
+
+			// Act
+			await expect(app.specService.sendMessage('order-1', 'hi', user)).rejects.toThrow('boom')
+
+			// Assert
+			await expect(
+				app.db.rateLimits.count(specChatRateLimitScope.order, 'order-1', since)
+			).resolves.toBe(1)
 		})
 	})
 

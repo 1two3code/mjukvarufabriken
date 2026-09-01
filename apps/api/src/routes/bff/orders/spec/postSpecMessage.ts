@@ -4,6 +4,7 @@ import { tryCatch } from '@mf/utils/function'
 
 import { EntityInvalid, EntityNotFound } from '#/lib/entityError.ts'
 import { AnthropicNotConfigured } from '#/plugins/anthropic.ts'
+import { SpecRateLimited, SpecTurnLimitReached } from '#/services/specService.ts'
 
 import type { FastifyContextConfig } from 'fastify'
 import type { FastifyPluginAsyncZod } from 'fastify-type-provider-zod'
@@ -27,6 +28,8 @@ const route: FastifyPluginAsyncZod = async function (app) {
 		)
 		if (error instanceof EntityNotFound) return reply.error(404, error)
 		if (error instanceof EntityInvalid) return reply.error(409, error, 'specFrozen')
+		if (error instanceof SpecTurnLimitReached) return reply.error(409, error, 'specTurnLimit')
+		if (error instanceof SpecRateLimited) return reply.error(429, error, 'specRateLimited')
 		if (error instanceof AnthropicNotConfigured) {
 			return reply.error(503, error, 'specEngineUnavailable')
 		}
