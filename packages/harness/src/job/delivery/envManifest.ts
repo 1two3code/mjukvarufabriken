@@ -221,3 +221,58 @@ export const detectDatabaseNeed = async (
 	}
 	return { needed: evidence.length > 0, evidence }
 }
+
+// MARK: Object-storage need (preview resources)
+
+/**
+ * npm dependencies that mean "this app puts files somewhere at runtime". The AWS SDK clients are
+ * the direct signal; the upload middlewares are the indirect one — an app that accepts a file
+ * upload has to put it somewhere, and on a preview that somewhere is S3, not the container's
+ * ephemeral disk (which dies with every deployment).
+ */
+const storageDependencies = [
+	'@aws-sdk/client-s3',
+	'@aws-sdk/s3-request-presigner',
+	'aws-sdk',
+	'multer',
+	'busboy',
+	'@fastify/multipart',
+	'formidable',
+]
+
+/** Env names that mean the app was written expecting a bucket */
+const storageEnvNames = ['S3_BUCKET', 'AWS_S3_BUCKET', 'STORAGE_BUCKET', 'BUCKET_NAME']
+
+export type StorageNeed = { needed: boolean; evidence: string[] }
+
+/**
+ * Whether the built app needs object storage at runtime. Same shape and same reasoning as
+ * {@link detectDatabaseNeed}: a false positive costs one unused (empty) prefix and a role nobody
+ * calls, a false negative ships an app whose every upload fails — or, worse, one that writes to
+ * container-local disk and silently loses the files on the next deployment. So detection errs
+ * wide, and delivery fails closed when the need is real but provisioning is unavailable.
+ */
+export const detectStorageNeed = async (
+	repoDir: string,
+	required: string[]
+): Promise<StorageNeed> => {
+	const evidence: string[] = []
+	const declared = storageEnvNames.filter(name => required.includes(name))
+	if (declared.length) evidence.push(`required env declares ${declared.join(', ')}`)
+	for (const root of await packageRoots(repoDir)) {
+		try {
+			const pkg = JSON.parse(await readFile(join(root, 'package.json'), 'utf8')) as {
+				dependencies?: Record<string, string>
+			}
+			const found = storageDependencies.filter(name => pkg.dependencies?.[name])
+			if (found.length) {
+				evidence.push(
+					`${relative(repoDir, root) || '.'}/package.json depends on ${found.join(', ')}`
+				)
+			}
+		} catch {
+			// no package.json here
+		}
+	}
+	return { needed: evidence.length > 0, evidence }
+}

@@ -27,7 +27,7 @@ import { createWiredSmokeCheck } from './wiredSmoke.ts'
 
 import type { GitHubAppAuth } from './github.ts'
 import type { PreviewTokenMinter } from './liveAcceptance.ts'
-import type { DbProvisioner, DeliveryClients, PreviewAuth } from './types.ts'
+import type { DbProvisioner, DeliveryClients, PreviewAuth, StorageProvisioner } from './types.ts'
 
 export * from './artifacts.ts'
 export * from './authReconcile.ts'
@@ -110,6 +110,12 @@ export type LiveDeliveryOptions = {
 	 */
 	dbProvisioner?: DbProvisioner
 	/**
+	 * Provisions the delivered app's object storage through the api's internal endpoint (the job's
+	 * report credentials, wired by apps/job). Absent → an app that needs storage fails closed at
+	 * the deploy step (docs/PREVIEW-RESOURCES.md).
+	 */
+	storageProvisioner?: StorageProvisioner
+	/**
 	 * Mints a short-lived preview access token through the api (apps/job wires the report
 	 * credentials) so the post-deploy acceptance check can exercise auth-gated routes.
 	 */
@@ -165,6 +171,7 @@ export const createLiveDeliveryClients = ({
 	region = process.env.AWS_REGION || 'eu-north-1',
 	workerModel,
 	dbProvisioner,
+	storageProvisioner,
 	mintPreviewToken,
 	knownSecrets,
 	dryRun = false,
@@ -190,6 +197,7 @@ export const createLiveDeliveryClients = ({
 			boot: createDryRunBootCheck(log),
 			liveCheck: createDryRunLiveCheck(log),
 			dbProvisioner,
+			storageProvisioner,
 			githubOrg,
 			previewAuth,
 			knownSecrets,
@@ -246,6 +254,7 @@ export const createLiveDeliveryClients = ({
 		// to the customer as a working URL.
 		liveCheck: createLiveAcceptanceCheck({ mintToken: mintPreviewToken }),
 		dbProvisioner,
+		storageProvisioner,
 		githubOrg,
 		previewAuth,
 		knownSecrets,

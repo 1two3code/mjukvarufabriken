@@ -237,7 +237,7 @@ export const createEcsExpressDeployClient = ({
 	}
 
 	return {
-		deployFromRepo: async ({ serviceName, source, env, signal }) => {
+		deployFromRepo: async ({ serviceName, source, env, taskRoleArn, signal }) => {
 			const name = expressServiceName(serviceName)
 			// Fail closed BEFORE building/standing anything up: a service that cannot carry a valid
 			// `Customer=<slug>` fence is un-teardownable by a fenced deprovision (an orphan on the
@@ -258,6 +258,10 @@ export const createEcsExpressDeployClient = ({
 				cluster,
 				infrastructureRoleArn,
 				executionRoleArn,
+				// The role the delivered app itself runs as, when it was provisioned object storage
+				// (docs/PREVIEW-RESOURCES.md). Scoped to that app's own prefix; omitted entirely when
+				// the app needs no storage, so a delivery that touches nothing carries no role at all.
+				...(taskRoleArn && { taskRoleArn }),
 				healthCheckPath: '/health',
 				cpu: '256',
 				memory: '512',
@@ -310,6 +314,8 @@ export type FakeDeploy = DeployClient & {
 	}[]
 	/** The runtime env passed alongside each deployment (the app's required set), parallel to `deployments` */
 	envs: (Record<string, string> | undefined)[]
+	/** The task role passed alongside each deployment (set only when storage was provisioned) */
+	taskRoleArns: (string | undefined)[]
 }
 
 /** Placeholder preview URL for the fakes/dry-run (cosmetic — the shape ECS Express hands out) */
@@ -343,11 +349,14 @@ export const createFakeDeployClient = (fail = false): FakeDeploy => {
 	const fake: FakeDeploy = {
 		deployments: [],
 		envs: [],
-		// `env` is recorded separately so `deployments` keeps its stable four-key shape for assertions
-		deployFromRepo: async ({ signal: _signal, env, ...input }) => {
+		taskRoleArns: [],
+		// `env` and `taskRoleArn` are recorded separately so `deployments` keeps its stable
+		// four-key shape for assertions
+		deployFromRepo: async ({ signal: _signal, env, taskRoleArn, ...input }) => {
 			if (fail) throw new Error('fake: ECS Express deploy failed')
 			fake.deployments.push(input)
 			fake.envs.push(env)
+			fake.taskRoleArns.push(taskRoleArn)
 			return { url: fakeUrl(input.serviceName), service: fakeServiceReport(input.serviceName, env) }
 		},
 	}

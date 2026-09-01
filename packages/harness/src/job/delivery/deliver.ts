@@ -1,5 +1,5 @@
 import { deliverableKeyOf, uploadBundle, uploadSite, uploadSource } from './bundle.ts'
-import { buildEnvManifest, detectDatabaseNeed } from './envManifest.ts'
+import { buildEnvManifest, detectDatabaseNeed, detectStorageNeed } from './envManifest.ts'
 import { curateWorkflows, stripInternalGitArtifacts } from './curate.ts'
 import { writeDocs } from './docs.ts'
 import { defaultGitHubOrg } from './github.ts'
@@ -92,6 +92,7 @@ export const deliver = async (
 		boot,
 		liveCheck,
 		dbProvisioner,
+		storageProvisioner,
 		previewAuth,
 		githubOrg = defaultGitHubOrg,
 		dryRun,
@@ -249,11 +250,14 @@ export const deliver = async (
 	// through the api (the job never holds admin DB credentials, only the scoped URL that comes
 	// back) — or, when provisioning is unavailable or fails, NO deploy at all: a live URL whose
 	// every read/write 500s against a database that does not exist is worse than no URL.
-	let dbBlocked: string | undefined
+	// Set by any pre-deploy resource check that could not be satisfied. A missing dependency is
+	// never degraded into a live-but-broken URL — the repo and bundle still deliver, the deploy
+	// does not.
+	let deployBlocked: string | undefined
 	const dbNeed = await detectDatabaseNeed(repoDir, manifest.required)
 	if (dbNeed.needed && !dryRun) {
 		if (!dbProvisioner) {
-			dbBlocked = `the app needs a database (${dbNeed.evidence.join('; ')}) but database provisioning is not configured — deploy skipped instead of shipping a live-but-dead app`
+			deployBlocked = `the app needs a database (${dbNeed.evidence.join('; ')}) but database provisioning is not configured — deploy skipped instead of shipping a live-but-dead app`
 		} else {
 			try {
 				const { databaseUrl } = await dbProvisioner.provision({ signal })
@@ -267,7 +271,42 @@ export const deliver = async (
 					payload: { message: `database provisioned for the delivered app (${dbNeed.evidence.join('; ')})` },
 				}).catch(() => {})
 			} catch (error) {
-				dbBlocked = `database provisioning failed: ${(error as Error).message} — deploy skipped (the app needs a database: ${dbNeed.evidence.join('; ')})`
+				deployBlocked = `database provisioning failed: ${(error as Error).message} — deploy skipped (the app needs a database: ${dbNeed.evidence.join('; ')})`
+			}
+		}
+	}
+	// Object storage (docs/PREVIEW-RESOURCES.md): same contract as the database above. An app that
+	// takes uploads and has nowhere to put them either 500s on every upload or — worse — writes to
+	// the container's ephemeral disk and silently loses the files on the next deployment, which
+	// looks like it works right up until it doesn't.
+	let storageRoleArn: string | undefined
+	const storageNeed = await detectStorageNeed(repoDir, manifest.required)
+	if (storageNeed.needed && !deployBlocked && !dryRun) {
+		if (!storageProvisioner) {
+			deployBlocked = `the app needs object storage (${storageNeed.evidence.join('; ')}) but storage provisioning is not configured — deploy skipped instead of shipping an app that cannot store what it is given`
+		} else {
+			try {
+				const storage = await storageProvisioner.provision({ signal })
+				storageRoleArn = storage.roleArn
+				// The app reads its credentials from the task metadata endpoint (the role below), so
+				// only the NAMES go into the env — never a key.
+				manifest.env.S3_BUCKET = storage.bucket
+				manifest.env.S3_PREFIX = storage.prefix
+				manifest.env.AWS_REGION = storage.region
+				for (const name of ['S3_BUCKET', 'AWS_S3_BUCKET', 'STORAGE_BUCKET', 'BUCKET_NAME']) {
+					if (manifest.required.includes(name)) manifest.env[name] = storage.bucket
+					manifest.placeholders = manifest.placeholders.filter(entry => entry !== name)
+					manifest.todos = manifest.todos.filter(todo => !todo.includes(name))
+				}
+				deployReason = manifest.todos.length ? manifest.todos.join('\n') : undefined
+				await emit({
+					type: 'log',
+					payload: {
+						message: `object storage provisioned for the delivered app at ${storage.prefix} (${storageNeed.evidence.join('; ')})`,
+					},
+				}).catch(() => {})
+			} catch (error) {
+				deployBlocked = `object storage provisioning failed: ${(error as Error).message} — deploy skipped (the app needs storage: ${storageNeed.evidence.join('; ')})`
 			}
 		}
 	}
@@ -275,9 +314,9 @@ export const deliver = async (
 	// (lint + vitest) does not prove `node src/index.ts` boots — an env-contract mismatch or a
 	// CJS/ESM interop crash only shows here. A boot failure skips the deploy (no crashlooping 503).
 	const bootResult =
-		boot && !dbBlocked ? await boot.boot({ repoDir, env: manifest.env, signal }) : undefined
-	if (dbBlocked) {
-		deployReason = dbBlocked
+		boot && !deployBlocked ? await boot.boot({ repoDir, env: manifest.env, signal }) : undefined
+	if (deployBlocked) {
+		deployReason = deployBlocked
 	} else if (bootResult && !bootResult.ok) {
 		deployReason = `acceptance boot: the built app did not start — ${bootResult.reason ?? 'no "Server listening"'}`
 	} else {
@@ -291,6 +330,8 @@ export const deliver = async (
 				source,
 				// The full required set for the live container, so it runs and does not crashloop
 				env: manifest.env,
+				// Set only when storage was provisioned; scoped to this app's prefix alone
+				...(storageRoleArn && { taskRoleArn: storageRoleArn }),
 				signal,
 			})
 			deployUrl = deployed.url

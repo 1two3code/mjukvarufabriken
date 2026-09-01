@@ -220,6 +220,51 @@ describe('security baseline', () => {
 				)
 			})
 
+			// The api mints one IAM role per delivered app (docs/PREVIEW-RESOURCES.md). Giving a
+			// service IAM-write is only safe while the fence holds, and the load-bearing part is the
+			// `iam:PermissionsBoundary` condition on CreateRole: without it the api could mint a role
+			// with any policy at all, which is a straight path from "api compromise" to "account
+			// compromise". Name/path scoping alone would NOT be enough.
+			it('fences the api iam:CreateRole grant to boundary-carrying preview roles only', () => {
+				const statements = Object.values(web.findResources('AWS::IAM::Policy'))
+					.flatMap(policy => policy.Properties?.PolicyDocument?.Statement ?? [])
+					.filter((statement: { Action?: unknown }) => {
+						const actions = [statement.Action ?? []].flat()
+						return actions.includes('iam:CreateRole')
+					})
+				assert.equal(statements.length, 1, 'exactly one grant may create IAM roles')
+				const create = statements[0] as {
+					Resource: unknown
+					Condition?: Record<string, Record<string, unknown>>
+				}
+				// Scoped to the preview role name AND path
+				const resource = JSON.stringify(create.Resource)
+				assert.ok(resource.includes('mf-preview-app-*'), 'CreateRole scoped to the preview name')
+				assert.ok(resource.includes('mf-preview'), 'CreateRole scoped to the preview path')
+				assert.ok(!resource.includes('"*"'), 'CreateRole must never be unscoped')
+				// …and, crucially, refused unless the minted role carries the boundary
+				const boundary = create.Condition?.StringEquals?.['iam:PermissionsBoundary']
+				assert.ok(boundary, 'CreateRole must require a permissions boundary')
+			})
+
+			// PassRole is how a PassRole grant turns into privilege escalation: without a service
+			// condition, anything that can pass a role can hand it to a service of its choosing.
+			it('restricts iam:PassRole on preview roles to ECS tasks', () => {
+				const statements = Object.values(web.findResources('AWS::IAM::Policy'))
+					.flatMap(policy => policy.Properties?.PolicyDocument?.Statement ?? [])
+					.filter((statement: { Action?: unknown }) =>
+						[statement.Action ?? []].flat().includes('iam:PassRole')
+					)
+				const previewPass = statements.filter((statement: { Resource?: unknown }) =>
+					JSON.stringify(statement.Resource ?? '').includes('mf-preview-app-*')
+				) as { Condition?: Record<string, Record<string, unknown>> }[]
+				assert.equal(previewPass.length, 1, 'one PassRole grant for preview roles')
+				assert.equal(
+					previewPass[0]?.Condition?.StringEquals?.['iam:PassedToService'],
+					'ecs-tasks.amazonaws.com'
+				)
+			})
+
 			// Mirror of the assertion above for the OTHER principal that touches the artifacts bucket.
 			// The delivery CodeBuild project is `privileged: true` and builds apps/api/Dockerfile out of
 			// an AI-authored repo, so its service role must never see another job's deliverables. An
