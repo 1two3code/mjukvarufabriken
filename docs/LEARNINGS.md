@@ -91,6 +91,63 @@ repair-session staging. **Graduated to:** sandbox/orchestrator fixes in
 
 <!-- New entries above the seed section, newest first. -->
 
+## 2026-09-01 — job d5618973 (Ögonblick, M) — dogfood run 4, FAILED at review
+Gates: verify ok, acceptance-tests ok, **review failed** (2 high open after one repair). 7.15 M
+budget-tokens (~USD 18). The first failure of the day that was about the GENERATED CODE rather
+than our own machinery.
+
+- **Phase:** gate (review)
+- **Symptom:** two high findings, one root cause — the backend registered photo routes at
+  `/photos*` while the SPA fetched `/bff/photos`. Every gallery request and every `<img>` would
+  have 404'd; the app would have shipped visibly broken.
+- **Root cause:** the `/bff` prefix convention is documented in
+  `.claude/rules/api-routes.instructions.md`, and the worker did not follow it for the new routes.
+- **Graduated to:** template/gate — #98. Static scan of `src/routes/**/*.ts` asserting every
+  `app.<method>('<path>')` sits under `/bff`, so the worker's OWN task gate fails long before
+  review or delivery. Mutation-verified against this run's exact shape.
+- **Cross-check:** **this is the second build the same mismatch has cost** — it sank the original
+  guestbook delivery too. A documented prompt convention failed to prevent it twice, which is
+  precisely the LEARNINGS rule for promoting to a gate. Note also why it kept surviving to
+  expensive stages: a route's own unit test calls the handler directly and passes, so only
+  something exercising the app like a browser (review, or `wiredSmoke` at delivery) ever notices.
+
+## 2026-09-01 — job 7cc7ba7b (Ögonblick, M) — dogfood run 3, FAILED at post-merge gate
+1.62 M budget-tokens (~USD 4) — cheap, because it died early.
+
+- **Phase:** merge
+- **Symptom:** `main is not green after merging task/foundation (rolled back)`; 24 api tests failed
+  with `ENOENT: scandir 'apps/api/src/services/__mocks__'`.
+- **Root cause:** template defect. `createAppMock` lists `src/<type>/__mocks__` to decide what to
+  mock and threw when absent. Every delivered build begins by deleting the example Item entity —
+  correctly — which removes the only service AND the only service mock. The scaffolding could not
+  survive its own documented first step.
+- **Graduated to:** template — #95 (ENOENT means "nothing to mock"; other errors still throw),
+  fixed in `templates/web` and mirrored into `apps/api`. Three tests pin the contract.
+- **Cross-check:** **wave 12's gate-on-merge is what caught this** (#75). The task passed its own
+  diff-scoped gate and broke the full suite only after merging; before gate-on-merge it would have
+  merged silently and surfaced later as something unrelated. The rollback also worked — main was
+  restored rather than left broken. First real evidence that change earns its keep.
+
+### Infrastructure defects found the same day, without burning a run
+Each of these was caught by a pre-check or a deploy rather than by a paid build:
+- **Egress allowlist missing `*.on.aws`** (#94): the Gate C acceptance check probes the delivered
+  app's live URL from inside the job container, through a deny-by-default proxy that did not permit
+  the preview domain. Every delivery would have deployed and then withheld its URL. Found by
+  pre-checking before run 3 — saved a run.
+- **Delivered apps could not reach their own database** (#96): RDS ingress allowed only the api's
+  security group. The obvious fix (open 5432 to the VPC CIDR) was WRONG and an existing test said
+  so — the build job is in that VPC, so a CIDR rule silently readmits it and undoes the M3
+  invariant. Fixed properly by passing our own `networkConfiguration` to
+  `CreateExpressGatewayService` (which takes flat `subnets`/`securityGroups`, NOT the standard
+  `awsvpcConfiguration` wrapper — the compiler caught that guess). The M3 assertion was *sharpened*
+  rather than weakened: it now names the job's security group and treats any CIDR rule as
+  job-reachable.
+- **EC2 rejected our security-group rule descriptions** (#97): `->` is outside EC2's allowed
+  character set, and `cdk synth` does not validate descriptions — so it only surfaced when
+  CloudFormation created the rule and rolled the stack back. Now asserted for every rule in all
+  three environments.
+
+
 ## 2026-09-01 — job fab01a96 (Ögonblick, M) — dogfood run 2, DELIVERED without a URL
 All five gates green (verify, acceptance-tests, review, licence, acceptance-check); repo pushed and
 bundle uploaded; **7.73 M budget-tokens (~USD 19)**, ~1 h 50 m wall clock. The generated app is a
