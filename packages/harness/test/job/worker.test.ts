@@ -22,6 +22,7 @@ import {
 	renderCommand,
 	repoConventions,
 	resolveEffort,
+	runAcceptanceTests,
 	sessionEnv,
 	shareWithWorker,
 	taskConventions,
@@ -702,6 +703,75 @@ describe('verifyRepo', () => {
 		expect(outcome.ok).toBe(false)
 		expect(outcome.output).toContain('npm run lint failed (3)')
 		await rm(dir, { recursive: true, force: true })
+	})
+})
+
+describe('runAcceptanceTests', () => {
+	/**
+	 * A fake `npx` on PATH standing in for Vitest: it writes the JSON report to the path
+	 * `--outputFile=` names and prints noise on stdout — the shape that used to break the gate,
+	 * because a large stdout is capped to a tail and can no longer be parsed from the front.
+	 */
+	const fakeVitest = async (report: unknown, stdout = 'x'.repeat(200_000)) => {
+		const dir = await mkdtemp(join(tmpdir(), 'mf-acceptance-'))
+		await mkdir(join(dir, 'bin'))
+		await mkdir(join(dir, 'node_modules'), { recursive: true })
+		await writeFile(join(dir, 'bin', 'report.json'), JSON.stringify(report))
+		await writeFile(
+			join(dir, 'bin', 'npx'),
+			`#!/bin/sh
+for arg in "$@"; do
+  case "$arg" in --outputFile=*) out="\${arg#--outputFile=}";; esac
+done
+[ -n "$out" ] && cat "${join(dir, 'bin', 'report.json')}" > "$out"
+printf '%s' '${stdout}'
+`,
+			{ mode: 0o755 }
+		)
+		return dir
+	}
+
+	it('Reads the JSON report from --outputFile, not from a capped stdout', async () => {
+		const dir = await fakeVitest({ testResults: files.map(file => passed(file)) })
+		const path = process.env.PATH
+		process.env.PATH = `${join(dir, 'bin')}:${path}`
+		try {
+			const outcome = await runAcceptanceTests(dir, files)
+
+			expect(outcome).toEqual({ ok: true, output: '2 acceptance test file(s) executed and green' })
+			// The report is written where neither `git add -A` nor `git clean -fd` can see it
+			expect(await stat(join(dir, 'node_modules', '.mf-acceptance-report.json'))).toBeTruthy()
+		} finally {
+			process.env.PATH = path
+			await rm(dir, { recursive: true, force: true })
+		}
+	})
+
+	it('Is red when neither the report file nor stdout holds a usable report', async () => {
+		const dir = await mkdtemp(join(tmpdir(), 'mf-acceptance-'))
+		await mkdir(join(dir, 'bin'))
+		await writeFile(join(dir, 'bin', 'npx'), '#!/bin/sh\necho "vitest exploded" >&2\nexit 1\n', {
+			mode: 0o755,
+		})
+		const path = process.env.PATH
+		process.env.PATH = `${join(dir, 'bin')}:${path}`
+		try {
+			const outcome = await runAcceptanceTests(dir, files)
+
+			expect(outcome.ok).toBe(false)
+			expect(outcome.output).toContain('vitest produced no JSON report (1)')
+			expect(outcome.output).toContain('vitest exploded')
+		} finally {
+			process.env.PATH = path
+			await rm(dir, { recursive: true, force: true })
+		}
+	})
+
+	it('Refuses an empty file list instead of passing vacuously', async () => {
+		expect(await runAcceptanceTests('/nowhere', [])).toEqual({
+			ok: false,
+			output: 'no acceptance test files to run',
+		})
 	})
 })
 

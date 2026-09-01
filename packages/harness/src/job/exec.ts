@@ -1,7 +1,18 @@
 import { spawn } from 'node:child_process'
 import { join } from 'node:path'
 
-export type ExecResult = { code: number; stdout: string; stderr: string }
+export type ExecResult = {
+	code: number
+	stdout: string
+	stderr: string
+	/**
+	 * Either stream hit `maxOutputChars` and lost its beginning. A consumer that reads a stream
+	 * from the START (a parser, a scanner) must treat this as a hard failure — the captured text
+	 * is a tail, not the output. `execOrThrow`/`git` already do (see below); only tail-shaped
+	 * consumers (`tail`, log lines) may ignore it.
+	 */
+	truncated: boolean
+}
 
 export type ExecOptions = {
 	cwd: string
@@ -28,6 +39,8 @@ export type ExecOptions = {
 	 * for `asWorker` with a sandbox user — the worker's children must not outlive the command)
 	 */
 	processGroup?: boolean
+	/** Cap on each captured stream, in characters (default `maxCapturedChars`) */
+	maxOutputChars?: number
 }
 
 /**
@@ -207,13 +220,69 @@ export const killProcessGroup = (pid: number | undefined) => {
 const isKillError = (error: unknown) =>
 	typeof error === 'object' && error !== null && (error as { syscall?: string }).syscall === 'kill'
 
+// MARK: Capture
+
+/**
+ * Cap on each captured stream. `spawn` has no `maxBuffer` (that is `execFile`), so before this
+ * the capture grew without limit for the whole 15-minute timeout: model-written test code that
+ * loops on `console.log` reached V8's ~512 MB single-string limit, and the `RangeError` thrown
+ * inside a `'data'` listener — long after the promise executor returned — could not be caught or
+ * rejected, so it killed the container as an `uncaughtException` (audit ORC-04).
+ *
+ * The value has a FLOOR, not just a ceiling: a capped stream is a tail, and every consumer that
+ * parses a stream from the start would otherwise read a prefix that was silently dropped. The
+ * largest such consumer is the delivery secret scan, which deliberately reads whole git blobs up
+ * to its own 100 MiB `maxScannedBytes` window and fails closed only ABOVE it — a 128 MiB cap
+ * keeps that entire window intact, so nothing the scan is willing to scan can arrive truncated.
+ * (Belt and braces: `execOrThrow`/`git` refuse a truncated result outright.) Still far below
+ * V8's string limit, and far above every other consumer — `npm ls --all --json --long` on a full
+ * template tree is a few MB.
+ */
+export const maxCapturedChars = 128 * 1024 * 1024
+
+/** Marks output that lost its beginning, so a truncated blob can never look complete */
+export const truncationNotice = '[output truncated: earlier bytes dropped]\n'
+
+/**
+ * Rolling tail of a child stream: keeps at most `max` characters, dropping the oldest. Whole
+ * leading chunks are dropped as they fall out of the window — never a re-join or a slice per
+ * chunk — so the retained text stays under `max` plus one chunk and the cost is amortised O(1).
+ * The final slice to exactly `max` happens once, in `value()`.
+ */
+const capture = (max: number) => {
+	const chunks: string[] = []
+	let length = 0
+	let dropped = false
+	return {
+		push(chunk: string) {
+			chunks.push(chunk)
+			length += chunk.length
+			while (chunks.length > 1 && length - chunks[0]!.length >= max) {
+				length -= chunks.shift()!.length
+				dropped = true
+			}
+		},
+		value() {
+			const text = chunks.join('')
+			if (text.length > max) dropped = true
+			return dropped ? truncationNotice + text.slice(-max) : text
+		},
+		/** Only meaningful after `value()`, which settles the final slice */
+		get truncated() {
+			return dropped
+		},
+	}
+}
+
 // MARK: Exec
 
 /**
  * Runs a command without a shell and captures its output; never throws on a non-zero exit. A
  * timeout or an abort kills the process (its whole group with a sandbox user) — the result then
  * has a negative code — and a refused kill (no CAP_KILL) resolves with the error in `stderr`
- * instead of rejecting, so a gate never turns into an exception.
+ * instead of rejecting, so a gate never turns into an exception. Each stream is captured up to
+ * `maxOutputChars` (see `maxCapturedChars`); beyond that the oldest output is dropped and the
+ * result carries `truncationNotice`, so no consumer can mistake a truncated blob for a whole one.
  */
 export const exec = (
 	command: string,
@@ -226,6 +295,7 @@ export const exec = (
 		asWorker = false,
 		keepCapabilities = false,
 		processGroup = asWorker && sandboxUser() !== undefined,
+		maxOutputChars = maxCapturedChars,
 	}: ExecOptions
 ): Promise<ExecResult> =>
 	new Promise((resolve, reject) => {
@@ -244,20 +314,34 @@ export const exec = (
 		const killGroup = () => grouped && killProcessGroup(child.pid)
 		const timer = setTimeout(killGroup, timeoutMs)
 		signal?.addEventListener('abort', killGroup, { once: true })
-		let stdout = ''
-		let stderr = ''
-		child.stdout.on('data', chunk => (stdout += String(chunk)))
-		child.stderr.on('data', chunk => (stderr += String(chunk)))
+		const stdout = capture(maxOutputChars)
+		const stderr = capture(maxOutputChars)
+		child.stdout.on('data', chunk => stdout.push(String(chunk)))
+		child.stderr.on('data', chunk => stderr.push(String(chunk)))
 		child.on('error', error => {
 			if (!isKillError(error)) return reject(error)
 			// kill(2) refused (EPERM): the process lives on, but the caller gets a result
-			resolve({ code: -1, stdout, stderr: `${stderr}\n${error.message}`.trim() })
+			const out = stdout.value()
+			const err = stderr.value()
+			resolve({
+				code: -1,
+				stdout: out,
+				stderr: `${err}\n${error.message}`.trim(),
+				truncated: stdout.truncated || stderr.truncated,
+			})
 		})
 		child.on('close', code => {
 			clearTimeout(timer)
 			signal?.removeEventListener('abort', killGroup)
 			killGroup()
-			resolve({ code: code ?? -1, stdout, stderr })
+			const out = stdout.value()
+			const err = stderr.value()
+			resolve({
+				code: code ?? -1,
+				stdout: out,
+				stderr: err,
+				truncated: stdout.truncated || stderr.truncated,
+			})
 		})
 	})
 
@@ -268,9 +352,27 @@ export const exec = (
  */
 export const redactUrlCredentials = (text: string) => text.replace(/\/\/[^\s/@]+@/g, '//***@')
 
-/** Like `exec` but throws with the captured output on a non-zero exit (URL credentials redacted) */
+/**
+ * Like `exec` but throws with the captured output on a non-zero exit (URL credentials redacted),
+ * and — crucially — on a TRUNCATED capture even when the command succeeded.
+ *
+ * `execOrThrow` is the plumbing form, used for `git` and nothing else: every one of its callers
+ * parses the output from the start (`ls-files`, `rev-list --objects`, `cat-file blob`,
+ * `rev-parse`), so a silently dropped prefix is a wrong answer, not a shorter one. The delivery
+ * secret scan is the case that makes this load-bearing: it reads whole history blobs through
+ * `git` and reports `ok: true` when it finds nothing, so a truncated blob would be a green scan
+ * over bytes nobody read. Failing here turns that into an aborted delivery instead. Commands
+ * whose output is only ever tailed (gates, worker sessions) use plain `exec` and are unaffected.
+ */
 export const execOrThrow = async (command: string, args: string[], options: ExecOptions) => {
 	const result = await exec(command, args, options)
+	if (result.truncated) {
+		throw new Error(
+			redactUrlCredentials(
+				`${command} ${args.join(' ')} produced more output than the ${options.maxOutputChars ?? maxCapturedChars} character capture cap in ${options.cwd} — refusing to use a truncated result`
+			)
+		)
+	}
 	if (result.code !== 0) {
 		throw new Error(
 			redactUrlCredentials(

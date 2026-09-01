@@ -361,6 +361,62 @@ describe('runJob', () => {
 		expect(types()).toEqual(['started', 'failed', 'notify'])
 	})
 
+	// ORC-10: `runJob` validated nothing about the plan it was handed (only `parsePlan` did, and
+	// the replay/cassette path, gates-demo and any resume path bypass it). A cyclic plan started
+	// zero tasks, recorded zero failures and ran the whole gate chain — including delivery — over
+	// a repo where nothing had happened.
+	it('Fails closed on an unschedulable plan instead of gating an untouched repo', async () => {
+		const cyclic: Plan = { summary: 'cycle', tasks: [task('a', ['b']), task('b', ['a'])] }
+		const fake = createFakePorts({ plan: cyclic })
+		const { hooks, types } = createHooks()
+
+		const outcome = await runJob(job(), { ports: fake.ports, hooks })
+
+		expect(outcome.status).toBe('failed')
+		expect(outcome.reason).toMatch(/plan is not schedulable \(cycle\)/)
+		expect(fake.started).toEqual([])
+		expect(fake.ports.verify).not.toHaveBeenCalled()
+		expect(fake.ports.review).not.toHaveBeenCalled()
+		expect(types()).toEqual(['started', 'failed', 'notify'])
+	})
+
+	it('Fails closed on a plan with an unknown dependency', async () => {
+		const dangling: Plan = { summary: 'dangling', tasks: [task('a', ['ghost'])] }
+		const fake = createFakePorts({ plan: dangling })
+		const { hooks } = createHooks()
+
+		const outcome = await runJob(job(), { ports: fake.ports, hooks })
+
+		expect(outcome.status).toBe('failed')
+		expect(outcome.reason).toMatch(/plan is not schedulable \(unknownDependency\): a → ghost/)
+		expect(fake.started).toEqual([])
+	})
+
+	it('Fails closed on a plan with no tasks at all', async () => {
+		const fake = createFakePorts({ plan: { summary: 'empty', tasks: [] } })
+		const { hooks } = createHooks()
+
+		const outcome = await runJob(job(), { ports: fake.ports, hooks })
+
+		expect(outcome.status).toBe('failed')
+		expect(outcome.reason).toMatch(/no tasks/)
+		expect(fake.ports.verify).not.toHaveBeenCalled()
+	})
+
+	// The scheduler's own backstop: a valid DAG that still cannot make progress (here because no
+	// worker slot exists) must be a hard failure, not a fall-through to the gates.
+	it('Fails closed when the scheduler can make no progress on a valid DAG', async () => {
+		const fake = createFakePorts()
+		const { hooks } = createHooks()
+
+		const outcome = await runJob(job({ maxWorkers: 0 }), { ports: fake.ports, hooks })
+
+		expect(outcome.status).toBe('failed')
+		expect(outcome.reason).toMatch(/no runnable task left — the plan is not schedulable/)
+		expect(fake.started).toEqual([])
+		expect(fake.ports.verify).not.toHaveBeenCalled()
+	})
+
 	it('Keeps going when the event sink throws', async () => {
 		const fake = createFakePorts()
 		const { hooks } = createHooks({ emit: vi.fn().mockRejectedValue(new Error('db down')) })

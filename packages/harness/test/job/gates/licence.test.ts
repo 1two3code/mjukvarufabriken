@@ -4,6 +4,7 @@ import { join } from 'node:path'
 
 import { GateReportSchema, LicenceGateDetailsSchema } from '@mf/models'
 
+import { exec } from '#job/exec.ts'
 import {
 	collectLicences,
 	isDeniedLicence,
@@ -79,6 +80,20 @@ const mit = (
 		...extra,
 	},
 })
+
+const git = (root: string, args: string[]) => exec('git', args, { cwd: root })
+
+/** A real (empty) git repo: the gate commits the manifest itself, so it needs one */
+const initRepo = async (root: string) => {
+	await git(root, ['init', '-q', '-b', 'main'])
+	await git(root, ['config', 'user.name', 't'])
+	await git(root, ['config', 'user.email', 't@t'])
+	await git(root, ['config', 'commit.gpgsign', 'false'])
+}
+
+/** `package-lock.json` as npm writes it, for the packages npm did not install here */
+const writeLockfile = async (root: string, packages: Record<string, unknown>) =>
+	writeFile(join(root, 'package-lock.json'), JSON.stringify({ lockfileVersion: 3, packages }))
 
 const runGate = async (root: string, tree: string, waivers: string[] = []) => {
 	const input: GateInput = {
@@ -231,6 +246,7 @@ describe('licenceGate', () => {
 
 	beforeEach(async () => {
 		root = await mkdtemp(join(tmpdir(), 'mf-licence-'))
+		await initRepo(root)
 	})
 	afterEach(async () => {
 		await rm(root, { recursive: true, force: true })
@@ -247,7 +263,7 @@ describe('licenceGate', () => {
 		expect(outcome.ok).toBe(true)
 		expect(outcome.tokens).toBe(0)
 		expect(outcome.summary).toBe(
-			'3 package(s), 3 licence(s), none denied; THIRD-PARTY-LICENCES.md written'
+			'3 package(s), 3 licence(s), none denied; THIRD-PARTY-LICENCES.md written and committed'
 		)
 		expect(details).toEqual<LicenceGateDetails>({
 			packages: 3,
@@ -332,7 +348,7 @@ describe('licenceGate', () => {
 		const waivedBoth = await runGate(root, tree, ['licence:gpl@1.2.3', 'licence:gpl@2.0.0'])
 		expect(waivedBoth.outcome.ok).toBe(true)
 		expect(waivedBoth.outcome.summary).toBe(
-			'3 package(s), 2 licence(s), none denied; 2 waived; THIRD-PARTY-LICENCES.md written'
+			'3 package(s), 2 licence(s), none denied; 2 waived; THIRD-PARTY-LICENCES.md written and committed'
 		)
 	})
 
@@ -370,16 +386,151 @@ describe('licenceGate', () => {
 		const withMissing = JSON.parse(tree) as { dependencies: Record<string, unknown> }
 		withMissing.dependencies['ghost'] = { version: '9.9.9', missing: true }
 		withMissing.dependencies['@os/darwin-bin'] = { missing: true }
+		// Both are pinned in the lockfile with an acceptable licence, so the gate stays green
+		await writeLockfile(root, {
+			'node_modules/ghost': { version: '9.9.9', license: 'MIT' },
+			'node_modules/@os/darwin-bin': { version: '4.0.0', license: 'MIT' },
+		})
 
 		const { outcome, details, file } = await runGate(root, JSON.stringify(withMissing))
 
 		expect(outcome.ok).toBe(true)
-		expect(details.packages).toBe(3)
+		// 3 installed + the 2 npm did not install, resolved from package-lock.json
+		expect(details.packages).toBe(5)
 		expect(Object.keys(details.byLicence)).toEqual(['MIT'])
 		expect(details.missing).toEqual(['@os/darwin-bin@?', 'ghost@9.9.9'])
 		expect(outcome.summary).toContain('2 not installed here (@os/darwin-bin@?, ghost@9.9.9)')
 		expect(file).toContain('## Not installed on the build platform')
 		expect(file).toContain('`ghost@9.9.9`')
+		// The version npm could not report comes from the lockfile
+		expect(file).toContain('| @os/darwin-bin | 4.0.0 | MIT | - |')
+	})
+
+	// ORC-06: a package npm did not install here is still pinned in package-lock.json and WILL
+	// install in the customer's environment. It used to be listed in prose and never evaluated —
+	// 57 unchecked packages on the live M4 run, gate green.
+	it('Fails on a package npm did not install whose lockfile licence is denied', async () => {
+		const tree = await installFixture(root, [mit('a')])
+		const withMissing = JSON.parse(tree) as { dependencies: Record<string, unknown> }
+		withMissing.dependencies['copyleft-bin'] = { version: '1.0.0', missing: true }
+		await writeLockfile(root, {
+			'node_modules/copyleft-bin': { version: '1.0.0', license: 'GPL-3.0-only' },
+		})
+
+		const { outcome, details } = await runGate(root, JSON.stringify(withMissing))
+
+		expect(outcome.ok).toBe(false)
+		expect(details.violations.map(v => [v.waiverId, v.reason])).toEqual([
+			['licence:copyleft-bin@1.0.0', 'licence GPL-3.0-only is on the denylist'],
+		])
+	})
+
+	it('Treats a lockfile-pinned package with no licence field as UNKNOWN (red, waivable)', async () => {
+		const tree = await installFixture(root, [mit('a')])
+		const withMissing = JSON.parse(tree) as { dependencies: Record<string, unknown> }
+		withMissing.dependencies['ghost'] = { version: '9.9.9', missing: true }
+		await writeLockfile(root, { 'node_modules/ghost': { version: '9.9.9', resolved: 'x' } })
+
+		const { outcome, details } = await runGate(root, JSON.stringify(withMissing))
+
+		expect(outcome.ok).toBe(false)
+		expect(details.violations.map(v => `${v.name}@${v.version}:${v.licence}`)).toEqual([
+			'ghost@9.9.9:UNKNOWN',
+		])
+
+		const waived = await runGate(root, JSON.stringify(withMissing), ['licence:ghost@9.9.9'])
+		expect(waived.outcome.ok).toBe(true)
+	})
+
+	// An unmet optional peer (`esbuild`, `jsdom`, `sass` under vitest/vite) is in nobody's
+	// lockfile, so it installs nowhere — here or at the customer. Flagging it would be ~28 false
+	// violations on the golden template; it stays a note.
+	it('Leaves a missing package the lockfile does not pin as a note, not a violation', async () => {
+		const tree = await installFixture(root, [mit('a')])
+		const withMissing = JSON.parse(tree) as { dependencies: Record<string, unknown> }
+		withMissing.dependencies['optional-peer'] = { missing: true }
+		await writeLockfile(root, { 'node_modules/a': { version: '1.0.0', license: 'MIT' } })
+
+		const { outcome, details, file } = await runGate(root, JSON.stringify(withMissing))
+
+		expect(outcome.ok).toBe(true)
+		expect(details.packages).toBe(1)
+		expect(details.missing).toEqual(['optional-peer@?'])
+		expect(file).toContain('`optional-peer@?`')
+	})
+
+	it('Skips a workspace member the lockfile links rather than pins', async () => {
+		const tree = await installFixture(root, [mit('a')])
+		const withMissing = JSON.parse(tree) as { dependencies: Record<string, unknown> }
+		withMissing.dependencies['@customer/models'] = { missing: true }
+		await writeLockfile(root, {
+			'packages/models': { version: '0.1.0', license: 'UNLICENSED' },
+			'node_modules/@customer/models': { link: true, resolved: 'packages/models' },
+		})
+
+		const { outcome, details } = await runGate(root, JSON.stringify(withMissing))
+
+		expect(outcome.ok).toBe(true)
+		expect(details.violations).toEqual([])
+	})
+
+	it('Prefers the installed copy over the lockfile when a package is missing at one path only', async () => {
+		const tree = await installFixture(root, [mit('dual', '1.0.0')])
+		const withMissing = JSON.parse(tree) as { dependencies: Record<string, unknown> }
+		withMissing.dependencies['other'] = {
+			version: '1.0.0',
+			path: join(root, 'node_modules', 'other'),
+			dependencies: { dual: { version: '1.0.0', missing: true } },
+		}
+		await writeLockfile(root, {
+			'node_modules/dual': { version: '1.0.0', license: 'GPL-3.0-only' },
+		})
+
+		const { outcome, details } = await runGate(root, JSON.stringify(withMissing))
+
+		// `dual@1.0.0` was read from disk (MIT); the missing node must not add a second, denied row
+		// (the UNKNOWN is `other`, whose package.json the fixture never wrote)
+		expect(details.byLicence).toEqual({ MIT: 1, UNKNOWN: 1 })
+		expect(details.violations.map(v => v.name)).toEqual(['other'])
+		expect(outcome.ok).toBe(false)
+	})
+
+	// ORC-01: the manifest used to be left untracked for delivery to commit, and the very next
+	// gate's `git clean -qfd` deleted it. It must be in HEAD when the licence gate returns.
+	it('Commits THIRD-PARTY-LICENCES.md itself, so the next gate cannot clean it away', async () => {
+		const tree = await installFixture(root, [mit('a')])
+
+		const { outcome } = await runGate(root, tree)
+
+		expect(outcome.ok).toBe(true)
+		// Exactly what acceptanceCheckGate's mandatory cleanup does after its session
+		await git(root, ['checkout', '-q', '--', '.'])
+		await git(root, ['clean', '-qfd'])
+		expect((await git(root, ['cat-file', '-e', `HEAD:${licenceFileName}`])).code).toBe(0)
+		expect(await readFile(join(root, licenceFileName), 'utf8')).toContain('Third-party licences')
+	})
+
+	it('Commits only the manifest, leaving whatever else is in the tree untracked', async () => {
+		const tree = await installFixture(root, [mit('a')])
+		await writeFile(join(root, 'stray.txt'), 'left behind by a session\n')
+
+		await runGate(root, tree)
+
+		const tracked = (await git(root, ['ls-tree', '-r', '--name-only', 'HEAD'])).stdout.trim()
+		expect(tracked).toBe(licenceFileName)
+		// And nothing else was even staged — a later `commitAll` must not inherit a loaded index
+		expect((await git(root, ['diff', '--cached', '--name-only'])).stdout.trim()).toBe('')
+	})
+
+	it('Commits nothing on a re-run with an identical manifest and stays green', async () => {
+		const tree = await installFixture(root, [mit('a')])
+
+		await runGate(root, tree)
+		const first = (await git(root, ['rev-parse', 'HEAD'])).stdout.trim()
+		const { outcome } = await runGate(root, tree)
+
+		expect(outcome.ok).toBe(true)
+		expect((await git(root, ['rev-parse', 'HEAD'])).stdout.trim()).toBe(first)
 	})
 
 	it('Checks a private-flagged package installed under node_modules (git/file dependency)', async () => {

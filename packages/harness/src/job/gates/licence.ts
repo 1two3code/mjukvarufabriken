@@ -1,14 +1,14 @@
 import { readFile, realpath, writeFile } from 'node:fs/promises'
 import { join, relative, sep } from 'node:path'
 
-import { exec } from '#job/exec.ts'
+import { exec, execOrThrow, tail } from '#job/exec.ts'
 
 import type { LicenceEntry, LicenceGateDetails, LicenceViolation } from '@mf/models'
 import type { GateInput, GateOutcome } from '#job/types.ts'
 
 // MARK: Policy
 
-/** File the gate writes into the repo root; committed by delivery with the other docs */
+/** File the gate writes into the repo root and commits itself (see `commitLicenceFile`) */
 export const licenceFileName = 'THIRD-PARTY-LICENCES.md'
 
 /** Placeholder licence for a package whose `package.json` declares none */
@@ -251,6 +251,67 @@ export type CollectedLicences = {
 	missing: string[]
 }
 
+/** The subset of `package-lock.json` the gate reads for packages npm did not install here */
+type Lockfile = { packages?: Record<string, PackageJson & { link?: boolean }> }
+
+/**
+ * `package-lock.json` indexed by package name: `packages` is keyed by install path
+ * (`node_modules/a/node_modules/b`), so the name is what follows the last `node_modules/`.
+ * Workspace members (`link: true`, or a key that is not under any `node_modules`) are skipped —
+ * they are the customer's own code, exactly as in `isWorkspaceOf`.
+ */
+const indexLockfile = async (repoDir: string) => {
+	const index = new Map<string, PackageJson[]>()
+	let lock: Lockfile
+	try {
+		lock = JSON.parse(await readFile(join(repoDir, 'package-lock.json'), 'utf8')) as Lockfile
+	} catch {
+		return index
+	}
+	for (const [path, pkg] of Object.entries(lock.packages ?? {})) {
+		const at = path.lastIndexOf('node_modules/')
+		if (at < 0 || pkg.link) continue
+		const name = path.slice(at + 'node_modules/'.length)
+		if (!name) continue
+		index.set(name, [...(index.get(name) ?? []), pkg])
+	}
+	return index
+}
+
+/**
+ * Licence entry for a package `npm ls` reports as not installed here, or `undefined` when the
+ * lockfile does not pin it at all.
+ *
+ * A missing node that IS pinned in `package-lock.json` (an optional binary for another OS/CPU) is
+ * part of the delivered dependency set and WILL install in the customer's environment, so it must
+ * be evaluated rather than mentioned in prose — that was the whole of audit ORC-06 (57 unchecked
+ * packages on the live M4 run, gate green). The lockfile records the licence for registry
+ * packages; one it pins without a licence becomes `UNKNOWN`, which the violation loop denies and
+ * an admin can waive per `licence:<pkg>@<version>`.
+ *
+ * A missing node the lockfile does NOT pin is an unmet *optional peer* (`esbuild`, `jsdom`,
+ * `sass`, … under vitest/vite): npm installs from the lockfile, so it will not appear in the
+ * customer's install either. It stays a note — flagging it would be 28 false violations on the
+ * golden template and nothing else.
+ */
+const entryFromLockfile = (
+	name: string,
+	version: string | undefined,
+	index: Map<string, PackageJson[]>
+): LicenceEntry | undefined => {
+	const candidates = index.get(name) ?? []
+	const pkg =
+		(version ? candidates.find(entry => entry.version === version) : undefined) ??
+		(candidates.length === 1 ? candidates[0] : undefined)
+	if (!pkg) return undefined
+	return {
+		name,
+		version: version ?? pkg.version ?? '?',
+		licence: licenceOf(pkg),
+		repository: repositoryUrlOf(pkg),
+	}
+}
+
 /** Every installed package outside the repo's workspaces, once per name@version */
 export const collectLicences = async (
 	tree: NpmLsNode,
@@ -259,6 +320,9 @@ export const collectLicences = async (
 	const seen = new Map<string, LicenceEntry>()
 	const unreadable: string[] = []
 	const missing = new Set<string>()
+	// `name@version` → what npm reported (version undefined when npm knows none); resolved from
+	// the lockfile once the whole tree is walked, so an installed copy elsewhere always wins
+	const notInstalled = new Map<string, { name: string; version?: string }>()
 	// The on-disk real path (follows a workspace symlink); undefined when the path is gone/unresolvable
 	const realpathOf = (path: string) => realpath(path).then(resolved => resolved, () => undefined)
 	const readManifest = async (path: string, key: string) => {
@@ -272,7 +336,11 @@ export const collectLicences = async (
 	const visit = async (node: NpmLsNode, name: string, parentPath: string) => {
 		const path = node.path ?? join(parentPath, 'node_modules', ...name.split('/'))
 		if (node.missing || !node.version) {
-			if (name) missing.add(`${name}@${node.version ?? '?'}`)
+			if (name) {
+				const key = `${name}@${node.version ?? '?'}`
+				missing.add(key)
+				notInstalled.set(key, { name, version: node.version })
+			}
 			for (const [childName, child] of Object.entries(node.dependencies ?? {})) {
 				await visit(child, childName, path)
 			}
@@ -304,6 +372,15 @@ export const collectLicences = async (
 	}
 	for (const [name, child] of Object.entries(tree.dependencies ?? {})) {
 		await visit(child, name, tree.path ?? repoDir)
+	}
+	if (notInstalled.size) {
+		const lockfile = await indexLockfile(repoDir)
+		for (const { name, version } of notInstalled.values()) {
+			const entry = entryFromLockfile(name, version, lockfile)
+			if (!entry) continue
+			const key = `${entry.name}@${entry.version}`
+			if (!seen.has(key)) seen.set(key, entry)
+		}
 	}
 	const entries = [...seen.values()].sort(
 		(a, b) => a.name.localeCompare(b.name) || a.version.localeCompare(b.version)
@@ -337,8 +414,10 @@ export const renderLicenceFile = (
 		? `
 ## Not installed on the build platform
 
-Pinned in \`package-lock.json\` but not installed where this list was generated (typically optional
-packages for another OS/CPU), so their licences were not read: ${missing.map(name => `\`${name}\``).join(', ')}.
+Declared but not installed where this list was generated: optional packages for another OS/CPU,
+and optional peer dependencies nothing asked for. The ones \`package-lock.json\` pins are listed
+above with the licence it records for them; the rest install nowhere, here or at your site:
+${missing.map(name => `\`${name}\``).join(', ')}.
 `
 		: ''
 	return `# Third-party licences
@@ -370,12 +449,38 @@ export type LicenceGateOptions = {
 }
 
 /**
+ * Commits the manifest in the gate that produced it. It used to be left untracked for delivery's
+ * `commitDocs` to pick up, but the very next gate (`acceptance-check`) ends in a mandatory
+ * `git clean -qfd` that deleted exactly this file, so every delivered repo, `repo.zip` and bundle
+ * shipped without the file HANDOVER.md points at, with a green `licence` gate over the top
+ * (audit ORC-01, 2026-08-31). The `git add` is scoped to the one path so the gate never sweeps in
+ * whatever a preceding session left in the working tree; an unchanged file (a re-run) commits
+ * nothing and is not an error, as long as the file is in HEAD afterwards.
+ */
+const commitLicenceFile = async (repoDir: string, signal: AbortSignal) => {
+	const options = { cwd: repoDir, signal }
+	await execOrThrow('git', ['add', '--', licenceFileName], options)
+	const commit = await exec(
+		'git',
+		['commit', '-q', '-m', `docs(licence): ${licenceFileName} (auto-commit)`, '--', licenceFileName],
+		options
+	)
+	if (commit.code === 0) return
+	const inHead = await exec('git', ['cat-file', '-e', `HEAD:${licenceFileName}`], options)
+	if (inHead.code !== 0) {
+		throw new Error(
+			`could not commit ${licenceFileName} (${commit.code}): ${tail(commit.stderr || commit.stdout, 5)}`
+		)
+	}
+}
+
+/**
  * Deterministic licence gate (M4, no model call): lists every installed package, writes
- * `THIRD-PARTY-LICENCES.md` into the repo (delivery commits it with the other docs), and fails
- * on a denylisted, missing or unrecognisable licence unless `licence:<pkg>@<version>` is in the
- * job's waivers. An `npm ls` failure throws (the gate is then red as crashed) — a broken
- * enumeration is never a green gate. The file is written before the verdict so an admin sees the
- * full list even when the gate is red.
+ * `THIRD-PARTY-LICENCES.md` into the repo and commits it, and fails on a denylisted, missing or
+ * unrecognisable licence unless `licence:<pkg>@<version>` is in the job's waivers. An `npm ls`
+ * failure throws (the gate is then red as crashed) — a broken enumeration is never a green gate.
+ * The file is written and committed before the verdict so an admin sees the full list even when
+ * the gate is red.
  */
 export const licenceGate = async (
 	{ repoDir, waivers, signal }: GateInput,
@@ -384,6 +489,7 @@ export const licenceGate = async (
 	const tree = parseNpmLs(await npmLs(repoDir, signal))
 	const { entries, unreadable, missing } = await collectLicences(tree, repoDir)
 	await writeFile(join(repoDir, licenceFileName), renderLicenceFile(entries, now(), missing))
+	await commitLicenceFile(repoDir, signal)
 
 	const violations: LicenceViolation[] = []
 	const waived: LicenceViolation[] = []
@@ -423,7 +529,7 @@ export const licenceGate = async (
 	return {
 		ok: true,
 		tokens: 0,
-		summary: `${counts}, none denied${notes.length ? `; ${notes.join('; ')}` : ''}; ${licenceFileName} written`,
+		summary: `${counts}, none denied${notes.length ? `; ${notes.join('; ')}` : ''}; ${licenceFileName} written and committed`,
 		details,
 	}
 }

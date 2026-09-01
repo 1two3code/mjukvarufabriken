@@ -398,6 +398,11 @@ describe('offline build-job e2e', () => {
 				'f1.c0': { evidence: ['apps/api/test/acceptance/f1.c0.test.ts'], status: 'met' },
 			})
 
+			// ORC-01, end to end: the manifest HANDOVER.md points at survives the gate chain (the
+			// acceptance-check gate's `git clean -qfd` used to delete it) and is in what we push
+			const tracked = await exec('git', ['ls-tree', '-r', '--name-only', 'HEAD'], { cwd: repoDir })
+			expect(tracked.stdout).toContain('THIRD-PARTY-LICENCES.md')
+
 			// The pushed repo + preview were the fakes, so zero network happened
 			expect((delivery.github as FakeGitHub).pushes).toHaveLength(1)
 		} finally {
@@ -526,6 +531,12 @@ describe('offline build-job e2e — failure paths', () => {
 				failureScenario: 'anonymous request → data change',
 			}
 			sessionHandler = defaultHandler({ reviewFindings: [high] })
+			// What a worker merged after the seed: the review gate is red on an empty range, so a
+			// build with nothing in `seedCommit..HEAD` never reaches the review session at all
+			const run = (args: string[]) => exec('git', args, { cwd: repoDir, env: gitEnv })
+			await writeFile(join(repoDir, 'feature.ts'), 'export const feature = () => 1\n')
+			await run(['add', '-A'])
+			await run(['commit', '-q', '-m', 'feat: worker task'])
 
 			const outcome = await reviewGate({
 				spec,
