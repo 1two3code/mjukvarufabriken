@@ -17,8 +17,19 @@ const getDependenciesToMock = async (type: 'plugins' | 'services') => {
 	const testDir = dirname(fileURLToPath(import.meta.url))
 	const srcDir = join(testDir, '..', 'src')
 	const mocksDir = join(srcDir, type, '__mocks__')
-	const allFiles = (await readdir(mocksDir)).reduce(isValidFilename, [])
-	return allFiles.map(file => `#/${type}/${file}`)
+	// A missing `__mocks__` directory means "nothing of this type to mock", never a failure. An app
+	// legitimately has no services yet — every delivered build starts by deleting the example Item
+	// entity, which removes the only service AND the only service mock. Before this, `readdir` threw
+	// ENOENT and took EVERY test using `createAppMock` down with it: 24 failures whose message says
+	// nothing about the actual cause. Found by dogfood run 3 (2026-09-01), where it failed the whole
+	// build at the post-merge gate.
+	try {
+		const entries = await readdir(mocksDir)
+		return entries.reduce(isValidFilename, []).map(file => `#/${type}/${file}`)
+	} catch (error) {
+		if ((error as NodeJS.ErrnoException).code === 'ENOENT') return []
+		throw error
+	}
 }
 
 /**
