@@ -210,7 +210,45 @@ describe('exec', () => {
 		expect(big.stderr.startsWith(truncationNotice)).toBe(true)
 		expect(small.stdout).toBe('hello')
 		expect(small.stdout).not.toContain(truncationNotice)
-		expect(maxCapturedChars).toBe(32 * 1024 * 1024)
+		expect(big.truncated).toBe(true)
+		expect(small.truncated).toBe(false)
+	})
+
+	// The cap is a tail, so anything that parses a stream from the START must be able to tell.
+	// The delivery secret scan is the case that makes this load-bearing: it reads whole history
+	// blobs through `git` (up to its own 100 MiB window) and reports `ok: true` on no match, so a
+	// silently truncated blob would be a green scan over bytes nobody read.
+	it('Keeps the default cap above the delivery secret scan window', async () => {
+		expect(maxCapturedChars).toBe(128 * 1024 * 1024)
+		expect(maxCapturedChars).toBeGreaterThan(100 * 1024 * 1024)
+
+		// End to end: a 40 MiB stream — past the 32 MiB cap this replaces, inside the scan's
+		// window — arrives whole, first byte included, at the default cap
+		const result = await exec(
+			'sh',
+			['-c', 'printf X; head -c 41943040 /dev/zero | tr "\\0" "a"; printf Z'],
+			{ cwd: process.cwd() }
+		)
+		expect(result.truncated).toBe(false)
+		expect(result.stdout).toHaveLength(40 * 1024 * 1024 + 2)
+		expect(result.stdout.startsWith('X')).toBe(true)
+		expect(result.stdout.endsWith('Z')).toBe(true)
+	}, 60_000)
+
+	it('execOrThrow refuses a truncated capture even on a zero exit', async () => {
+		await expect(
+			execOrThrow('sh', ['-c', 'head -c 4000 /dev/zero | tr "\\0" "a"'], {
+				cwd: process.cwd(),
+				maxOutputChars: 100,
+			})
+		).rejects.toThrow(/truncated result/)
+
+		const whole = await execOrThrow('sh', ['-c', 'printf hello'], {
+			cwd: process.cwd(),
+			maxOutputChars: 100,
+		})
+		expect(whole.stdout).toBe('hello')
+		expect(whole.truncated).toBe(false)
 	})
 })
 
@@ -338,7 +376,7 @@ describe('process groups (worker commands)', () => {
 		await expect(pending).rejects.toThrow()
 
 		const quick = await exec('sh', ['-c', 'echo done'], { cwd: process.cwd(), processGroup: true })
-		expect(quick).toEqual({ code: 0, stdout: 'done\n', stderr: '' })
+		expect(quick).toEqual({ code: 0, stdout: 'done\n', stderr: '', truncated: false })
 	})
 
 	it('killProcessGroup tolerates a missing pid or a group that is already gone', () => {
