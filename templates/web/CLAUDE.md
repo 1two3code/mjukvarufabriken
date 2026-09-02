@@ -80,7 +80,7 @@ feat(scope): add something   |   fix: correct something   |   chore|docs|refacto
 
 Layered, and everything hangs off the Fastify instance via `app.decorate`:
 
-- **plugins** (`src/plugins/`) — infrastructure singletons registered via `fastify-plugin` (`fp()`). `store` wraps the data layer (an in-memory `Map` in the template — swap it for a real database client while keeping its interface), `secrets` reads configuration from the environment; the rest are cross-cutting (`auth`, `accessControl`, `errorHandling`). Companion `.types.ts` files define module augmentation when it grows.
+- **plugins** (`src/plugins/`) — infrastructure singletons registered via `fastify-plugin` (`fp()`). `store` is the data layer — durable on Postgres whenever `DATABASE_URL` is set (every deployed environment), in memory without it (local dev, tests); persist through it rather than adding another database client, `secrets` reads configuration from the environment; the rest are cross-cutting (`auth`, `accessControl`, `errorHandling`). Companion `.types.ts` files define module augmentation when it grows.
 - **services** (`src/services/`) — business logic, consuming plugins; a facade over the data layer. Companion `.types.ts` and `.utils.ts` files.
 - **adapters** (`src/adapters/`, add when needed) — pure transforms from third-party payload shapes into application models.
 - **routes** (`src/routes/`) — the BFF surface under `/bff/*`. Named by *action*, not URL path (`getItems.ts`, `updateItem.ts`), nested in folders mirroring the URL. Auto-loaded by `@fastify/autoload`, which ignores `*types.ts`/`*utils.ts`. Each file exports a **default** `FastifyPluginAsyncZod`.
