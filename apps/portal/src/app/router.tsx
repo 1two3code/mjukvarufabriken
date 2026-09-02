@@ -10,6 +10,7 @@ import { AdminPricingPage } from '#/pages/AdminPricingPage.tsx'
 import { AdminResidentPage } from '#/pages/AdminResidentPage.tsx'
 import { AdminShowcasePage } from '#/pages/AdminShowcasePage.tsx'
 import { AuthCallbackPage } from '#/pages/AuthCallbackPage.tsx'
+import { ClaimPage } from '#/pages/ClaimPage.tsx'
 import { GithubCallbackPage } from '#/pages/GithubCallbackPage.tsx'
 import { HomePage } from '#/pages/HomePage.tsx'
 import { JobPage } from '#/pages/JobPage.tsx'
@@ -35,6 +36,7 @@ export const router = createBrowserRouter([
 		children: [
 			{ path: '/', element: <HomePage /> },
 			{ path: '/orders', element: <OrdersPage /> },
+			{ path: '/claim', element: <ClaimPage /> },
 			{ path: '/orders/:orderId', element: <OrderPage /> },
 			{ path: '/admin', element: <AdminOverviewPage /> },
 			{ path: '/admin/jobs', element: <AdminJobsPage /> },
