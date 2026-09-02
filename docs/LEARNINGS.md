@@ -91,6 +91,28 @@ repair-session staging. **Graduated to:** sandbox/orchestrator fixes in
 
 <!-- New entries above the seed section, newest first. -->
 
+## 2026-09-02 — job 0f497ced (Ögonblick, redeliver of run 7, 5th) — a live app nobody can reach
+32 646 tokens (~USD 0.10). **The IAM chain is complete**: the Express service was created, its
+task started, the target registered healthy, the service reached steady state. The delivered
+app was running — against its provisioned database and storage role — for the first time.
+Then: `ECS Express service … exposed no endpoint in time` after 15 minutes.
+
+- **Root cause:** `EXPRESS_SUBNET_IDS` handed Express the VPC's PRIVATE subnets (chosen for
+  database reachability). Express infers the load balancer scheme from the subnet type: private
+  subnets → an *internal* load balancer and an ingress path with `accessType: PRIVATE`. The
+  deploy client only accepts a `PUBLIC` path, so it polled a healthy service until its deadline.
+- **Graduated to:** public subnets (internet-facing load balancer + public IPs for the tasks;
+  the database stays reachable through the security-group rule, not the subnet). Fence test:
+  `EXPRESS_SUBNET_IDS` must reference public subnets and never private/isolated ones. The
+  wrongly-placed internal service was deleted by hand before the next redelivery.
+- **OPEN — redelivery to an existing service:** `createOrDescribe` treats "already exists" as
+  "live, describe it". Correct for an SDK retry, wrong for a redelivery of an app whose service
+  already runs: the new image is never rolled out, and a service created with a wrong
+  configuration (this one) can only be fixed by deleting it out of band. Redelivery should
+  `UpdateExpressGatewayService` (new image, current env, current network) when the service exists.
+- **Recurred, still OPEN (8th time):** `delivered` with `deployUrl: null`.
+
+
 ## 2026-09-02 — job e9010835 (Ögonblick, redeliver of run 7, 4th) — RegisterTaskDefinition
 53 954 tokens (~USD 0.15). PassRole is through (#110). The next call in
 `CreateExpressGatewayService` was refused: `not authorized to perform: ecs:RegisterTaskDefinition

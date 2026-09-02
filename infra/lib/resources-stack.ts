@@ -682,10 +682,16 @@ export class ResourcesStack extends Stack {
 				CODEBUILD_PROJECT: this.deliveryBuildProject.projectName,
 				EXPRESS_EXECUTION_ROLE_ARN: this.expressExecutionRole.roleArn,
 				// Our own network configuration for the delivered service, so it lands in a security
-				// group we can write RDS rules against (see PreviewAppSecurityGroup).
+				// group we can write RDS rules against (see PreviewAppSecurityGroup). PUBLIC subnets on
+				// purpose: Express infers the load balancer scheme from the subnet type — private
+				// subnets gave an INTERNAL load balancer and a PRIVATE-only ingress path (redelivery
+				// 0f497ced, 2026-09-02: a healthy service the customer could never reach, and a deploy
+				// client waiting 15 minutes for a public endpoint that would never come). Public
+				// subnets get an internet-facing load balancer and public IPs for the tasks; the
+				// database stays reachable through the security-group rule, not the subnet.
 				EXPRESS_SECURITY_GROUP_ID: this.previewAppSecurityGroup.securityGroupId,
 				EXPRESS_SUBNET_IDS: this.vpc
-					.selectSubnets({ subnetType: SubnetType.PRIVATE_WITH_EGRESS })
+					.selectSubnets({ subnetType: SubnetType.PUBLIC })
 					.subnetIds.join(','),
 				EXPRESS_INFRASTRUCTURE_ROLE_ARN: this.expressInfrastructureRole.roleArn,
 				ECS_CLUSTER: this.jobsCluster.clusterName,
