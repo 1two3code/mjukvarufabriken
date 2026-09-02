@@ -9,6 +9,7 @@ const links = [
 	{ to: '/admin/customers', key: 'customers', end: false },
 	{ to: '/admin/resident', key: 'resident', end: false },
 	{ to: '/admin/pricing', key: 'pricing', end: false },
+	{ to: '/admin/showcase', key: 'showcase', end: false },
 	{ to: '/admin/margin', key: 'margin', end: false },
 ] as const
 

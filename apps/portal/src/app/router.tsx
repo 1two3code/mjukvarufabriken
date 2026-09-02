@@ -8,6 +8,7 @@ import { AdminMarginPage } from '#/pages/AdminMarginPage.tsx'
 import { AdminOverviewPage } from '#/pages/AdminOverviewPage.tsx'
 import { AdminPricingPage } from '#/pages/AdminPricingPage.tsx'
 import { AdminResidentPage } from '#/pages/AdminResidentPage.tsx'
+import { AdminShowcasePage } from '#/pages/AdminShowcasePage.tsx'
 import { AuthCallbackPage } from '#/pages/AuthCallbackPage.tsx'
 import { GithubCallbackPage } from '#/pages/GithubCallbackPage.tsx'
 import { HomePage } from '#/pages/HomePage.tsx'
@@ -40,6 +41,7 @@ export const router = createBrowserRouter([
 			{ path: '/admin/customers', element: <AdminCustomersPage /> },
 			{ path: '/admin/resident', element: <AdminResidentPage /> },
 			{ path: '/admin/pricing', element: <AdminPricingPage /> },
+			{ path: '/admin/showcase', element: <AdminShowcasePage /> },
 			{ path: '/admin/margin', element: <AdminMarginPage /> },
 			{ path: '/orders/:orderId/spec', element: <SpecPage /> },
 			{ path: '/orders/:orderId/job', element: <JobPage /> },

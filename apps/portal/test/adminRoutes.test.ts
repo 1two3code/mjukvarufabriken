@@ -25,13 +25,14 @@ describe('Portal admin routes', () => {
 		}
 	})
 
-	it('Serves the full admin section, margin included (M12)', () => {
+	it('Serves the full admin section, margin (M12) and showcase (wave 14) included', () => {
 		const expected = [
 			'/admin',
 			'/admin/jobs',
 			'/admin/customers',
 			'/admin/resident',
 			'/admin/pricing',
+			'/admin/showcase',
 			'/admin/margin',
 		]
 		const paths = routerPaths()
