@@ -25,12 +25,13 @@ import authService from '#/services/authService.ts'
 import contactService from '#/services/contactService.ts'
 import iterationBriefService from '#/services/iterationBriefService.ts'
 import jobService from '#/services/jobService.ts'
-import previewDbService from '#/services/previewDbService.ts'
-import previewStorageService from '#/services/previewStorageService.ts'
 import marginService from '#/services/marginService.ts'
 import orderService from '#/services/orderService.ts'
 import paymentService from '#/services/paymentService.ts'
+import previewDbService from '#/services/previewDbService.ts'
+import previewStorageService from '#/services/previewStorageService.ts'
 import residentService from '#/services/residentService.ts'
+import showcaseService from '#/services/showcaseService.ts'
 import specService from '#/services/specService.ts'
 import userService from '#/services/userService.ts'
 
@@ -91,6 +92,7 @@ export async function createServer({ logLevel }: Options = {}): Promise<FastifyI
 		.register(accountService)
 		.register(paymentService)
 		.register(marginService)
+		.register(showcaseService)
 
 		// Background schedulers depending on services
 		.register(lifecycleSweeperPlugin)
