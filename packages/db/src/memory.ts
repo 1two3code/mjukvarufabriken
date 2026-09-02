@@ -20,6 +20,7 @@ import type {
 	JobEvent,
 	ModelPriceRow,
 	Order,
+	OrderExport,
 	OrderKind,
 	OrderStatus,
 	Org,
@@ -95,6 +96,8 @@ export const createMemoryRepositories = (): MemoryRepositories => {
 	const showcases = new Map<string, Showcase>()
 	/** Every recorded deployed service, keyed by its own id (live rows have `deletedAt` undefined) */
 	const deployedServices = new Map<string, DeployedService>()
+	/** One final export per order (wave 14), keyed by order id */
+	const orderExports = new Map<string, OrderExport>()
 	const payments = new Map<string, Payment>()
 	const paymentEvents = new Set<string>()
 	const users = new Map<string, User>()
@@ -650,6 +653,16 @@ export const createMemoryRepositories = (): MemoryRepositories => {
 				}
 				return { order: clone(entry.order), approved }
 			},
+			initHostingUntil: async (orderId, hostingUntil) => {
+				const entry = orders.get(orderId)
+				if (!entry || entry.order.hostingUntil !== undefined) return undefined
+				entry.order = {
+					...entry.order,
+					hostingUntil: hostingUntil.toISOString(),
+					updatedAt: now(),
+				}
+				return clone(entry.order)
+			},
 
 			insertPayment: async payment => {
 				if ([...payments.values()].some(p => p.sessionId === payment.sessionId)) {
@@ -761,6 +774,48 @@ export const createMemoryRepositories = (): MemoryRepositories => {
 						return [toShowcaseItem({ ...showcase, url: showcase.url })]
 					})
 					.slice(0, 200),
+		},
+
+		orderExports: {
+			get: async orderId => clone(orderExports.get(orderId)),
+			claim: async (claim, staleBefore) => {
+				const existing = orderExports.get(claim.orderId)
+				const reclaimable =
+					existing !== undefined &&
+					(existing.status === 'failed' ||
+						(existing.status === 'pending' && new Date(existing.createdAt) < staleBefore))
+				if (existing && !reclaimable) return { export: clone(existing), claimed: false }
+				const created: OrderExport = {
+					orderId: claim.orderId,
+					jobId: claim.jobId,
+					key: claim.key,
+					status: 'pending',
+					files: [],
+					createdAt: now(),
+				}
+				orderExports.set(claim.orderId, created)
+				return { export: clone(created), claimed: true }
+			},
+			finish: async (orderId, finish) => {
+				const existing = orderExports.get(orderId)
+				if (!existing || existing.status !== 'pending') return undefined
+				const next: OrderExport = {
+					...existing,
+					status: finish.status,
+					files: clone(finish.files),
+					error: finish.error,
+					finishedAt: now(),
+				}
+				orderExports.set(orderId, next)
+				return clone(next)
+			},
+			appendFiles: async (orderId, files) => {
+				const existing = orderExports.get(orderId)
+				if (!existing) return undefined
+				const next: OrderExport = { ...existing, files: [...existing.files, ...clone(files)] }
+				orderExports.set(orderId, next)
+				return clone(next)
+			},
 		},
 
 		deployedServices: {

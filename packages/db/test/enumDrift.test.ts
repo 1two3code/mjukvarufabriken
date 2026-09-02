@@ -1,7 +1,7 @@
-import { readFileSync, readdirSync } from 'node:fs'
+import { readdirSync, readFileSync } from 'node:fs'
 import { join } from 'node:path'
 
-import { jobStatus, lifecycleStates, orderKind, orderStatus } from '@mf/models'
+import { jobStatus, lifecycleStates, orderExportStatus, orderKind, orderStatus } from '@mf/models'
 
 import { migrationsDir } from '#/index.ts'
 
@@ -73,6 +73,12 @@ describe('schema enums match @mf/models', () => {
 		{ table: 'jobs', column: 'status', tuple: 'jobStatus', values: jobStatus },
 		{ table: 'orders', column: 'lifecycle', tuple: 'lifecycleStates', values: lifecycleStates },
 		{ table: 'orders', column: 'kind', tuple: 'orderKind', values: orderKind },
+		{
+			table: 'order_exports',
+			column: 'status',
+			tuple: 'orderExportStatus',
+			values: orderExportStatus,
+		},
 	])('column $column on $table is exactly $tuple', ({ table, column, values }) => {
 		const sqlValues = effectiveValues(checks, table, column)
 

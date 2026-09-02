@@ -335,6 +335,19 @@ export const listActiveWithHostingUntilBefore = async (db: Db, until: Date): Pro
 	return rows.map(toOrder)
 }
 
+/** Compare-and-set from "no window yet": `undefined` when missing OR a window is already set */
+export const initHostingUntil = async (
+	db: Db,
+	orderId: string,
+	hostingUntil: Date
+): Promise<Order | undefined> => {
+	const [row] = await db.sql<OrderRow[]>`
+		update orders set hosting_until = ${hostingUntil}, updated_at = now()
+		where id = ${orderId} and hosting_until is null
+		returning *`
+	return row && toOrder(row)
+}
+
 /** Demo orders whose build was approved at or after `since` (the weekly voucher cap) */
 export const countDemoApprovalsSince = async (db: Db, since: Date): Promise<number> => {
 	const [row] = await db.sql<{ count: number | string }[]>`
@@ -504,6 +517,7 @@ export const createOrdersRepository = (db: Db): OrdersRepository => ({
 	listDemosAwaitingApproval: () => listDemosAwaitingApproval(db),
 	stampDemoApproval: (orderId, approvedAt, window) =>
 		stampDemoApproval(db, orderId, approvedAt, window),
+	initHostingUntil: (orderId, hostingUntil) => initHostingUntil(db, orderId, hostingUntil),
 	insertPayment: payment => insertPayment(db, payment),
 	getPayment: id => getPayment(db, id),
 	findPaymentBySession: sessionId => findPaymentBySession(db, sessionId),

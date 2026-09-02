@@ -96,6 +96,7 @@ const unavailableRepositories = (error: () => Error): Repositories => {
 			'forgetPaymentEvent',
 		]),
 		showcases: repository(['upsert', 'getByOrder', 'list', 'listPublished']),
+		orderExports: repository(['get', 'claim', 'finish', 'appendFiles']),
 		deployedServices: repository([
 			'record',
 			'listForOrder',

@@ -10,14 +10,15 @@ import { readFileSync } from 'node:fs'
 import postgres from 'postgres'
 
 import { createAuthRepository } from './auth.ts'
-import { createIterationBriefRepository } from './iterationBrief.ts'
 import { createDeployedServicesRepository } from './deployedServices.ts'
+import { createIterationBriefRepository } from './iterationBrief.ts'
 import { createJobsRepository } from './jobs.ts'
 import { createModelPricesRepository } from './modelPrices.ts'
+import { createOrderExportsRepository } from './orderExports.ts'
 import { createOrdersRepository } from './orders.ts'
 import { createPricingTiersRepository } from './pricingTiers.ts'
-import { createResidentRepository } from './resident.ts'
 import { createRateLimitsRepository } from './rateLimits.ts'
+import { createResidentRepository } from './resident.ts'
 import { createShowcasesRepository } from './showcases.ts'
 import { createUsersRepository } from './users.ts'
 
@@ -31,6 +32,7 @@ export * from './jobs.ts'
 export * from './memory.ts'
 export * from './migrate.ts'
 export * from './modelPrices.ts'
+export * from './orderExports.ts'
 export * from './orders.ts'
 export * from './pricingTiers.ts'
 export * from './rateLimits.ts'
@@ -144,6 +146,7 @@ export const createPostgresRepositories = (db: Db): Repositories => ({
 	iterationBrief: createIterationBriefRepository(db),
 	orders: createOrdersRepository(db),
 	showcases: createShowcasesRepository(db),
+	orderExports: createOrderExportsRepository(db),
 	deployedServices: createDeployedServicesRepository(db),
 	users: createUsersRepository(db),
 	auth: createAuthRepository(db),

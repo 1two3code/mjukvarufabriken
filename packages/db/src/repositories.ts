@@ -17,6 +17,9 @@ import type {
 	NewModelPrice,
 	NewPricingTier,
 	Order,
+	OrderExport,
+	OrderExportFile,
+	OrderExportStatus,
 	OrderKind,
 	OrderStatus,
 	Org,
@@ -172,6 +175,12 @@ export type OrdersRepository = {
 		approvedAt: Date,
 		window: { since: Date; cap?: number }
 	) => Promise<{ order: Order | undefined; approved: number }>
+	/**
+	 * Stamps the end of the included hosting window ONLY while none is set — compare-and-set from
+	 * null, so the first delivery with a live URL fixes the window and a redelivery cannot move
+	 * it; `undefined` when the order is missing or already carries a window.
+	 */
+	initHostingUntil: (orderId: string, hostingUntil: Date) => Promise<Order | undefined>
 
 	// MARK: Payments (M6)
 	insertPayment: (payment: NewPayment) => Promise<Payment>
@@ -443,6 +452,38 @@ export type DeployedServicesRepository = {
 	markTornDown: (orderId: string) => Promise<number>
 }
 
+// MARK: Order exports (wave 14, hosting window)
+
+/** What `finalExport` claims: which order, the delivered job it exports and the prefix it writes under */
+export type ExportClaim = { orderId: string; jobId?: string; key: string }
+
+export type ExportFinish = {
+	status: Exclude<OrderExportStatus, 'pending'>
+	files: OrderExportFile[]
+	error?: string
+}
+
+/**
+ * The final export taken before an order's hosting window ends (migration 0024). One row per
+ * order; the row is the idempotency lock of `exportService.finalExport`.
+ */
+export type OrderExportsRepository = {
+	get: (orderId: string) => Promise<OrderExport | undefined>
+	/**
+	 * Insert-or-reclaim compare-and-set: inserts a `pending` row, or re-claims a `failed` one or a
+	 * `pending` one created before `staleBefore` (a crashed run). `claimed: false` with the
+	 * existing row when it is `done` (final) or freshly `pending` (another run in flight).
+	 */
+	claim: (
+		claim: ExportClaim,
+		staleBefore: Date
+	) => Promise<{ export: OrderExport; claimed: boolean }>
+	/** Finishes the pending claim (`done` / `failed`); `undefined` when the row is not pending */
+	finish: (orderId: string, finish: ExportFinish) => Promise<OrderExport | undefined>
+	/** Appends files to the export (the deletion certificate at teardown); `undefined` when missing */
+	appendFiles: (orderId: string, files: OrderExportFile[]) => Promise<OrderExport | undefined>
+}
+
 // MARK: Model prices (per-job cost)
 
 /**
@@ -508,6 +549,7 @@ export type Repositories = {
 	pricingTiers: PricingTiersRepository
 	orders: OrdersRepository
 	showcases: ShowcasesRepository
+	orderExports: OrderExportsRepository
 	deployedServices: DeployedServicesRepository
 	users: UsersRepository
 	auth: AuthRepository
