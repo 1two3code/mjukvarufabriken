@@ -85,6 +85,17 @@ export const isOrderClosed = (status: OrderStatus) => status === 'paid' || statu
 export const orderKind = ['build', 'demo'] as const
 export type OrderKind = (typeof orderKind)[number]
 
+/**
+ * Owner prefix of an anonymous quote (wave 14, F1): a spec chat started on the public site with
+ * no account is a real order whose `orgId` is `anon:<32 random hex>` until a signed-in portal
+ * session claims it. No session — admins included — reaches an anonymous order through the
+ * order/spec services, so it can never be frozen, paid or built; the site talks to it with the
+ * quote token only. Mirrors the `org_id like 'anon:%'` partial index of migration 0025.
+ */
+export const anonymousOrgPrefix = 'anon:'
+export const isAnonymousOrgId = (orgId: string | undefined) =>
+	orgId !== undefined && orgId.startsWith(anonymousOrgPrefix)
+
 // MARK: Order
 export const OrderSchema = z.object({
 	id: z.string(),

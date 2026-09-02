@@ -5,7 +5,13 @@
  * are terminal, one active job per order (rejects with `code: '23505'`), single-use magic
  * links and refresh tokens. Everything is lost when the process exits.
  */
-import { isActiveJobStatus, isOrderSpecFrozen, pricesEffectiveAt, toSpecStatus } from '@mf/models'
+import {
+	isActiveJobStatus,
+	isAnonymousOrgId,
+	isOrderSpecFrozen,
+	pricesEffectiveAt,
+	toSpecStatus,
+} from '@mf/models'
 
 import { nullTaskArnSweepSlackMinutes } from './jobs.ts'
 import { defaultModelPriceRows } from './modelPrices.ts'
@@ -47,6 +53,8 @@ import type {
 type OrderEntry = {
 	order: Order
 	draft: Omit<SpecDraft, 'status'>
+	/** sha256 of the anonymous quote token; cleared on claim, never on the model (0025) */
+	quoteTokenHash?: string
 }
 
 const toDraft = (entry: OrderEntry): SpecDraft => ({
@@ -125,7 +133,13 @@ export const createMemoryRepositories = (): MemoryRepositories => {
 	const isSpecPhase = (status: OrderStatus) =>
 		status === 'drafting' || status === 'ready' || status === 'frozen'
 	const createOrder = (
-		order: { id: string; orgId: string; name: string; createdBy?: string; kind?: OrderKind },
+		order: {
+			id: string
+			orgId: string
+			name: string
+			createdBy?: string
+			kind?: OrderKind
+		},
 		status: OrderStatus
 	): Order => ({
 		id: order.id,
@@ -541,6 +555,7 @@ export const createMemoryRepositories = (): MemoryRepositories => {
 						messages: [],
 						openQuestions: [],
 					},
+					quoteTokenHash: order.quoteTokenHash,
 				})
 				return clone(created)
 			},
@@ -662,6 +677,43 @@ export const createMemoryRepositories = (): MemoryRepositories => {
 					updatedAt: now(),
 				}
 				return clone(entry.order)
+			},
+
+			getOrderByQuoteToken: async (orderId, tokenHash) => {
+				const entry = orders.get(orderId)
+				if (!entry || entry.quoteTokenHash === undefined || entry.quoteTokenHash !== tokenHash) {
+					return undefined
+				}
+				return clone(entry.order)
+			},
+			claimQuote: async (orderId, tokenHash, owner) => {
+				const entry = orders.get(orderId)
+				if (!entry || entry.quoteTokenHash === undefined || entry.quoteTokenHash !== tokenHash) {
+					return undefined
+				}
+				// Synchronous from check to write, like the single SQL statement: single use
+				entry.quoteTokenHash = undefined
+				entry.order = {
+					...entry.order,
+					orgId: owner.orgId,
+					createdBy: owner.userId,
+					updatedAt: now(),
+				}
+				entry.draft = { ...entry.draft, orgId: owner.orgId }
+				return clone(entry.order)
+			},
+			deleteAnonymousBefore: async createdBefore => {
+				let deleted = 0
+				for (const [id, entry] of orders) {
+					if (
+						isAnonymousOrgId(entry.order.orgId) &&
+						new Date(entry.order.createdAt) < createdBefore
+					) {
+						orders.delete(id)
+						deleted++
+					}
+				}
+				return deleted
 			},
 
 			insertPayment: async payment => {

@@ -1,4 +1,4 @@
-import { toSpecStatus } from '@mf/models'
+import { anonymousOrgPrefix, toSpecStatus } from '@mf/models'
 
 import { isUuid } from './jobs.ts'
 
@@ -13,7 +13,13 @@ import type {
 	SpecDraft,
 } from '@mf/models'
 import type { Db } from './index.ts'
-import type { NewOrder, NewPayment, OrdersRepository, PaymentPaid } from './repositories.ts'
+import type {
+	NewOrder,
+	NewPayment,
+	OrderOwner,
+	OrdersRepository,
+	PaymentPaid,
+} from './repositories.ts'
 
 // MARK: Row mapping
 
@@ -36,6 +42,8 @@ type OrderRow = {
 	customer_slug: string | null
 	hosting_until: Date | null
 	build_approved_at: Date | null
+	/** sha256 of the anonymous quote token; never mapped onto the model (0025) */
+	quote_token_hash: string | null
 	created_at: Date
 	updated_at: Date
 }
@@ -185,10 +193,10 @@ export const updateOrderUnlessFrozen = async (
 
 export const insertOrder = async (db: Db, order: NewOrder): Promise<Order> => {
 	const [row] = await db.sql<OrderRow[]>`
-		insert into orders (id, org_id, created_by, name, kind)
+		insert into orders (id, org_id, created_by, name, kind, quote_token_hash)
 		values (
 			${order.id}, ${order.orgId}, ${order.createdBy ?? null}, ${order.name},
-			${order.kind ?? 'build'}
+			${order.kind ?? 'build'}, ${order.quoteTokenHash ?? null}
 		)
 		returning *`
 	return toOrder(row!)
@@ -409,6 +417,48 @@ export const stampDemoApproval = async (
 	})
 }
 
+// MARK: Anonymous quotes (wave 14, F1 — migration 0025)
+
+/** The order when it still carries exactly this quote token hash (`undefined` otherwise) */
+export const getOrderByQuoteToken = async (
+	db: Db,
+	orderId: string,
+	tokenHash: string
+): Promise<Order | undefined> => {
+	const [row] = await db.sql<OrderRow[]>`
+		select * from orders where id = ${orderId} and quote_token_hash = ${tokenHash}`
+	return row && toOrder(row)
+}
+
+/**
+ * Compare-and-set on the hash: the owner takes the row and the hash is cleared in one statement,
+ * so two concurrent claims (or a replayed link) cannot both succeed.
+ */
+export const claimQuote = async (
+	db: Db,
+	orderId: string,
+	tokenHash: string,
+	owner: OrderOwner
+): Promise<Order | undefined> => {
+	const [row] = await db.sql<OrderRow[]>`
+		update orders set
+			org_id = ${owner.orgId},
+			created_by = ${owner.userId},
+			quote_token_hash = null,
+			updated_at = now()
+		where id = ${orderId} and quote_token_hash = ${tokenHash}
+		returning *`
+	return row && toOrder(row)
+}
+
+/** Drops still-anonymous orders older than the instant (served by `orders_anonymous_created_idx`) */
+export const deleteAnonymousBefore = async (db: Db, createdBefore: Date): Promise<number> => {
+	const deleted = await db.sql`
+		delete from orders
+		where org_id like ${`${anonymousOrgPrefix}%`} and created_at < ${createdBefore}`
+	return deleted.count
+}
+
 // MARK: Payments (M6)
 
 export const insertPayment = async (db: Db, payment: NewPayment): Promise<Payment> => {
@@ -518,6 +568,9 @@ export const createOrdersRepository = (db: Db): OrdersRepository => ({
 	stampDemoApproval: (orderId, approvedAt, window) =>
 		stampDemoApproval(db, orderId, approvedAt, window),
 	initHostingUntil: (orderId, hostingUntil) => initHostingUntil(db, orderId, hostingUntil),
+	getOrderByQuoteToken: (orderId, tokenHash) => getOrderByQuoteToken(db, orderId, tokenHash),
+	claimQuote: (orderId, tokenHash, owner) => claimQuote(db, orderId, tokenHash, owner),
+	deleteAnonymousBefore: createdBefore => deleteAnonymousBefore(db, createdBefore),
 	insertPayment: payment => insertPayment(db, payment),
 	getPayment: id => getPayment(db, id),
 	findPaymentBySession: sessionId => findPaymentBySession(db, sessionId),

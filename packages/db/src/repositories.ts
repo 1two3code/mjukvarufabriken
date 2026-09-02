@@ -71,14 +71,21 @@ export type JobsRepository = {
 	listEvents: (jobId: string, afterId?: number) => Promise<JobEvent[]>
 }
 
-/** `kind` defaults to `build` (the pricing-ladder rung, wave 14) */
+/**
+ * `kind` defaults to `build` (the pricing-ladder rung, wave 14). `quoteTokenHash` is set only for
+ * an anonymous quote (`orgId` = `anon:…`, no `createdBy`): the sha256 of the token the site holds.
+ */
 export type NewOrder = {
 	id: string
 	orgId: string
 	name: string
 	createdBy?: string
 	kind?: OrderKind
+	quoteTokenHash?: string
 }
+
+/** The session that claims an anonymous quote becomes the order's owner */
+export type OrderOwner = { orgId: string; userId: string }
 
 export type NewPayment = Pick<
 	Payment,
@@ -181,6 +188,26 @@ export type OrdersRepository = {
 	 * it; `undefined` when the order is missing or already carries a window.
 	 */
 	initHostingUntil: (orderId: string, hostingUntil: Date) => Promise<Order | undefined>
+
+	// MARK: Anonymous quotes (wave 14, F1 — migration 0025)
+	/**
+	 * The order only when it still carries exactly this quote token hash — the site's way in to an
+	 * anonymous quote. `undefined` for an unknown id, a wrong hash, or an already claimed order
+	 * (claiming clears the hash), all indistinguishable on purpose.
+	 */
+	getOrderByQuoteToken: (orderId: string, tokenHash: string) => Promise<Order | undefined>
+	/**
+	 * Claims an anonymous quote for `owner` — atomic compare-and-set on the hash: the row's
+	 * `orgId`/`createdBy` become the owner's and the hash is cleared, so the token is single use.
+	 * `undefined` when the id is unknown, the hash does not match, or the order was claimed already.
+	 */
+	claimQuote: (orderId: string, tokenHash: string, owner: OrderOwner) => Promise<Order | undefined>
+	/**
+	 * Housekeeping (GDPR retention): deletes every still-anonymous order created before the
+	 * instant. Anonymous orders never have jobs or payments, so nothing cascades. Resolves to the
+	 * number of rows deleted.
+	 */
+	deleteAnonymousBefore: (createdBefore: Date) => Promise<number>
 
 	// MARK: Payments (M6)
 	insertPayment: (payment: NewPayment) => Promise<Payment>
