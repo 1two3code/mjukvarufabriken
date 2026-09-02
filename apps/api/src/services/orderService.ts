@@ -9,15 +9,16 @@ import {
 } from '@mf/models'
 
 import { EntityInvalid, EntityNotFound } from '#/lib/entityError.ts'
+import { hostingOf, latestDeliveredJob, toJobSummary } from '#/services/orderService.utils.ts'
 
 import type { FastifyInstance, FastifyPluginAsync } from 'fastify'
 import type {
 	BackendSession,
 	DemoQueueResponse,
 	Job,
-	JobSummary,
 	Order,
 	OrderDetail,
+	OrderHosting,
 	OrderKind,
 	OrderStatus,
 } from '@mf/models'
@@ -34,7 +35,10 @@ declare module 'fastify' {
 			list: (session: BackendSession) => Promise<Order[]>
 			/** Org-scoped read; another org's order is EntityNotFound (admins see all) */
 			get: (orderId: string, session: BackendSession) => Promise<Order>
-			/** Order + spec status + latest job summary + payments, for the order page */
+			/**
+			 * Order + spec status + job summaries (newest first) + what the customer actually got
+			 * (`hosting`: live / unhosted / none) + payments, for the order page
+			 */
 			getDetail: (orderId: string, session: BackendSession) => Promise<OrderDetail>
 			/**
 			 * Moves the order to `to`, enforcing the state machine server-side. Throws
@@ -130,16 +134,6 @@ const isAdmin = (session: BackendSession) => session.role === 'admin'
 export const transitionSources = (to: OrderStatus): OrderStatus[] =>
 	(Object.keys(orderTransitions) as OrderStatus[]).filter(from => canTransitionOrder(from, to))
 
-const toJobSummary = (job: Job): JobSummary => ({
-	id: job.id,
-	status: job.status,
-	tokensUsed: job.tokensUsed,
-	budget: job.budget,
-	startedAt: job.startedAt,
-	finishedAt: job.finishedAt,
-	createdAt: job.createdAt,
-})
-
 const plugin: FastifyPluginAsync = async app => {
 	const { db, jobService, paymentProvider, accountService, secrets } = app
 
@@ -184,8 +178,7 @@ const plugin: FastifyPluginAsync = async app => {
 		// With the per-order flag on, the (already-delivered) build parks the order for a human to
 		// approve; without the flag the order auto-delivers exactly as before.
 		const next: OrderStatus = order.approveBeforeDeliver ? 'awaiting_approval' : 'delivered'
-		const updated = (await db.orders.transition(order.id, ['building'], next)) ?? order
-		return settleFullUpfront(updated)
+		return (await db.orders.transition(order.id, ['building'], next)) ?? order
 	}
 
 	/**
@@ -193,9 +186,14 @@ const plugin: FastifyPluginAsync = async app => {
 	 * no balance payment: the whole price was in the upfront Checkout. Once such an order is
 	 * `delivered` — and the upfront payment really is in, so an admin-override build (`frozen →
 	 * building`, no payment) still invoices normally — it closes as `paid` right away.
+	 *
+	 * Not while the delivery is `unhosted` (wave 14, F7): the customer bought a hosted app, and a
+	 * delivery whose preview URL was withheld must not silently close the order. It stays
+	 * `delivered` until a redelivery brings the preview up — this runs on every detail read of a
+	 * `delivered` order (not only on the building → delivered move), so that read settles it.
 	 */
-	const settleFullUpfront = async (order: Order) => {
-		if (order.status !== 'delivered') return order
+	const settleFullUpfront = async (order: Order, hosting: OrderHosting) => {
+		if (order.status !== 'delivered' || hosting.status === 'unhosted') return order
 		if (order.priceSek === undefined || !isFullUpfront(order.priceSek)) return order
 		const payments = await db.orders.listPayments(order.id)
 		const upfrontPaid = payments.some(
@@ -264,6 +262,12 @@ const plugin: FastifyPluginAsync = async app => {
 		return get(orderId, session)
 	}
 
+	/** What the customer has of the order's jobs: the latest delivered one's deliverable, judged */
+	const hostingFor = async (jobs: Job[]) => {
+		const delivered = latestDeliveredJob(jobs)
+		return hostingOf(delivered, delivered ? await db.jobs.listEvents(delivered.id) : [])
+	}
+
 	app.decorate('orderService', {
 		get,
 		transition,
@@ -283,7 +287,8 @@ const plugin: FastifyPluginAsync = async app => {
 			if (order.status !== 'awaiting_approval') {
 				throw new InvalidOrderTransition(orderId, order.status, 'delivered')
 			}
-			return settleFullUpfront(await transition(orderId, 'delivered'))
+			const hosting = await hostingFor(await db.jobs.list({ orderId }))
+			return settleFullUpfront(await transition(orderId, 'delivered'), hosting)
 		},
 		setApprovalGate: async (orderId, enabled, session) => {
 			// Org-scoped read first: another org's order is EntityNotFound before any write
@@ -309,14 +314,17 @@ const plugin: FastifyPluginAsync = async app => {
 				db.orders.listPayments(orderId),
 			])
 			const latest = jobs[0]
+			const hosting = await hostingFor(jobs)
 			return {
-				order: await syncWithJob(order, latest),
+				order: await settleFullUpfront(await syncWithJob(order, latest), hosting),
 				spec: {
 					status: draft?.status ?? 'drafting',
 					complete: isSpecComplete(draft?.spec),
 					openQuestions: draft?.openQuestions.length ?? 0,
 				},
 				latestJob: latest && toJobSummary(latest),
+				jobs: jobs.map(toJobSummary),
+				hosting,
 				payments,
 			}
 		},

@@ -51,10 +51,13 @@ export type OrderOperation = {
 }
 
 // MARK: Custom responses
-/** What the order page needs of the latest job without the full spec/plan */
+/** What the order page needs of a job without the full spec/plan/gates */
 export const JobSummarySchema = JobSchema.pick({
 	id: true,
 	status: true,
+	mode: true,
+	sourceJobId: true,
+	reason: true,
 	tokensUsed: true,
 	budget: true,
 	startedAt: true,
@@ -62,6 +65,25 @@ export const JobSummarySchema = JobSchema.pick({
 	createdAt: true,
 })
 export type JobSummary = z.infer<typeof JobSummarySchema>
+
+/**
+ * Whether the customer actually got a hosted app (wave 14, F7). `live`: the latest delivered job
+ * carries a preview URL. `unhosted`: a job delivered its repository + bundle but the preview URL
+ * was withheld (deploy skipped/failed or the live acceptance check failed) — the order is still
+ * `delivered` by the repo contract, but the portal must not call it live, and a full-upfront
+ * order does not auto-close as `paid`. `none`: nothing delivered yet.
+ */
+export const hostingStatus = ['live', 'unhosted', 'none'] as const
+export type HostingStatus = (typeof hostingStatus)[number]
+
+export const OrderHostingSchema = z.object({
+	status: z.enum(hostingStatus),
+	/** The live preview URL when `status` is `live`, otherwise null */
+	deployUrl: z.string().nullable(),
+	/** Why the URL was withheld when `status` is `unhosted` (the job's reason, else the failed deploy/acceptance step's), otherwise null */
+	reason: z.string().nullable(),
+})
+export type OrderHosting = z.infer<typeof OrderHostingSchema>
 
 export const OrderDetailSchema = z.object({
 	order: OrderSchema,
@@ -71,7 +93,11 @@ export const OrderDetailSchema = z.object({
 		complete: z.boolean(),
 		openQuestions: z.number().int().nonnegative(),
 	}),
+	/** The newest job of the order (`jobs[0]`), kept for the order page's summary line */
 	latestJob: JobSummarySchema.optional(),
+	/** Every job of the order, newest first — builds, auto-retries and redeliveries */
+	jobs: z.array(JobSummarySchema),
+	hosting: OrderHostingSchema,
 	payments: z.array(PaymentSchema),
 })
 export type OrderDetail = z.infer<typeof OrderDetailSchema>

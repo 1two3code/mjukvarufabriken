@@ -19,6 +19,8 @@ const defaultOrder: Order = {
 const defaultDetail: OrderDetail = {
 	order: defaultOrder,
 	spec: { status: 'drafting', complete: false, openQuestions: 1 },
+	jobs: [],
+	hosting: { status: 'none', deployUrl: null, reason: null },
 	payments: [],
 }
 
