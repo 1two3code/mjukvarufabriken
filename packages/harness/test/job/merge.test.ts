@@ -224,6 +224,54 @@ describe('merge', () => {
 		).not.toBe(0)
 	})
 
+	// Dogfood run 5 (2026-09-01) lost a whole paid build because the repair kept main's side of one
+	// file. Detecting that is right; abandoning the task on the first try is not — the session can
+	// simply be told what it did wrong.
+	it('Retries the repair when the first attempt discards the branch’s work, and succeeds', async () => {
+		await repo.edit('task/b', 'b change\n')
+		await repo.edit('main', 'main change\n')
+		runSession
+			// First attempt: keeps main verbatim — the exact failure from run 5
+			.mockImplementationOnce(async ({ cwd }) => {
+				await writeFile(join(cwd, 'file.txt'), 'main change\n')
+				return { ok: true, tokens: 10, result: 'kept main' }
+			})
+			// Second: told what went wrong, combines both sides
+			.mockImplementationOnce(async ({ cwd }) => {
+				await writeFile(join(cwd, 'file.txt'), 'main change + b change\n')
+				return { ok: true, tokens: 10, result: 'resolved' }
+			})
+
+		const outcome = await mergeTask(input('b'))
+
+		expect(outcome.ok).toBe(true)
+		expect(runSession).toHaveBeenCalledTimes(2)
+		// The retry must NAME the mistake, not just ask again
+		const retryPrompt = runSession.mock.calls[1]![0].prompt as string
+		expect(retryPrompt).toMatch(/REJECTED/)
+		expect(retryPrompt).toMatch(/file\.txt/)
+		expect(await repo.read()).toBe('main change + b change\n')
+	})
+
+	it('Gives up after the retry when the repair keeps discarding the branch’s work', async () => {
+		await repo.edit('task/b', 'b change\n')
+		await repo.edit('main', 'main change\n')
+		runSession.mockImplementation(async ({ cwd }) => {
+			await writeFile(join(cwd, 'file.txt'), 'main change\n')
+			return { ok: true, tokens: 10, result: 'kept main again' }
+		})
+
+		const outcome = await mergeTask(input('b'))
+
+		expect(outcome.ok).toBe(false)
+		expect(outcome.reason).toMatch(/discarded the branch/)
+		expect(outcome.reason).toMatch(/after 2 repair attempt/)
+		expect(runSession).toHaveBeenCalledTimes(2)
+		// Main is left clean — no half-merged state
+		expect(await repo.read()).toBe('main change\n')
+		expect((await repo.run(['status', '--porcelain'])).stdout.trim()).toBe('')
+	})
+
 	it('Fails closed and aborts the merge when the conflict remains', async () => {
 		await repo.edit('task/c', 'c change\n')
 		await repo.edit('main', 'main change\n')
