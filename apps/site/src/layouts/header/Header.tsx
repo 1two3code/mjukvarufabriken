@@ -10,7 +10,7 @@ import { ButtonLink } from '#/components/ButtonLink.tsx'
 
 import type { Page } from '#/app/routes.ts'
 
-const navigationPages: Page[] = ['howItWorks', 'pricing', 'contact']
+const navigationPages: Page[] = ['howItWorks', 'demos', 'pricing', 'contact']
 
 export function Header() {
 	const { t } = useTranslation()

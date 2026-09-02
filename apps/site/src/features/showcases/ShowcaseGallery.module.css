@@ -1,0 +1,17 @@
+.state {
+	max-width: 72rem;
+	line-height: 1.5;
+	color: var(--secondary-text-color);
+}
+
+.blurb {
+	flex: 1;
+	line-height: 1.5;
+}
+
+.link {
+	align-self: flex-start;
+	margin-top: var(--spacing-xs);
+	font-weight: 700;
+	color: var(--brand-500);
+}

@@ -223,6 +223,26 @@ const residentUsage = {
 	},
 }
 
+const showcaseItem = {
+	orderId,
+	title: 'Smoke gym booking',
+	blurb: { sv: 'Bokning av pass för ett litet gym.', en: 'Class booking for a small gym.' },
+	url: 'https://example.com/preview',
+	sort: 0,
+}
+
+const showcaseAdminRow = {
+	...showcaseItem,
+	published: true,
+	blurbSv: showcaseItem.blurb.sv,
+	blurbEn: showcaseItem.blurb.en,
+	createdAt: now,
+	updatedAt: now,
+	orderName: order.name,
+	orderStatus: order.status,
+	lifecycle: 'active',
+}
+
 /** GET fixtures per `/bff` path (query string stripped); anything else is a loud 404 */
 const bff = {
 	'/bff/session': session,
@@ -252,13 +272,17 @@ const bff = {
 	'/bff/admin/model-prices': [],
 	'/bff/admin/resident/installations': [installation],
 	'/bff/admin/resident/usage': [residentUsage],
+	'/bff/admin/showcases': [showcaseAdminRow],
+	// The site's public demo gallery (wave 14, F3)
+	'/bff/showcases': { items: [showcaseItem] },
 }
 
 /** Route parameters substituted into the portal's route patterns */
 const params = { orderId }
 
 // MARK: Routes
-const routeFile = app => resolve(`apps/${app}/src/app/${app === 'portal' ? 'router.tsx' : 'routes.ts'}`)
+const routeFile = app =>
+	resolve(`apps/${app}/src/app/${app === 'portal' ? 'router.tsx' : 'routes.ts'}`)
 
 /**
  * Every path of the app's route table. Portal: `path: '/x/:orderId'` entries of router.tsx
@@ -275,9 +299,12 @@ const routesOf = app => {
 					match[2],
 				])
 	const routes = [...new Set(matches)].map(path =>
-		path === '*' ? '/smoke-does-not-exist' : path.replace(/:(\w+)/g, (_, name) => params[name] ?? name)
+		path === '*'
+			? '/smoke-does-not-exist'
+			: path.replace(/:(\w+)/g, (_, name) => params[name] ?? name)
 	)
-	if (routes.length < 4) throw new Error(`${app}: only ${routes.length} routes found in ${routeFile(app)}`)
+	if (routes.length < 4)
+		throw new Error(`${app}: only ${routes.length} routes found in ${routeFile(app)}`)
 	return routes
 }
 
@@ -315,7 +342,9 @@ const serveDist = (app, dist) => {
 			const body = request.method === 'GET' ? bff[pathname] : undefined
 			if (body === undefined) {
 				response.writeHead(404, { 'content-type': 'application/json' })
-				response.end(JSON.stringify({ error: { message: `no fixture for ${request.method} ${pathname}` } }))
+				response.end(
+					JSON.stringify({ error: { message: `no fixture for ${request.method} ${pathname}` } })
+				)
 				return
 			}
 			response.writeHead(200, { 'content-type': 'application/json' })
@@ -324,7 +353,9 @@ const serveDist = (app, dist) => {
 		}
 		const file = join(dist, pathname)
 		if (existsSync(file) && statSync(file).isFile()) {
-			response.writeHead(200, { 'content-type': mimeTypes[extname(file)] ?? 'application/octet-stream' })
+			response.writeHead(200, {
+				'content-type': mimeTypes[extname(file)] ?? 'application/octet-stream',
+			})
 			response.end(readFileSync(file))
 			return
 		}

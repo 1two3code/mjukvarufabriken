@@ -25,6 +25,18 @@
     <xhtml:link rel="alternate" hreflang="x-default" href="https://mjukvaruhuset.se/sa-funkar-det" />
   </url>
   <url>
+    <loc>https://mjukvaruhuset.se/demoappar</loc>
+    <xhtml:link rel="alternate" hreflang="sv" href="https://mjukvaruhuset.se/demoappar" />
+    <xhtml:link rel="alternate" hreflang="en" href="https://mjukvaruhuset.se/en/demos" />
+    <xhtml:link rel="alternate" hreflang="x-default" href="https://mjukvaruhuset.se/demoappar" />
+  </url>
+  <url>
+    <loc>https://mjukvaruhuset.se/en/demos</loc>
+    <xhtml:link rel="alternate" hreflang="sv" href="https://mjukvaruhuset.se/demoappar" />
+    <xhtml:link rel="alternate" hreflang="en" href="https://mjukvaruhuset.se/en/demos" />
+    <xhtml:link rel="alternate" hreflang="x-default" href="https://mjukvaruhuset.se/demoappar" />
+  </url>
+  <url>
     <loc>https://mjukvaruhuset.se/priser</loc>
     <xhtml:link rel="alternate" hreflang="sv" href="https://mjukvaruhuset.se/priser" />
     <xhtml:link rel="alternate" hreflang="en" href="https://mjukvaruhuset.se/pricing" />

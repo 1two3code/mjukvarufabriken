@@ -22,6 +22,7 @@ export function Footer() {
 				</div>
 				<nav className={styles.column} aria-label={t('nav.label.footer')}>
 					<Link to={pathTo('howItWorks')}>{t('nav.howItWorks')}</Link>
+					<Link to={pathTo('demos')}>{t('nav.demos')}</Link>
 					<Link to={pathTo('pricing')}>{t('nav.pricing')}</Link>
 					<Link to={pathTo('contact')}>{t('nav.contact')}</Link>
 					<a href={import.meta.env.VITE_PORTAL_URL}>{t('nav.action.portal')}</a>
