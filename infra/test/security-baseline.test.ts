@@ -309,6 +309,22 @@ describe('security baseline', () => {
 				assert.ok(boundary, 'CreateRole must require a permissions boundary')
 			})
 
+			// Express infers the load balancer scheme from the subnet type it is given: private subnets
+			// mean an internal load balancer and a PRIVATE-only ingress — a healthy preview nobody can
+			// reach (redelivery 0f497ced, 2026-09-02). The delivered app must land in PUBLIC subnets.
+			it('hands ECS Express the public subnets, never the private ones', () => {
+				const jobTask = Object.values(resources.findResources('AWS::ECS::TaskDefinition')).find(
+					task => JSON.stringify(task.Properties).includes('EXPRESS_SUBNET_IDS')
+				)
+				assert.ok(jobTask, 'job task definition carries EXPRESS_SUBNET_IDS')
+				const env = (jobTask.Properties.ContainerDefinitions as { Environment: { Name: string; Value: unknown }[] }[])
+					.flatMap(container => container.Environment ?? [])
+					.find(entry => entry.Name === 'EXPRESS_SUBNET_IDS')
+				const value = JSON.stringify(env?.Value ?? '')
+				assert.ok(/publicSubnet/i.test(value), 'EXPRESS_SUBNET_IDS references public subnets')
+				assert.ok(!/privateSubnet|isolatedSubnet/i.test(value), 'never private or isolated subnets')
+			})
+
 			// The boundary condition is load-bearing for CreateRole and FATAL for anything else:
 			// `iam:PermissionsBoundary` is a condition key only CreateRole (and the boundary calls)
 			// supply. Any other action in that statement is a grant that never matches. Dogfood run 7
