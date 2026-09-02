@@ -2,12 +2,16 @@ import { EntityNotFound } from '#/lib/entityError.ts'
 import { createMockJob, createMockJobEvent } from '#/plugins/__mocks__/db.ts'
 import { createMockDeliverable } from '#/services/__mocks__/jobService.ts'
 import {
+	claimRateLimit,
+	ClaimRateLimited,
+	claimRateLimitScope,
 	demoCapWindowMs,
 	DemoNotApprovable,
 	DemoWeeklyCapReached,
 	InvalidOrderTransition,
 	transitionSources,
 } from '#/services/orderService.ts'
+import { hashQuoteToken } from '#/services/quoteService.utils.ts'
 
 import type { FastifyInstance } from 'fastify'
 import type { BackendSession, JobEvent, OrderKind, OrderStatus } from '@mf/models'
@@ -799,6 +803,82 @@ describe('Order Service', () => {
 			} finally {
 				vi.useRealTimers()
 			}
+		})
+	})
+
+	// MARK: Anonymous quotes (wave 14, F1)
+
+	describe('claim', () => {
+		const token = 'c'.repeat(64)
+
+		/** An anonymous quote as `quoteService.create` stores it (org `anon:…`, hashed token) */
+		const seedQuote = async (id = 'quote-1') =>
+			app.db.orders.insert({
+				id,
+				orgId: `anon:${'0'.repeat(32)}`,
+				name: 'Offert',
+				quoteTokenHash: hashQuoteToken(token),
+			})
+
+		it('Moves the quote to the session org and user, and the token dies with it', async () => {
+			const quote = await seedQuote()
+
+			const claimed = await app.orderService.claim(quote.id, token, user)
+
+			expect(claimed).toMatchObject({ id: quote.id, orgId: 'org-1', createdBy: 'user-1' })
+			// Now an ordinary order: visible, listable, spec draft under the org
+			await expect(app.orderService.get(quote.id, user)).resolves.toMatchObject({ orgId: 'org-1' })
+			expect((await app.orderService.list(user)).map(order => order.id)).toEqual([quote.id])
+			await expect(app.db.orders.get(quote.id)).resolves.toMatchObject({ orgId: 'org-1' })
+			await expect(
+				app.db.orders.getOrderByQuoteToken(quote.id, hashQuoteToken(token))
+			).resolves.toBeUndefined()
+		})
+
+		it('Refuses a second claim, a wrong token and an unknown order alike (not found)', async () => {
+			const quote = await seedQuote()
+			await app.orderService.claim(quote.id, token, user)
+
+			await expect(app.orderService.claim(quote.id, token, other)).rejects.toBeInstanceOf(
+				EntityNotFound
+			)
+			await expect(app.orderService.get(quote.id, other)).rejects.toBeInstanceOf(EntityNotFound)
+			await expect(
+				app.orderService.claim((await seedQuote('quote-2')).id, 'd'.repeat(64), user)
+			).rejects.toBeInstanceOf(EntityNotFound)
+			await expect(app.orderService.claim('missing', token, user)).rejects.toBeInstanceOf(
+				EntityNotFound
+			)
+		})
+
+		it('Cannot claim an ordinary order with any token (no hash to match)', async () => {
+			const mine = await app.orderService.create('Mine', user)
+
+			await expect(app.orderService.claim(mine.id, token, other)).rejects.toBeInstanceOf(
+				EntityNotFound
+			)
+			await expect(app.orderService.get(mine.id, user)).resolves.toMatchObject({ orgId: 'org-1' })
+		})
+
+		it('Rate limits claim attempts per session, counting the failed ones', async () => {
+			const quote = await seedQuote()
+			for (let i = 0; i < claimRateLimit.max; i++) {
+				await expect(app.orderService.claim(quote.id, 'd'.repeat(64), user)).rejects.toBeInstanceOf(
+					EntityNotFound
+				)
+			}
+
+			await expect(app.orderService.claim(quote.id, token, user)).rejects.toBeInstanceOf(
+				ClaimRateLimited
+			)
+			// Another session's window is untouched; the quote is still claimable
+			await expect(app.orderService.claim(quote.id, token, other)).resolves.toMatchObject({
+				orgId: 'org-2',
+			})
+			const since = new Date(Date.now() - 60_000)
+			await expect(app.db.rateLimits.count(claimRateLimitScope, 'user-1', since)).resolves.toBe(
+				claimRateLimit.max + 1
+			)
 		})
 	})
 })

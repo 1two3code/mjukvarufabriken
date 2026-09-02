@@ -6,7 +6,7 @@ import {
 	estimatePrice,
 	sizePricesFromTiers,
 } from '@mf/harness'
-import { isSpecComplete } from '@mf/models'
+import { isAnonymousOrgId, isSpecComplete } from '@mf/models'
 
 import { EntityInvalid, EntityNotFound } from '#/lib/entityError.ts'
 
@@ -42,11 +42,26 @@ export const specChatLimits = {
 	maxTurnsPerOrder: 20,
 	maxTurnsPerOrg: 60,
 	maxTurnsGlobal: 240,
+	/**
+	 * Anonymous turns (wave 14, F1 — the site's no-login quote chat) are keyed by client ip on top
+	 * of the order/org/global layers: an anonymous "org" is minted per quote and costs nothing, so
+	 * per-org alone would be bypassed by starting quotes, and the ip is the only stable handle a
+	 * visitor has. Anonymous turns still count toward `maxTurnsGlobal` — the site never gets a
+	 * ceiling of its own (audit P1-2: the global one is the only bound on spend).
+	 */
+	maxTurnsPerIp: 20,
 	windowMinutes: 10,
 } as const
 
-/** Scopes of the spec-chat hits in `db.rateLimits`; separate scopes keep the two key spaces apart */
-export const specChatRateLimitScope = { order: 'spec-chat-order', org: 'spec-chat-org' } as const
+/** Scopes of the spec-chat hits in `db.rateLimits`; separate scopes keep the key spaces apart */
+export const specChatRateLimitScope = {
+	order: 'spec-chat-order',
+	org: 'spec-chat-org',
+	ip: 'spec-chat-ip',
+} as const
+
+/** Where a turn is billed: the draft's org, plus the client ip for an anonymous quote */
+export type TurnScope = { orgId: string; ip?: string }
 
 /** The draft has used up {@link specChatLimits.maxTurns} — no further turn will ever be allowed */
 export class SpecTurnLimitReached extends Error {
@@ -68,6 +83,8 @@ declare module 'fastify' {
 			/**
 			 * Returns the draft for the order. Unknown ids and another org's draft are
 			 * EntityNotFound (admins see every draft) — orders are only created by `POST /bff/orders`.
+			 * An anonymous quote (`anon:*` org, wave 14) is EntityNotFound for EVERY session, admins
+			 * included, until it is claimed: no session may freeze, pay or build it.
 			 */
 			get: (orderId: string, session: BackendSession) => Promise<SpecDraft>
 			/**
@@ -77,6 +94,13 @@ declare module 'fastify' {
 			 * them before any model call, so a refused turn costs nothing.
 			 */
 			sendMessage: (orderId: string, content: string, session: BackendSession) => Promise<SpecDraft>
+			/**
+			 * The turn itself on a draft the caller has ALREADY authorised (`sendMessage` = `get` +
+			 * this; `quoteService` = token check + this). Same checks, same limits — plus the per-ip
+			 * window when `scope.ip` is given — and the same global ceiling, so the anonymous chat
+			 * shares one spend bound with the portal instead of forking the engine call.
+			 */
+			runTurn: (draft: SpecDraft, content: string, scope: TurnScope) => Promise<SpecDraft>
 			/** Freezes a complete draft and fixes its price. Throws EntityInvalid when incomplete. */
 			freeze: (orderId: string, session: BackendSession) => Promise<SpecDraft>
 		}
@@ -136,73 +160,88 @@ const plugin: FastifyPluginAsync = async app => {
 	 * still count — otherwise a caller who makes the engine fail gets unlimited free retries.
 
 	 */
-	const countTurn = async (orderId: string, orgId: string) => {
+	const countTurn = async (orderId: string, { orgId, ip }: TurnScope) => {
 		// Throws if the window ever outgrows what the pruner retains (a silently bypassed limit)
 		const now = new Date()
 		const since = rateLimitWindowStart(windowMs, now)
 		await Promise.all([
 			db.rateLimits.record(specChatRateLimitScope.order, orderId, now),
 			db.rateLimits.record(specChatRateLimitScope.org, orgId, now),
+			...(ip === undefined ? [] : [db.rateLimits.record(specChatRateLimitScope.ip, ip, now)]),
 		])
 		// `key: undefined` counts every org's hits — the deployment-wide total, no extra row needed
-		const [perOrder, perOrg, global] = await Promise.all([
+		// (an anonymous quote records its `anon:*` org here too, so it sits inside the ceiling)
+		const [perOrder, perOrg, global, perIp] = await Promise.all([
 			db.rateLimits.count(specChatRateLimitScope.order, orderId, since),
 			db.rateLimits.count(specChatRateLimitScope.org, orgId, since),
 			db.rateLimits.count(specChatRateLimitScope.org, undefined, since),
+			ip === undefined ? 0 : db.rateLimits.count(specChatRateLimitScope.ip, ip, since),
 		])
 		// Each count already includes this turn's own hit, so a full window shows as `>`, not `>=`
 		if (
 			perOrder > specChatLimits.maxTurnsPerOrder ||
 			perOrg > specChatLimits.maxTurnsPerOrg ||
-			global > specChatLimits.maxTurnsGlobal
+			global > specChatLimits.maxTurnsGlobal ||
+			perIp > specChatLimits.maxTurnsPerIp
 		) {
-			app.log.warn({ orderId, orgId, perOrder, perOrg, global }, 'Spec chat rate limit hit')
+			app.log.warn({ orderId, orgId, perOrder, perOrg, global, perIp }, 'Spec chat rate limit hit')
 			throw new SpecRateLimited(orderId)
 		}
 	}
 
 	const get: FastifyInstance['specService']['get'] = async (orderId, session) => {
 		const existing = await db.orders.get(orderId)
-		if (!existing || (session.role !== 'admin' && existing.orgId !== session.orgId)) {
+		// An unclaimed anonymous quote belongs to nobody: not even an admin session sees it here
+		if (
+			!existing ||
+			isAnonymousOrgId(existing.orgId) ||
+			(session.role !== 'admin' && existing.orgId !== session.orgId)
+		) {
 			throw new EntityNotFound('spec', orderId)
 		}
 		return existing
 	}
 
+	const runTurn: FastifyInstance['specService']['runTurn'] = async (draft, content, scope) => {
+		const { orderId } = draft
+		if (draft.status === 'frozen') throw new EntityInvalid('spec', orderId)
+		// Two stored messages per turn (the customer's and the engine's reply). This read is
+		// check-then-act against `updateUnlessFrozen` below, so concurrent turns can overshoot
+		// the cap; `countTurn` is the layer that bounds spend under concurrency, and concurrent
+		// turns on one draft already clobber each other's messages (last write wins).
+		if (draft.messages.length >= specChatLimits.maxTurns * 2) {
+			throw new SpecTurnLimitReached(orderId)
+		}
+		await countTurn(orderId, scope)
+
+		const turn = await engine.nextTurn(draft, content)
+		const price = turn.complete ? await priceFor(orderId, turn.spec) : undefined
+		const updated: SpecDraft = {
+			...draft,
+			status: turn.complete ? 'ready' : 'drafting',
+			spec: turn.spec,
+			openQuestions: turn.openQuestions,
+			priceSek: price?.priceSek,
+			messages: [
+				...draft.messages,
+				chatMessage('user', content),
+				chatMessage('assistant', turn.assistantMessage),
+			],
+		}
+		// The engine call takes seconds: a freeze that landed meanwhile must win, not be undone
+		const stored = await db.orders.updateUnlessFrozen(updated)
+		if (!stored) throw new EntityInvalid('spec', orderId)
+		return stored
+	}
+
 	app.decorate('specService', {
 		get,
+		runTurn,
 		sendMessage: async (orderId, content, session) => {
 			const draft = await get(orderId, session)
-			if (draft.status === 'frozen') throw new EntityInvalid('spec', orderId)
-			// Two stored messages per turn (the customer's and the engine's reply). This read is
-			// check-then-act against `updateUnlessFrozen` below, so concurrent turns can overshoot
-			// the cap; `countTurn` is the layer that bounds spend under concurrency, and concurrent
-			// turns on one draft already clobber each other's messages (last write wins).
-			if (draft.messages.length >= specChatLimits.maxTurns * 2) {
-				throw new SpecTurnLimitReached(orderId)
-			}
 			// Key on the draft's own org so an admin's turn is billed to the customer, not to
 			// `org-admin` — and so a customer cannot spread turns across orgs it does not own.
-			await countTurn(orderId, draft.orgId ?? session.orgId)
-
-			const turn = await engine.nextTurn(draft, content)
-			const price = turn.complete ? await priceFor(orderId, turn.spec) : undefined
-			const updated: SpecDraft = {
-				...draft,
-				status: turn.complete ? 'ready' : 'drafting',
-				spec: turn.spec,
-				openQuestions: turn.openQuestions,
-				priceSek: price?.priceSek,
-				messages: [
-					...draft.messages,
-					chatMessage('user', content),
-					chatMessage('assistant', turn.assistantMessage),
-				],
-			}
-			// The engine call takes seconds: a freeze that landed meanwhile must win, not be undone
-			const stored = await db.orders.updateUnlessFrozen(updated)
-			if (!stored) throw new EntityInvalid('spec', orderId)
-			return stored
+			return runTurn(draft, content, { orgId: draft.orgId ?? session.orgId })
 		},
 		freeze: async (orderId, session) => {
 			const draft = await get(orderId, session)

@@ -1,8 +1,10 @@
 import fp from 'fastify-plugin'
+import { rateLimitWindowStart } from '@mf/db'
 import {
 	canTransitionOrder,
 	customerCancellableOrderStatus,
 	isActiveJobStatus,
+	isAnonymousOrgId,
 	isFullUpfront,
 	isSpecComplete,
 	orderTransitions,
@@ -10,6 +12,7 @@ import {
 
 import { EntityInvalid, EntityNotFound } from '#/lib/entityError.ts'
 import { hostingOf, latestDeliveredJob, toJobSummary } from '#/services/orderService.utils.ts'
+import { hashQuoteToken } from '#/services/quoteService.utils.ts'
 
 import type { FastifyInstance, FastifyPluginAsync } from 'fastify'
 import type {
@@ -31,10 +34,26 @@ declare module 'fastify' {
 			 * the pricing-ladder rung (wave 14), a real `build` unless asked otherwise.
 			 */
 			create: (name: string, session: BackendSession, kind?: OrderKind) => Promise<Order>
-			/** The org's orders, newest first; admins see every org */
+			/**
+			 * The org's orders, newest first; admins see every org. Unclaimed anonymous quotes
+			 * (`anon:*`, wave 14) are never listed — for anyone.
+			 */
 			list: (session: BackendSession) => Promise<Order[]>
-			/** Org-scoped read; another org's order is EntityNotFound (admins see all) */
+			/**
+			 * Org-scoped read; another org's order is EntityNotFound (admins see all). An unclaimed
+			 * anonymous quote is EntityNotFound for every session, admins included — the only way
+			 * in is {@link claim}.
+			 */
 			get: (orderId: string, session: BackendSession) => Promise<Order>
+			/**
+			 * Claims an anonymous quote (wave 14, F1): the site's visitor signed in to save or order
+			 * it, and presents the order id + the quote token the site holds. On a matching token the
+			 * order becomes the session's org's (`orgId`, `createdBy`) and the token is cleared — a
+			 * second claim, a wrong token or an unknown id are all EntityNotFound. Throws
+			 * {@link ClaimRateLimited} when the session has tried too often in the window (a
+			 * token-guessing guard; the token is 256 bits, so this is belt and braces).
+			 */
+			claim: (orderId: string, token: string, session: BackendSession) => Promise<Order>
 			/**
 			 * Order + spec status + job summaries (newest first) + what the customer actually got
 			 * (`hosting`: live / unhosted / none) + payments, for the order page
@@ -128,6 +147,17 @@ export class InvalidOrderTransition extends EntityInvalid {
 	}
 }
 
+/** Claim attempts per session within the window (`db.rateLimits`, scope `quote-claim`) */
+export const claimRateLimit = { max: 10, windowMinutes: 10 } as const
+export const claimRateLimitScope = 'quote-claim'
+
+/** Too many claim attempts from one session in the window — retry later */
+export class ClaimRateLimited extends Error {
+	constructor(userId: string) {
+		super(`Quote claims by user ${userId} are rate limited`)
+	}
+}
+
 const isAdmin = (session: BackendSession) => session.role === 'admin'
 
 /** Statuses that may transition to `to` — the inverse of `orderTransitions` */
@@ -138,10 +168,27 @@ const plugin: FastifyPluginAsync = async app => {
 	const { db, jobService, paymentProvider, accountService, secrets } = app
 
 	const scoped = (order: Order | undefined, session: BackendSession, id: string) => {
-		if (!order || (!isAdmin(session) && order.orgId !== session.orgId)) {
+		// An unclaimed anonymous quote belongs to nobody: hidden from every session, admins included
+		if (
+			!order ||
+			isAnonymousOrgId(order.orgId) ||
+			(!isAdmin(session) && order.orgId !== session.orgId)
+		) {
 			throw new EntityNotFound('order', id)
 		}
 		return order
+	}
+
+	/** Records the claim attempt first (like the spec limiter), then refuses when the window is full */
+	const countClaim = async (session: BackendSession) => {
+		const now = new Date()
+		const since = rateLimitWindowStart(claimRateLimit.windowMinutes * 60 * 1000, now)
+		await db.rateLimits.record(claimRateLimitScope, session.userId, now)
+		const attempts = await db.rateLimits.count(claimRateLimitScope, session.userId, since)
+		if (attempts > claimRateLimit.max) {
+			app.log.warn({ userId: session.userId, attempts }, 'Quote claim rate limit hit')
+			throw new ClaimRateLimited(session.userId)
+		}
 	}
 
 	const get: FastifyInstance['orderService']['get'] = async (orderId, session) =>
@@ -305,7 +352,20 @@ const plugin: FastifyPluginAsync = async app => {
 				kind,
 				createdBy: session.userId,
 			}),
-		list: session => db.orders.listOrders(isAdmin(session) ? {} : { orgId: session.orgId }),
+		list: async session => {
+			const orders = await db.orders.listOrders(isAdmin(session) ? {} : { orgId: session.orgId })
+			return orders.filter(order => !isAnonymousOrgId(order.orgId))
+		},
+		claim: async (orderId, token, session) => {
+			await countClaim(session)
+			const claimed = await db.orders.claimQuote(orderId, hashQuoteToken(token), {
+				orgId: session.orgId,
+				userId: session.userId,
+			})
+			if (!claimed) throw new EntityNotFound('order', orderId)
+			app.log.info({ orderId, orgId: session.orgId }, 'Anonymous quote claimed')
+			return claimed
+		},
 		getDetail: async (orderId, session) => {
 			const order = await get(orderId, session)
 			const [draft, jobs, payments] = await Promise.all([

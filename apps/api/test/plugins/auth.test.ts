@@ -29,19 +29,25 @@ describe('Auth plugin (auth)', () => {
 	})
 
 	describe('Public routes', () => {
-		it.each(['/bff/auth/magic-link', '/bff/auth/verify', '/bff/auth/refresh', '/bff/auth/logout'])(
-			'Allows %s to bypass the auth plugin',
-			async url => {
-				// Arrange
-				app.get(url, () => ({ message: 'Resolved' }))
+		it.each([
+			'/bff/auth/magic-link',
+			'/bff/auth/verify',
+			'/bff/auth/refresh',
+			'/bff/auth/logout',
+			// The site's no-login quote chat (wave 14, F1)
+			'/bff/quote',
+			'/bff/quote/:orderId',
+			'/bff/quote/:orderId/message',
+		])('Allows %s to bypass the auth plugin', async url => {
+			// Arrange
+			app.get(url, () => ({ message: 'Resolved' }))
 
-				// Act
-				const response = await app.inject({ url })
+			// Act
+			const response = await app.inject({ url })
 
-				// Assert
-				expect(response.statusCode).toBe(200)
-			}
-		)
+			// Assert
+			expect(response.statusCode).toBe(200)
+		})
 
 		it('Allows routes outside /bff to bypass the auth plugin', async () => {
 			// Arrange

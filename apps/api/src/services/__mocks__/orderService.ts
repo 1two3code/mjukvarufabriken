@@ -59,6 +59,9 @@ const mockPlugin: FastifyPluginAsync = async app => {
 			approvedThisWeek: 1,
 			cap: 5,
 		}),
+		claim: vi.fn((id: string, _token: string, session) =>
+			Promise.resolve(createMockOrder({ id, orgId: session.orgId, createdBy: session.userId }))
+		),
 	}
 
 	app.decorate('orderService', mock)
