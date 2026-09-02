@@ -361,7 +361,12 @@ export class WebStack extends Stack {
 		taskRole.addToPrincipalPolicy(
 			new PolicyStatement({
 				sid: 'MintPreviewAppRoles',
-				actions: ['iam:CreateRole', 'iam:TagRole'],
+				// ONLY CreateRole may sit under the boundary condition: `iam:PermissionsBoundary` is a
+				// condition key CreateRole supplies and TagRole does not, so a TagRole grant placed here
+				// is a grant that never matches — CreateRole-with-tags then fails on its implicit
+				// TagRole with AccessDenied. That is exactly how dogfood run 7 (2026-09-02) lost its
+				// deploy after every gate had passed. TagRole lives in the scoped statement below.
+				actions: ['iam:CreateRole'],
 				resources: [previewRoleArn],
 				conditions: {
 					StringEquals: {
@@ -373,9 +378,16 @@ export class WebStack extends Stack {
 		taskRole.addToPrincipalPolicy(
 			new PolicyStatement({
 				sid: 'ScopePreviewAppRoles',
-				// PutRolePolicy is the prefix scoping itself; GetRole is the redelivery path. Neither
-				// can widen the role beyond the boundary attached at creation.
-				actions: ['iam:PutRolePolicy', 'iam:GetRole', 'iam:DeleteRolePolicy', 'iam:DeleteRole'],
+				// PutRolePolicy is the prefix scoping itself; GetRole is the redelivery path; TagRole is
+				// the implicit second call of CreateRole-with-tags. None of them can widen the role
+				// beyond the boundary attached at creation.
+				actions: [
+					'iam:PutRolePolicy',
+					'iam:GetRole',
+					'iam:TagRole',
+					'iam:DeleteRolePolicy',
+					'iam:DeleteRole',
+				],
 				resources: [previewRoleArn],
 			})
 		)
