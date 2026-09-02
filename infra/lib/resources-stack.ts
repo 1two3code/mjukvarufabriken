@@ -762,6 +762,20 @@ export class ResourcesStack extends Stack {
 				conditions: { StringEquals: { 'aws:RequestTag/Service': 'mf-delivery' } },
 			})
 		)
+		// CreateExpressGatewayService registers a task definition on the caller's behalf, family
+		// `<cluster>-<service>` — the AWS docs list ecs:RegisterTaskDefinition as a dependency of the
+		// create call. Scoped to this cluster's `mf-*` preview families. Missing until redelivery
+		// e9010835 (2026-09-02): every earlier Express delivery had run from a laptop with admin
+		// credentials, so the job role's Express permission set was first exercised live that day.
+		this.jobTaskDefinition.taskRole.addToPrincipalPolicy(
+			new PolicyStatement({
+				sid: 'EcsExpressRegisterPreviewTaskDefinitions',
+				actions: ['ecs:RegisterTaskDefinition'],
+				resources: [
+					`arn:aws:ecs:${this.region}:${this.account}:task-definition/${this.jobsCluster.clusterName}-mf-*:*`,
+				],
+			})
+		)
 		this.jobTaskDefinition.taskRole.addToPrincipalPolicy(
 			new PolicyStatement({
 				sid: 'EcsExpressDescribePreviewServices',

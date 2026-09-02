@@ -91,6 +91,26 @@ repair-session staging. **Graduated to:** sandbox/orchestrator fixes in
 
 <!-- New entries above the seed section, newest first. -->
 
+## 2026-09-02 — job e9010835 (Ögonblick, redeliver of run 7, 4th) — RegisterTaskDefinition
+53 954 tokens (~USD 0.15). PassRole is through (#110). The next call in
+`CreateExpressGatewayService` was refused: `not authorized to perform: ecs:RegisterTaskDefinition
+on resource: …task-definition/mf-jobs-dev-mf-c15b94b8-…:*`.
+
+- **Root cause:** the Express create registers a task definition on the caller's behalf (family
+  `<cluster>-<service>`); the AWS docs list `ecs:RegisterTaskDefinition` as a dependency of the
+  create call. The job role never had it.
+- **The finding behind the finding:** every Express delivery before today (guestbook,
+  family-hub, the Snickeri live test) ran from a laptop with admin credentials via
+  `delivery:demo`. The job task role's Express permission set — CreateExpressGatewayService,
+  TagResource, Describe, PassRole — had never been exercised from the container. Four
+  redeliveries at ~USD 0.15 each are what finally did, one denial at a time. The lesson is the
+  same as the fake-provisioner and re-key ones: the path that only runs in production is
+  untested until it runs in production, and a cheap retry is how it gets tested.
+- **Graduated to:** `ecs:RegisterTaskDefinition` on the job role, scoped to
+  `task-definition/<cluster>-mf-*:*`; the fence test asserts the scope.
+- **Recurred, still OPEN (7th time):** `delivered` with `deployUrl: null`.
+
+
 ## 2026-09-02 — job bed47e0c (Ögonblick, redeliver of run 7, 3rd) — same PassRole denial
 30 608 tokens (~USD 0.10). Identical failure to 4922e82d after #109 moved the grant to the job:
 `…JobTaskDefinitionTaskRole… is not authorized to perform: iam:PassRole on …/mf-preview-app-…`.

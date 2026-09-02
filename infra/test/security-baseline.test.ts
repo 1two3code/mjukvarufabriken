@@ -98,9 +98,18 @@ describe('security baseline', () => {
 						'ecs:CreateExpressGatewayService',
 						'ecs:TagResource',
 						'ecs:DescribeExpressGatewayService',
+						'ecs:RegisterTaskDefinition',
 						'iam:PassRole',
 					])
 				)
+				// RegisterTaskDefinition (a dependency of CreateExpressGatewayService) is scoped to this
+				// cluster's preview families, never every task definition in the account
+				const register = statements.find(s => JSON.stringify(s.Action).includes('ecs:RegisterTaskDefinition'))
+				assert.ok(register, 'ecs:RegisterTaskDefinition statement')
+				const registerResource = JSON.stringify(register.Resource)
+				assert.ok(registerResource.includes('task-definition/'), 'scoped to task-definition ARNs')
+				assert.ok(registerResource.includes('-mf-*:*'), 'scoped to the preview families')
+				assert.ok(!registerResource.includes('"*"'), 'never unscoped')
 				const byActions = (action: string) =>
 					statements.find(s => JSON.stringify(s.Action).includes(action)) as
 						{ Resource?: unknown; Condition?: unknown } | undefined
