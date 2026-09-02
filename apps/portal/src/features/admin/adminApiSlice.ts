@@ -13,7 +13,7 @@ import type {
 
 export const adminApiSlice = appApi
 	.enhanceEndpoints({
-		addTagTypes: ['adminJobs', 'adminOrders', 'adminOrgs', 'modelPrices', 'demoQueue'],
+		addTagTypes: ['adminJobs', 'adminOrders', 'adminOrgs', 'modelPrices', 'demoQueue', 'order'],
 	})
 	.injectEndpoints({
 		endpoints: build => ({
@@ -57,6 +57,21 @@ export const adminApiSlice = appApi
 				query: jobId => ({ url: `/admin/jobs/${jobId}/kill`, method: 'POST' }),
 				invalidatesTags: ['adminJobs'],
 			}),
+			/** Moves or clears (null) an order's included hosting window (wave 14) */
+			setHostingUntil: build.mutation<
+				Order,
+				{ orderId: string } & OrderMutation['SetHostingUntil']
+			>({
+				query: ({ orderId, hostingUntil }) => ({
+					url: `/admin/orders/${orderId}/hosting-until`,
+					method: 'PATCH',
+					body: { hostingUntil },
+				}),
+				invalidatesTags: (_result, _error, { orderId }) => [
+					{ type: 'order', id: orderId },
+					'adminOrders',
+				],
+			}),
 			provisionAccount: build.mutation<ProvisionAccountResponse, string>({
 				query: orgId => ({ url: `/admin/orgs/${orgId}/provision-account`, method: 'POST' }),
 				invalidatesTags: ['adminOrgs'],
@@ -73,5 +88,6 @@ export const {
 	useGetModelPricesQuery,
 	useAddModelPriceMutation,
 	useKillAdminJobMutation,
+	useSetHostingUntilMutation,
 	useProvisionAccountMutation,
 } = adminApiSlice
