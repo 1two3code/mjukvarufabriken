@@ -91,7 +91,46 @@ repair-session staging. **Graduated to:** sandbox/orchestrator fixes in
 
 <!-- New entries above the seed section, newest first. -->
 
-<!-- New entries above the seed section, newest first. -->
+## 2026-09-02 — job 551edb6c (Ögonblick, M) — dogfood run 6, FAILED at review
+7.97 M budget-tokens (~USD 20). Furthest any run has reached: verify ok, acceptance-tests ok
+(11 green), **review failed** on two high findings — both genuine, neither seen before.
+
+**What the day's fixes bought, confirmed in this run:**
+- The **merge-repair retry** (#101) worked: `task/camera-capture` hit a conflict, the repair ran
+  (198 k tokens) and merged `ok: true`. That is the exact failure that ended run 5.
+- The **route-prefix guard** (#98) worked: routes came out at `apps/api/src/routes/bff/photos/`.
+  Run 4's defect did not recur.
+
+- **Phase:** gate (review)
+- **Symptom 1 (high):** `isImage` accepted any mimetype starting with `image/`, so `image/svg+xml`
+  is stored and re-served with that Content-Type — stored XSS in a gallery everyone at an event
+  opens.
+- **Symptom 2 (high):** photo metadata kept in an in-process `Map`, not a database — despite the
+  spec requiring "photo metadata in the app's database" and a gallery shared across devices. Photos
+  vanish on restart and never sync between phones.
+- **Root cause of 2 — a template trap:** `templates/web/apps/api/src/plugins/store.ts` ships an
+  in-memory key/value store, documented as "replace it with a real database client". It is typed,
+  present and passes tests, so a worker needing persistence reaches for it and silently gets a Map.
+  The provisioned Postgres goes unused.
+- **Graduated to:** **OPEN.** Proposed: a gate that fails when the app declares `DATABASE_URL`
+  required (or a database was provisioned) while its persistence path is still the in-memory store.
+  Deterministic, and it closes the class rather than this instance. Symptom 1 is a worker-quality
+  issue with no obvious template home — the review gate catching it is arguably the right answer.
+
+### The pattern after six runs — worth reading before spending a seventh
+Runs 1, 2, 3 and 5 died to **our machinery**; all four causes are fixed and guarded. Runs 4 and 6
+died to **generated-code quality**, caught by the review gate — with *different* high findings each
+time. That is the important distinction: it is not one bug left to fix. An M-class app (3 features,
+11 criteria) has enough surface that the worker makes at least one high-severity mistake per
+attempt, and the gate correctly refuses to deliver on any open high.
+
+Two ways forward, and they are not exclusive:
+1. **Keep closing template traps** (the in-memory store above is one). Each removes a whole class.
+2. **Revisit the delivery bar per tier.** "Zero open high findings" may be right for a 3–5k kr
+   build and wrong for a 500 kr demo, where delivering with the findings listed in HANDOVER.md is
+   arguably more honest than not delivering at all. This ties directly to the pricing ladder
+   (docs/backlog/strategy-2026-08-31.md) and is a product decision, not a harness one.
+
 ## 2026-09-01 — job 491b0b4a (Ögonblick, M) — dogfood run 5, FAILED at merge repair
 4.46 M budget-tokens (~USD 11). Final run of the authorised five.
 
