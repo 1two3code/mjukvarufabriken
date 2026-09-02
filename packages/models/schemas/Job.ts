@@ -200,7 +200,11 @@ export const JobSchema = z.object({
 	/** USD at the prices in effect when the order was created (`model_prices`); absent on older jobs */
 	costUsd: z.number().nonnegative().optional(),
 	plan: PlanSchema.optional(),
-	/** Human-readable reason when `status` is `failed` or `killed` */
+	/**
+	 * Human-readable reason when `status` is `failed` or `killed` — and, on a `delivered` job, why
+	 * its preview URL was withheld (deploy skipped/failed, live acceptance check failed): the repo
+	 * + bundle contract is honoured, the hosting side is not, and the customer is told why.
+	 */
 	reason: z.string().optional(),
 	/** QA gate reports in run order (M4); absent until the first gate has run */
 	gates: z.array(GateReportSchema).optional(),

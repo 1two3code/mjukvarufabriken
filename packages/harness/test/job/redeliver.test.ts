@@ -31,7 +31,7 @@ const okDelivery = (input: DeliveryInput): DeliveryOutcome => ({
 })
 
 describe('runRedelivery', () => {
-	it('delivers the source repository under the SOURCE job\'s service name, recording under its own id', async () => {
+	it("delivers the source repository under the SOURCE job's service name, recording under its own id", async () => {
 		// Arrange
 		const events: NewJobEvent[] = []
 		let seen: DeliveryInput | undefined
@@ -55,12 +55,37 @@ describe('runRedelivery', () => {
 		expect(outcome.deliverable?.deployUrl).toBe('https://preview.on.aws')
 		expect(outcome.tokensUsed).toBeGreaterThan(0)
 		expect(events.map(event => event.type)).toEqual(['started', 'done'])
-		expect(events[0]!.payload).toMatchObject({ mode: 'redeliver', sourceJobId: baseJob.sourceJobId })
+		expect(events[0]!.payload).toMatchObject({
+			mode: 'redeliver',
+			sourceJobId: baseJob.sourceJobId,
+		})
+	})
+
+	it('keeps the delivery reason on a delivered redelivery whose preview URL was withheld', async () => {
+		const events: NewJobEvent[] = []
+		const outcome = await runRedelivery(baseJob, {
+			ports: {
+				deliver: async input => ({
+					...okDelivery(input),
+					deliverable: { ...okDelivery(input).deliverable, deployUrl: null } as never,
+					reason: 'deploy: skipped — the app declares no runtime',
+				}),
+			},
+			hooks: { emit: async event => void events.push(event) },
+		})
+		expect(outcome.status).toBe('delivered')
+		expect(outcome.reason).toBe('deploy: skipped — the app declares no runtime')
+		expect(events.at(-1)).toMatchObject({
+			type: 'done',
+			payload: { deployUrl: null, reason: 'deploy: skipped — the app declares no runtime' },
+		})
 	})
 
 	it('fails when the delivery fails, with the delivery reason', async () => {
 		const outcome = await runRedelivery(baseJob, {
-			ports: { deliver: async () => ({ ok: false, tokens: 0, steps: [], reason: 'deploy exploded' }) },
+			ports: {
+				deliver: async () => ({ ok: false, tokens: 0, steps: [], reason: 'deploy exploded' }),
+			},
 			hooks: { emit: async () => {} },
 		})
 		expect(outcome.status).toBe('failed')
