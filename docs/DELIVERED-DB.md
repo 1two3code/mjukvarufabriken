@@ -36,6 +36,12 @@ called from `deliver.ts`): `DATABASE_URL` in the app's declared required env, a 
 package.json dependencies, or a `migrations/` directory. Detection errs wide — a false positive
 costs one empty database; a false negative ships a dead app.
 
+Since 2026-09-02 (dogfood run 6, docs/LEARNINGS.md) the template's own `store` plugin is
+Postgres-backed whenever `DATABASE_URL` is set, and `postgres` is a template dependency — so
+every template-derived app trips the dependency signal and gets a database. That is intended:
+the alternative (a worker replacing an in-memory `Map` with a real client on its own) is the
+trap run 6 fell into.
+
 **Fail closed**: when the app needs a database and the provisioner is missing (local db-mode
 runs) or errors, the deploy is *skipped* with the reason on the `deploy` step — a repo + bundle
 still deliver, but no live-but-dead URL is handed out. This mirrors the C1 recommendation from

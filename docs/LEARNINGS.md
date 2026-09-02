@@ -112,10 +112,16 @@ repair-session staging. **Graduated to:** sandbox/orchestrator fixes in
   in-memory key/value store, documented as "replace it with a real database client". It is typed,
   present and passes tests, so a worker needing persistence reaches for it and silently gets a Map.
   The provisioned Postgres goes unused.
-- **Graduated to:** **OPEN.** Proposed: a gate that fails when the app declares `DATABASE_URL`
-  required (or a database was provisioned) while its persistence path is still the in-memory store.
-  Deterministic, and it closes the class rather than this instance. Symptom 1 is a worker-quality
-  issue with no obvious template home — the review gate catching it is arguably the right answer.
+- **Graduated to:** the template's `store` plugin is now **durable on Postgres whenever
+  `DATABASE_URL` is set** (in-memory only when it is absent — local dev and tests), with the same
+  interface, lazy connect and a self-created table. The worker's natural choice — `app.store` — is
+  now the correct one, which removes the trap instead of gating against it (the gate alternative
+  would still have needed the worker to hand-build a database layer correctly). Side effect, by
+  design: `postgres` is now a template dependency, so `detectDatabaseNeed` fires for every
+  template-derived app and every delivery gets its own database — the documented "errs wide"
+  trade-off, one empty database per app that never persists anything. Symptom 1 is a
+  worker-quality issue with no obvious template home — the review gate catching it is arguably the
+  right answer.
 
 ### The pattern after six runs — worth reading before spending a seventh
 Runs 1, 2, 3 and 5 died to **our machinery**; all four causes are fixed and guarded. Runs 4 and 6

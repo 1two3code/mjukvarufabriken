@@ -4,7 +4,26 @@ describe('Store plugin (store)', () => {
 	let app: FastifyInstance
 
 	beforeEach(async () => {
+		vi.stubEnv('DATABASE_URL', '')
 		app = await createTestApp({ skipMock: '#/plugins/store.ts' })
+	})
+
+	afterEach(() => vi.unstubAllEnvs())
+
+	it('Runs in memory when no DATABASE_URL is set', () => {
+		expect(app.store.kind).toBe('memory')
+	})
+
+	it('Is durable on Postgres when DATABASE_URL is set', async () => {
+		// Arrange — nothing connects until the first operation, so no server is needed
+		vi.stubEnv('DATABASE_URL', 'postgres://app:secret@localhost:5432/app')
+
+		// Act
+		const durable = await createTestApp({ skipMock: '#/plugins/store.ts' })
+
+		// Assert
+		expect(durable.store.kind).toBe('postgres')
+		await durable.close()
 	})
 
 	it('Returns undefined for unknown keys', async () => {
