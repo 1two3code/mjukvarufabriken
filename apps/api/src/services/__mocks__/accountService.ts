@@ -18,6 +18,7 @@ const mockOrder: Order = {
 	orgId: 'org-1',
 	name: 'Acme gym booking',
 	status: 'delivered',
+	kind: 'build',
 	lifecycle: 'active',
 	customerSlug: 'acme-gym-booking-11111111',
 	createdAt: '2026-08-01T00:00:00.000Z',

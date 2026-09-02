@@ -1,5 +1,5 @@
 import { createAuthRepository, toMagicLink, toRefreshToken } from '#/auth.ts'
-import { toSpecDraft } from '#/orders.ts'
+import { toOrder, toSpecDraft } from '#/orders.ts'
 import { getOrg, getUser, toOrg, toUser } from '#/users.ts'
 
 import type { Db } from '#/index.ts'
@@ -22,6 +22,7 @@ describe('row mapping', () => {
 				created_by: null,
 				name: '',
 				status: 'drafting',
+				kind: 'build',
 				spec: { goal: 'g' },
 				messages: [],
 				open_questions: ['q'],
@@ -32,6 +33,8 @@ describe('row mapping', () => {
 				lifecycle: 'active',
 				lifecycle_changed_at: null,
 				customer_slug: null,
+				hosting_until: null,
+				build_approved_at: null,
 				created_at: at,
 				updated_at: at,
 			})
@@ -52,6 +55,7 @@ describe('row mapping', () => {
 				created_by: 'u',
 				name: 'Gym booking',
 				status: 'frozen',
+				kind: 'demo',
 				spec: { goal: 'g', sizeClass: 'M' },
 				messages: [],
 				open_questions: [],
@@ -62,10 +66,44 @@ describe('row mapping', () => {
 				lifecycle: 'suspended',
 				lifecycle_changed_at: at,
 				customer_slug: 'gym-booking-11111111',
+				hosting_until: at,
+				build_approved_at: at,
 				created_at: at,
 				updated_at: at,
 			})
 		).toMatchObject({ orgId: 'org', priceSek: 45_000, frozenAt: at.toISOString() })
+	})
+
+	it('Maps the pricing-ladder columns (0022) to an Order, dropping the null instants', () => {
+		const row = {
+			id: 'demo',
+			org_id: 'org',
+			created_by: null,
+			name: 'Gym booking',
+			status: 'drafting' as const,
+			kind: 'demo' as const,
+			spec: {},
+			messages: [],
+			open_questions: [],
+			size_class: null,
+			price_sek: null,
+			frozen_at: null,
+			approve_before_deliver: false,
+			lifecycle: 'active' as const,
+			lifecycle_changed_at: null,
+			customer_slug: null,
+			hosting_until: null,
+			build_approved_at: null,
+			created_at: at,
+			updated_at: at,
+		}
+		expect(toOrder(row)).toMatchObject({ kind: 'demo' })
+		expect(toOrder(row).hostingUntil).toBeUndefined()
+		expect(toOrder(row).buildApprovedAt).toBeUndefined()
+		expect(toOrder({ ...row, hosting_until: at, build_approved_at: at })).toMatchObject({
+			hostingUntil: at.toISOString(),
+			buildApprovedAt: at.toISOString(),
+		})
 	})
 
 	it('Maps user, org and auth rows to models with ISO timestamps', () => {

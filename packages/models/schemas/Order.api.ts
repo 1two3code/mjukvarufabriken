@@ -2,14 +2,20 @@ import { z } from 'zod'
 
 import { JobSchema } from './Job.ts'
 import { lifecycleActions, LifecycleStateSchema } from './Lifecycle.ts'
-import { OrderSchema } from './Order.ts'
+import { orderKind, OrderSchema } from './Order.ts'
 import { OrgSchema } from './Org.ts'
 import { paymentKind, PaymentSchema } from './Payment.ts'
 import { specStatus } from './Spec.ts'
 
 // MARK: Mutations
 export const OrderMutationSchemas = {
-	CreateOrder: z.object({ name: z.string().trim().min(1).max(120) }).strict(),
+	/** `kind` picks the pricing-ladder rung (wave 14); omitted = a real `build` */
+	CreateOrder: z
+		.object({
+			name: z.string().trim().min(1).max(120),
+			kind: z.enum(orderKind).default('build'),
+		})
+		.strict(),
 	/** Admin toggle of the per-order approve-before-deliver gate (W7) */
 	SetApprovalGate: z.object({ enabled: z.boolean() }).strict(),
 	/**
@@ -23,7 +29,8 @@ export const OrderMutationSchemas = {
 }
 
 export type OrderMutation = {
-	CreateOrder: z.infer<typeof OrderMutationSchemas.CreateOrder>
+	/** The input side: a client may leave `kind` out and get the `build` default */
+	CreateOrder: z.input<typeof OrderMutationSchemas.CreateOrder>
 	SetApprovalGate: z.infer<typeof OrderMutationSchemas.SetApprovalGate>
 	LifecycleAction: z.infer<typeof OrderMutationSchemas.LifecycleAction>
 }

@@ -3,13 +3,14 @@ import { mergeDeep } from '@mf/utils/object'
 
 import type { FastifyInstance, FastifyPluginAsync } from 'fastify'
 import type { PartialDeep } from 'type-fest'
-import type { Order, OrderDetail } from '@mf/models'
+import type { Order, OrderDetail, OrderKind } from '@mf/models'
 
 const defaultOrder: Order = {
 	id: 'order-1',
 	orgId: 'org-1',
 	name: 'Gym booking',
 	status: 'drafting',
+	kind: 'build',
 	lifecycle: 'active',
 	createdAt: '2026-08-26T10:00:00.000Z',
 	updatedAt: '2026-08-26T10:00:00.000Z',
@@ -28,7 +29,9 @@ export const createMockOrderDetail = (overrides?: PartialDeep<OrderDetail>): Ord
 
 const mockPlugin: FastifyPluginAsync = async app => {
 	const mock: FastifyInstance['orderService'] = {
-		create: vi.fn((name: string) => Promise.resolve(createMockOrder({ name }))),
+		create: vi.fn((name: string, _session, kind: OrderKind = 'build') =>
+			Promise.resolve(createMockOrder({ name, kind }))
+		),
 		list: vi.fn().mockResolvedValue([createMockOrder()]),
 		get: vi.fn((id: string) => Promise.resolve(createMockOrder({ id }))),
 		getDetail: vi.fn((id: string) => Promise.resolve(createMockOrderDetail({ order: { id } }))),

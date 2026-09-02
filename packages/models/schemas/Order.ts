@@ -76,6 +76,15 @@ export const toSpecStatus = (status: OrderStatus): SpecStatus =>
 /** Final states */
 export const isOrderClosed = (status: OrderStatus) => status === 'paid' || status === 'cancelled'
 
+/**
+ * Which rung of the pricing ladder an order sits on (docs/backlog/strategy-2026-08-31.md):
+ * `build` is a real 3–5k kr build (every order until wave 14), `demo` the ~500 kr voucher demo
+ * build that is capped per week and admin-approved before it starts (`Order.buildApprovedAt`).
+ * Mirrors `orders_kind_check` (migration 0022); `enumDrift.test.ts` keeps the two in step.
+ */
+export const orderKind = ['build', 'demo'] as const
+export type OrderKind = (typeof orderKind)[number]
+
 // MARK: Order
 export const OrderSchema = z.object({
 	id: z.string(),
@@ -83,6 +92,8 @@ export const OrderSchema = z.object({
 	/** Customer-facing name, chosen when the order is created */
 	name: z.string(),
 	status: z.enum(orderStatus),
+	/** Pricing-ladder rung, fixed when the order is created; `build` unless asked otherwise */
+	kind: z.enum(orderKind),
 	sizeClass: z.enum(sizeClass).optional(),
 	/** Fixed price in SEK ex moms, fixed when the spec is frozen */
 	priceSek: z.number().int().nonnegative().optional(),
@@ -115,6 +126,17 @@ export const OrderSchema = z.object({
 	 * the build starts (from the same app-name/job derivation delivery uses); absent before a build.
 	 */
 	customerSlug: z.string().optional(),
+	/**
+	 * End of the hosting window included in the order's price (a demo's short showcase, a build's
+	 * included months); absent = no scheduled end. The scheduled-teardown sweep lists active orders
+	 * whose window has passed (`listActiveWithHostingUntilBefore`). Null in the schema (0022).
+	 */
+	hostingUntil: z.iso.datetime().optional(),
+	/**
+	 * Demo orders only: the instant an admin approved the build to start (the weekly voucher cap
+	 * counts these). Absent = not yet approved; a real `build` never needs it. Null in the schema.
+	 */
+	buildApprovedAt: z.iso.datetime().optional(),
 	createdAt: z.iso.datetime(),
 	updatedAt: z.iso.datetime(),
 })
