@@ -91,6 +91,23 @@ repair-session staging. **Graduated to:** sandbox/orchestrator fixes in
 
 <!-- New entries above the seed section, newest first. -->
 
+## 2026-09-02 — job bed47e0c (Ögonblick, redeliver of run 7, 3rd) — same PassRole denial
+30 608 tokens (~USD 0.10). Identical failure to 4922e82d after #109 moved the grant to the job:
+`…JobTaskDefinitionTaskRole… is not authorized to perform: iam:PassRole on …/mf-preview-app-…`.
+
+- **Root cause:** the moved grant carried `iam:PassedToService: ecs-tasks.amazonaws.com` only. An
+  Express gateway service is created by the ECS control plane, and it is `ecs.amazonaws.com`
+  that passes the task role on at creation. The neighbouring `PassExpressRoles` statement lists
+  BOTH principals for exactly this reason — the new statement copied the api's condition instead.
+- **Why the simulation lied twice:** `simulate-principal-policy` answers precisely the question
+  asked. Asked the api role (4922e82d) and the job role with `ecs-tasks` (bed47e0c), it said
+  "allowed" both times, and both times the live call used a different principal or service.
+  A simulation is only as good as its context entries; the live error message is the truth.
+- **Graduated to:** the preview PassRole lists both ECS principals; the fence test asserts the
+  set; the simulation asks with `ecs.amazonaws.com` too.
+- **Recurred, still OPEN (6th time):** `delivered` with `deployUrl: null`.
+
+
 ## 2026-09-02 — job 4922e82d (Ögonblick, redeliver of run 7, 2nd) — "delivered" without a URL
 42 828 tokens (~USD 0.15). Furthest any delivery has reached: database re-keyed (the #108 fix),
 storage role minted (the #106 fix), boot smoke passed with dependencies installed (#108), the
