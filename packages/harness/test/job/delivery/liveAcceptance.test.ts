@@ -1,4 +1,5 @@
 import { EventEmitter } from 'node:events'
+import { existsSync } from 'node:fs'
 import { mkdir, mkdtemp, rm, writeFile } from 'node:fs/promises'
 import { createServer } from 'node:http'
 import { tmpdir } from 'node:os'
@@ -380,6 +381,89 @@ describe('renderPageInChild (real jsdom child process)', () => {
 			const page = await renderPageInChild(`${origin}/`)
 			expect(page.rootHtml.trim()).toBe('')
 			expect(page.errors.join(' ')).toContain('TypeError')
+		} finally {
+			close()
+		}
+	}, 60_000)
+})
+
+// MARK: the real browser renderer — the one that counts (jsdom cannot run module scripts)
+
+describe('renderPageInChild (real browser vs jsdom on a module-script SPA)', () => {
+	const localBrowser = ['/usr/bin/chromium-browser', '/usr/bin/chromium', '/usr/bin/google-chrome', '/usr/bin/google-chrome-stable'].find(
+		path => existsSync(path)
+	)
+	const moduleApp = `document.getElementById('root').innerHTML = '<main>Module app</main>'`
+	const serveModulePage = () => {
+		const page = `<!doctype html><html><body><div id="root"></div><script type="module" src="/app.js"></script></body></html>`
+		const server = createServer((request, response) => {
+			if (request.url === '/app.js') {
+				response.writeHead(200, { 'content-type': 'text/javascript' })
+				response.end(moduleApp)
+				return
+			}
+			response.writeHead(200, { 'content-type': 'text/html' })
+			response.end(page)
+		})
+		return new Promise<{ origin: string; close: () => void }>(resolve =>
+			server.listen(0, '127.0.0.1', () => {
+				const address = server.address()
+				resolve({
+					origin: `http://127.0.0.1:${typeof address === 'object' && address ? address.port : 0}`,
+					close: () => server.close(),
+				})
+			})
+		)
+	}
+	const withEnv = async (patch: Record<string, string | undefined>, run: () => Promise<void>) => {
+		const previous = Object.fromEntries(Object.keys(patch).map(key => [key, process.env[key]]))
+		for (const [key, value] of Object.entries(patch)) {
+			if (value === undefined) delete process.env[key]
+			else process.env[key] = value
+		}
+		try {
+			await run()
+		} finally {
+			for (const [key, value] of Object.entries(previous)) {
+				if (value === undefined) delete process.env[key]
+				else process.env[key] = value
+			}
+		}
+	}
+
+	it.skipIf(!localBrowser)('renders a <script type="module"> app in a real browser', async () => {
+		const { origin, close } = await serveModulePage()
+		try {
+			await withEnv({ MF_RENDERER: undefined, PLAYWRIGHT_CHROMIUM_EXECUTABLE_PATH: localBrowser, HTTP_PROXY: undefined, HTTPS_PROXY: undefined }, async () => {
+				const page = await renderPageInChild(`${origin}/`)
+				expect(page.reason).toBeUndefined()
+				expect(page.rootHtml).toContain('Module app')
+				expect(page.errors).toEqual([])
+			})
+		} finally {
+			close()
+		}
+	}, 60_000)
+
+	it('jsdom leaves a module-script app blank — the reason the job image ships a browser', async () => {
+		const { origin, close } = await serveModulePage()
+		try {
+			await withEnv({ MF_RENDERER: 'jsdom', MF_REQUIRE_BROWSER: undefined }, async () => {
+				const page = await renderPageInChild(`${origin}/`, undefined, undefined)
+				expect(page.rootHtml.trim()).toBe('')
+			})
+		} finally {
+			close()
+		}
+	}, 60_000)
+
+	it('reports a configured-but-missing browser instead of silently falling back to jsdom', async () => {
+		const { origin, close } = await serveModulePage()
+		try {
+			await withEnv({ MF_RENDERER: undefined, PLAYWRIGHT_CHROMIUM_EXECUTABLE_PATH: '/nonexistent/chromium' }, async () => {
+				const page = await renderPageInChild(`${origin}/`)
+				expect(page.reason).toMatch(/configured browser not found/)
+			})
 		} finally {
 			close()
 		}

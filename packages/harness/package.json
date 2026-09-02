@@ -29,6 +29,7 @@
     "@octokit/auth-app": "^8.3.0",
     "@octokit/rest": "^22.0.1",
     "jsdom": "^26.1.0",
+    "playwright-core": "^1.62.1",
     "zod": "^4.4.3"
   },
   "imports": {
