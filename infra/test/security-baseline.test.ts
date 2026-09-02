@@ -289,6 +289,38 @@ describe('security baseline', () => {
 				assert.ok(boundary, 'CreateRole must require a permissions boundary')
 			})
 
+			// The boundary condition is load-bearing for CreateRole and FATAL for anything else:
+			// `iam:PermissionsBoundary` is a condition key only CreateRole (and the boundary calls)
+			// supply. Any other action in that statement is a grant that never matches. Dogfood run 7
+			// (2026-09-02) put `iam:TagRole` there — CreateRole-with-tags then failed on its implicit
+			// TagRole with AccessDenied, after every gate had passed, and the deploy was lost. The
+			// pre-deploy IAM simulation had only asked about CreateRole, so it said "allowed".
+			it('keeps every action other than CreateRole out of the boundary-conditioned grant', () => {
+				const conditioned = Object.values(web.findResources('AWS::IAM::Policy'))
+					.flatMap(policy => policy.Properties?.PolicyDocument?.Statement ?? [])
+					.filter(
+						(statement: { Condition?: Record<string, Record<string, unknown>> }) =>
+							statement.Condition?.StringEquals?.['iam:PermissionsBoundary'] !== undefined
+					)
+				assert.ok(conditioned.length > 0, 'the boundary-conditioned grant exists')
+				for (const statement of conditioned as { Action?: unknown }[]) {
+					assert.deepEqual(
+						[statement.Action ?? []].flat(),
+						['iam:CreateRole'],
+						'only iam:CreateRole evaluates the iam:PermissionsBoundary key — anything else here silently never matches'
+					)
+				}
+				// …while TagRole (the implicit second call of CreateRole-with-tags) IS granted, unconditioned
+				const tag = Object.values(web.findResources('AWS::IAM::Policy'))
+					.flatMap(policy => policy.Properties?.PolicyDocument?.Statement ?? [])
+					.filter((statement: { Action?: unknown }) =>
+						[statement.Action ?? []].flat().includes('iam:TagRole')
+					) as { Resource: unknown; Condition?: unknown }[]
+				assert.equal(tag.length, 1, 'exactly one grant tags preview roles')
+				assert.equal(tag[0]!.Condition, undefined, 'TagRole must not carry the boundary condition')
+				assert.ok(JSON.stringify(tag[0]!.Resource).includes('mf-preview-app-*'), 'TagRole scoped to preview roles')
+			})
+
 			// PassRole is how a PassRole grant turns into privilege escalation: without a service
 			// condition, anything that can pass a role can hand it to a service of its choosing.
 			it('restricts iam:PassRole on preview roles to ECS tasks', () => {

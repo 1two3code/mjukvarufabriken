@@ -91,6 +91,43 @@ repair-session staging. **Graduated to:** sandbox/orchestrator fixes in
 
 <!-- New entries above the seed section, newest first. -->
 
+## 2026-09-02 — job c15b94b8 (Ögonblick, M) — dogfood run 7, "delivered" without a URL
+6.58 M budget-tokens (~USD 17). **Every gate green for the first time** — verify, acceptance-tests
+(11 green), review, licence, acceptance-check — and the repository was delivered to GitHub
+(`mjukvaruhuset/skapa-en-installerbar-pwa-…-c15b94b8`). The deploy step was then skipped, so no
+live URL; the job still finished `delivered`.
+
+**What the day's fixes bought, confirmed in this run:**
+- The **durable store** (#104) removed run 6's persistence finding: review passed with the worker
+  persisting through `app.store`. Review passing at all is new — runs 4 and 6 both died there.
+- The **merge-repair retry** (#101) recovered a real conflict for the second time
+  (`task/camera-capture`, 207 k tokens, merged `ok: true`).
+- All five tasks merged; one (models-api) hit the 120-turn M cap and was completed by the repair
+  valve, as designed.
+
+- **Phase:** delivery (deploy step)
+- **Symptom:** `object storage provisioning failed: POST /storage → 500` ×4, deploy skipped
+  (fail-closed, correct). Api side: `AccessDenied … not authorized to perform: iam:TagRole on
+  resource: arn:aws:iam::…:role/mf-preview/mf-preview-app-c15b94b8…`.
+- **Root cause:** the api's `MintPreviewAppRoles` grant listed `iam:CreateRole` AND `iam:TagRole`
+  under the `iam:PermissionsBoundary` condition. That condition key is supplied by CreateRole and
+  NOT by TagRole, so the TagRole half of the grant never matched; CreateRole-with-tags makes an
+  implicit TagRole call, which was denied. The pre-deploy IAM simulation
+  (`simulate-principal-policy`) had asked only about CreateRole and PassRole, so it reported
+  "allowed" — a check that verifies the calls you thought of, not the calls the SDK makes.
+- **Graduated to:** infra fix — TagRole moved to the resource-scoped statement (no boundary
+  condition), plus a `security-baseline` fence: **the boundary-conditioned statement may contain
+  `iam:CreateRole` and nothing else**, and TagRole must exist unconditioned on the preview-role
+  resource. The IAM simulation script now asks about TagRole too.
+- **Recurred, still OPEN:** the order/job reads `delivered` with `deployUrl: null` — a build with
+  no URL is presented to the customer as a delivery (first logged after run 4). The repo + bundle
+  contract is honoured, but the status word is wrong for what the customer bought.
+
+**Next run's expectation:** with TagRole granted, the storage role mints, the deploy proceeds and
+the live acceptance check runs for the first time on this app — against a database-backed store
+and an S3-backed upload path, both of which are exercised live for the first time.
+
+
 ## 2026-09-02 — job 551edb6c (Ögonblick, M) — dogfood run 6, FAILED at review
 7.97 M budget-tokens (~USD 20). Furthest any run has reached: verify ok, acceptance-tests ok
 (11 green), **review failed** on two high findings — both genuine, neither seen before.
