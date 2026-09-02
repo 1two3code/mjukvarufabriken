@@ -3,7 +3,7 @@ import styles from './JobStatusCard.module.css'
 import { useTranslation } from 'react-i18next'
 import { isActiveJobStatus } from '@mf/models'
 
-import { useKillJobMutation } from '#/features/jobs/jobsApiSlice.ts'
+import { useKillJobMutation, useRedeliverJobMutation } from '#/features/jobs/jobsApiSlice.ts'
 
 import { Has } from '#/layouts/Has.tsx'
 import { Button } from '#/components/Button.tsx'
@@ -32,8 +32,12 @@ const formatTokens = (value: number, language: string) =>
 export function JobStatusCard({ job }: JobStatusCardProps) {
 	const { t, i18n } = useTranslation()
 	const [kill, { isLoading: isKilling }] = useKillJobMutation()
+	const [redeliver, { isLoading: isRedelivering }] = useRedeliverJobMutation()
 	const percent = Math.min(100, Math.round((job.tokensUsed / job.budget.maxTokens) * 100))
 	const active = isActiveJobStatus(job.status)
+	// A finished job whose repository reached GitHub can be delivered again without a rebuild —
+	// the retry for "the build passed, the preview did not come up"
+	const redeliverable = !active && /^https:\/\/github\.com\//.test(job.repositoryUrl ?? '')
 
 	return (
 		<section className={styles.card}>
@@ -82,6 +86,14 @@ export function JobStatusCard({ job }: JobStatusCardProps) {
 						</Button>
 					</div>
 				</Has>
+			)}
+			{redeliverable && (
+				<div className={styles.actions}>
+					<Button size="small" disabled={isRedelivering} onClick={() => redeliver(job.orderId)}>
+						{t('job.card.action.redeliver')}
+					</Button>
+					<p className={styles.hint}>{t('job.card.action.redeliverHint')}</p>
+				</div>
 			)}
 		</section>
 	)

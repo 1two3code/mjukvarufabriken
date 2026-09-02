@@ -968,3 +968,14 @@ describe('deliver', () => {
 		expect(deploy.taskRoleArns).toEqual([undefined])
 	})
 })
+
+describe('clone invocation (redelivery)', () => {
+	it('keeps the installation token out of argv, like the push', async () => {
+		const { buildCloneInvocation } = await import('#job/delivery/github.ts')
+		const token = 'ghs_secret_token_value'
+		const { args, env } = buildCloneInvocation('https://github.com/o/r.git', '/work/repo', token)
+		expect(args.join(' ')).not.toContain(token)
+		expect(args).toContain('clone')
+		expect(Object.values(env)).toContain(token)
+	})
+})

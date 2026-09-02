@@ -12,6 +12,9 @@ import {
 	JobAlreadyActive,
 	JobNotAwaitingApproval,
 	MalformedGateReport,
+	NothingToRedeliver,
+	provisioningJobIdOf,
+	redeliveryBudget,
 	ReportUnauthorized,
 	SpecNotFrozen,
 	StatusRegression,
@@ -312,6 +315,7 @@ describe('Job Service', () => {
 				killed: true,
 				approveBeforeDeliver: false,
 				approved: false,
+				mode: 'build',
 			})
 		})
 
@@ -992,6 +996,134 @@ describe('Job Service', () => {
 			expect(deliverableFromEvents(events)).toEqual(deliverable)
 			expect(deliverableFromEvents(events.slice(0, 2))).toEqual(older)
 			expect(deliverableFromEvents([])).toBeUndefined()
+		})
+	})
+
+	describe('redeliver', () => {
+		const delivered = (overrides = {}) =>
+			createMockJob({
+				id: 'job-build',
+				orderId: 'order-1',
+				status: 'delivered',
+				repositoryUrl: 'https://github.com/mjukvaruhuset/guestbook-jobbuild',
+				createdAt: '2026-09-02T10:00:00.000Z',
+				...overrides,
+			})
+
+		beforeEach(() => {
+			vi.spyOn(app.specService, 'get').mockResolvedValue(
+				createMockSpecDraft({ orderId: 'order-1', status: 'frozen', orgId: 'org-1' })
+			)
+		})
+
+		it('Inserts a redeliver job pointing at the newest job that delivered a repository', async () => {
+			// Arrange — an older build with a repo, a newer failed build with only a file:// repo
+			vi.spyOn(app.db.jobs, 'list').mockResolvedValue([
+				delivered({ id: 'job-old', createdAt: '2026-09-01T10:00:00.000Z' }),
+				delivered(),
+				createMockJob({
+					id: 'job-failed',
+					status: 'failed',
+					repositoryUrl: 'file:///work/repo',
+					createdAt: '2026-09-02T12:00:00.000Z',
+				}),
+			])
+
+			// Act
+			await app.jobService.redeliver('order-1', user)
+
+			// Assert
+			expect(app.db.jobs.insert).toHaveBeenCalledWith(
+				expect.objectContaining({
+					orderId: 'order-1',
+					mode: 'redeliver',
+					sourceJobId: 'job-build',
+					budget: redeliveryBudget,
+				})
+			)
+			expect(app.ecs.runJob).toHaveBeenCalledTimes(1)
+		})
+
+		it('Chains through an earlier redelivery to the build it delivered', async () => {
+			vi.spyOn(app.db.jobs, 'list').mockResolvedValue([
+				delivered(),
+				delivered({
+					id: 'job-redeliver-1',
+					mode: 'redeliver',
+					sourceJobId: 'job-build',
+					createdAt: '2026-09-02T11:00:00.000Z',
+				}),
+			])
+			vi.spyOn(app.db.jobs, 'get').mockResolvedValue(delivered())
+
+			await app.jobService.redeliver('order-1', user)
+
+			expect(app.db.jobs.insert).toHaveBeenCalledWith(
+				expect.objectContaining({ sourceJobId: 'job-build' })
+			)
+		})
+
+		it('Refuses when no job of the order got a repository onto GitHub', async () => {
+			vi.spyOn(app.db.jobs, 'list').mockResolvedValue([
+				createMockJob({ status: 'failed', repositoryUrl: 'file:///work/repo' }),
+			])
+
+			await expect(app.jobService.redeliver('order-1', user)).rejects.toBeInstanceOf(
+				NothingToRedeliver
+			)
+			expect(app.db.jobs.insert).not.toHaveBeenCalled()
+		})
+
+		it('Refuses while a job of the order is still active', async () => {
+			vi.spyOn(app.db.jobs, 'list').mockResolvedValue([
+				delivered(),
+				createMockJob({ id: 'job-running', status: 'building' }),
+			])
+
+			await expect(app.jobService.redeliver('order-1', user)).rejects.toBeInstanceOf(
+				JobAlreadyActive
+			)
+		})
+
+		it("Is scoped to the caller's org through the spec draft", async () => {
+			vi.spyOn(app.specService, 'get').mockRejectedValue(new EntityNotFound('spec', 'order-1'))
+
+			await expect(app.jobService.redeliver('order-1', user)).rejects.toBeInstanceOf(
+				EntityNotFound
+			)
+			expect(app.db.jobs.insert).not.toHaveBeenCalled()
+		})
+	})
+
+	describe('redelivery resources', () => {
+		it('provisions a redeliver job on its SOURCE job id, a build on its own', () => {
+			expect(provisioningJobIdOf(createMockJob({ id: 'job-2', mode: 'redeliver', sourceJobId: 'job-1' }))).toBe('job-1')
+			expect(provisioningJobIdOf(createMockJob({ id: 'job-2' }))).toBe('job-2')
+		})
+
+		it('report view of a redeliver job carries the source repository, plan and gates', async () => {
+			const source = createMockJob({
+				id: 'job-1',
+				status: 'delivered',
+				repositoryUrl: 'https://github.com/mjukvaruhuset/guestbook-job1',
+			})
+			vi.spyOn(app.db.jobs, 'get').mockResolvedValue(source)
+			const view = await app.jobService.reportView(
+				createMockJob({ id: 'job-2', mode: 'redeliver', sourceJobId: 'job-1' })
+			)
+			expect(view.mode).toBe('redeliver')
+			expect(view.source).toEqual({
+				jobId: 'job-1',
+				repositoryUrl: source.repositoryUrl,
+				plan: source.plan,
+				gates: source.gates,
+			})
+		})
+
+		it('report view of a build has no source', async () => {
+			const view = await app.jobService.reportView(createMockJob({ id: 'job-1' }))
+			expect(view.mode).toBe('build')
+			expect(view.source).toBeUndefined()
 		})
 	})
 })

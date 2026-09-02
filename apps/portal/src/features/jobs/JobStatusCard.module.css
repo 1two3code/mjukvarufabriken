@@ -82,3 +82,9 @@
 	display: flex;
 	justify-content: flex-end;
 }
+
+.hint {
+	margin: 0;
+	font-size: var(--font-size-sm, 0.875rem);
+	color: var(--color-text-muted, #6b7280);
+}

@@ -1,4 +1,5 @@
 import { JobDatabaseResponseSchema } from '@mf/models'
+import { provisioningJobIdOf } from '#/services/jobService.ts'
 import { tryCatch } from '@mf/utils/function'
 
 import { authenticateJobReport, jobParams } from '#/routes/internal/jobs/jobToken.utils.ts'
@@ -21,7 +22,7 @@ const route: FastifyPluginAsyncZod = async function (app) {
 	app.post('/internal/jobs/:jobId/database', { schema }, async (request, reply) => {
 		const job = await authenticateJobReport(app, request, reply, request.params.jobId)
 		if (!job) return
-		const [error, result] = await tryCatch(app.previewDbService.provision(job.id))
+		const [error, result] = await tryCatch(app.previewDbService.provision(provisioningJobIdOf(job)))
 		if (error) return reply.error(error instanceof ProvisioningUnavailable ? 503 : 500, error)
 		return reply.send(result)
 	})
