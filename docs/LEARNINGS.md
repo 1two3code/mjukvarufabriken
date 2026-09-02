@@ -91,6 +91,34 @@ repair-session staging. **Graduated to:** sandbox/orchestrator fixes in
 
 <!-- New entries above the seed section, newest first. -->
 
+## 2026-09-02 — job 41895aa7 (Ögonblick, redeliver of run 8) — FIRST FULLY GREEN DELIVERY
+33 010 tokens (~USD 0.10). `docs → secret-scan → repo → deploy → acceptance → bundle` all green,
+`status: delivered` **with** `deployUrl`:
+`https://mf-a8880416277f451fb0e382ff8878418e.ecs.eu-north-1.on.aws` — the delivered PWA served
+by ECS Express from the job's own credentials, on its own database (durable store over TLS) and
+its own S3 prefix/role, and judged working by a real browser. Verified from outside afterwards:
+`/` 200, `/bff/photos` 200 `[]`, `/health` 200, `/manifest.webmanifest` 200.
+
+**What it took, from the top of this file down:** run 7 proved the build half (every gate green,
+repository delivered); seven redeliveries at ~USD 0.10–0.20 each then walked the deploy half one
+defect at a time — TagRole, role re-key + deps on clone, PassRole principal ×2,
+RegisterTaskDefinition, private subnets, store SSL + ATTACHMENTS_BUCKET + readiness, and finally
+the jsdom renderer — while run 8 (~USD 17) rebuilt the app with the template fixes. Total on this
+order today: two builds (~USD 34) + seven redeliveries (~USD 1). The same iteration as rebuilds
+would have been ~USD 150.
+
+**Still OPEN after today (in priority order):**
+1. **`delivered` without `deployUrl`** — recurred ten times today. A build whose preview was
+   withheld must not read "delivered" to the customer; the status word is wrong for what they
+   bought. Product decision + a small state change.
+2. **Redelivery to an existing service does not roll a new image** — `createOrDescribe` treats
+   "already exists" as live. Right for an SDK retry (and it is what made this redelivery cheap),
+   wrong when the app changed: needs `UpdateExpressGatewayService`.
+3. **Preview teardown** — run 7's broken preview service and its database/role are still
+   running in dev; nothing tears a preview down yet.
+4. The portal's "Open the repository" link before delivery still points at `file:///work/repo`.
+
+
 ## 2026-09-02 — job 9bfd0c56 (Ögonblick, M) — dogfood run 8, everything green but the render
 6.72 M budget-tokens (~USD 17). **All five gates green** (review: 2 findings, none open), all
 tasks merged clean without a repair, repository delivered, **deploy green** at a public Express
