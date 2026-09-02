@@ -119,6 +119,10 @@ npm run build
 - The preview URL in the portal is a throwaway Amazon ECS Express Mode service Mjukvaruhuset creates from a container image built from this repo — it is a convenience preview, not your production deployment. Use \`infra/\` above for that.
 - CI: \`.github/workflows/ci.yml\` runs lint, tests and build on every push/PR to \`main\`.
 
+## Built by Mjukvaruhuset footer
+
+The app shows a one-line "Built by Mjukvaruhuset — order your own" caption under its content, linking to https://mjukvaruhuset.se (\`apps/app/src/components/builtBy/BuiltBy.tsx\`, mounted in \`App.tsx\`). It is part of every delivery. To hide it, set \`VITE_BUILT_BY_URL=\` (empty) in \`apps/app/.env\` and rebuild — no code change needed.
+
 ## Acceptance tests
 
 One test file per acceptance criterion, \`<criterion id>.test.ts\`, under \`apps/*/acceptance/\`. Run them with \`npm test\`. The mapping from criterion to evidence is in \`TEST-REPORT.md\`.

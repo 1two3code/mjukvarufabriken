@@ -604,6 +604,42 @@ describe('deliver', () => {
 		])
 	})
 
+	it('Logs the built-by footer verdict from the live check as information — never a failure (F5)', async () => {
+		// Arrange — the rendered page lost the template footer; the app itself is fine
+		const liveCheck = createFakeLiveCheck({ ok: true, probes: [], builtByFooter: false })
+		const { clients } = createClients({ liveCheck })
+		const input = createInput(repoDir)
+
+		// Act
+		const outcome = await deliver(input, clients)
+
+		// Assert — delivered with the URL intact; the missing footer is a log line, nothing more
+		expect(outcome.ok).toBe(true)
+		expect(outcome.deliverable?.deployUrl).toBe(liveCheck.calls[0]!.url)
+		expect(outcome.steps.find(step => step.step === 'acceptance')).toMatchObject({ ok: true })
+		const footerLogsOf = (events: NewJobEvent[]) =>
+			events
+				.filter(event => event.type === 'log')
+				.map(event => (event.payload as { message: string }).message)
+				.filter(message => message.startsWith('built-by footer'))
+		const logs = footerLogsOf(input.events)
+		expect(logs).toEqual([expect.stringContaining('built-by footer: MISSING')])
+		expect(logs[0]).toContain(outcome.deliverable!.deployUrl!)
+		expect(input.events.map(event => event.type)).not.toContain('notify')
+
+		// A present footer logs the positive line; a check without a render logs nothing
+		const present = createInput(repoDir)
+		const presentCheck = createFakeLiveCheck({ ok: true, probes: [], builtByFooter: true })
+		await deliver(present, createClients({ liveCheck: presentCheck }).clients)
+		expect(footerLogsOf(present.events)).toEqual([
+			expect.stringContaining('built-by footer: present'),
+		])
+		const unknown = createInput(repoDir)
+		const unknownCheck = createFakeLiveCheck({ ok: true, probes: [] })
+		await deliver(unknown, createClients({ liveCheck: unknownCheck }).clients)
+		expect(footerLogsOf(unknown.events)).toEqual([])
+	})
+
 	it('Withholds the URL but keeps the service recorded when the live acceptance check fails', async () => {
 		// Arrange — the guestbook shape caught live: the probe reports the visitor locked out
 		const liveCheck = createFakeLiveCheck({
