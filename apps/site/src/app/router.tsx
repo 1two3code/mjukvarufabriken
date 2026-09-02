@@ -10,12 +10,14 @@ import { HowItWorksPage } from '#/pages/HowItWorksPage.tsx'
 import { NotFoundPage } from '#/pages/NotFoundPage.tsx'
 import { PricingPage } from '#/pages/PricingPage.tsx'
 import { PrivacyPage } from '#/pages/PrivacyPage.tsx'
+import { QuotePage } from '#/pages/QuotePage.tsx'
 import { TermsPage } from '#/pages/TermsPage.tsx'
 
 import type { Page, RouteHandle } from '#/app/routes.ts'
 
 const elements: Record<Page, React.ReactNode> = {
 	home: <HomePage />,
+	quote: <QuotePage />,
 	howItWorks: <HowItWorksPage />,
 	demos: <DemosPage />,
 	pricing: <PricingPage />,

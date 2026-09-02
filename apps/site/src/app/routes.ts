@@ -5,6 +5,7 @@ export const defaultLanguage: Language = 'sv'
 
 export const pages = [
 	'home',
+	'quote',
 	'howItWorks',
 	'demos',
 	'pricing',
@@ -17,6 +18,8 @@ export type Page = (typeof pages)[number]
 /** Every page has one path per language; Swedish is the default and lives at the root */
 export const pagePaths: Record<Page, Record<Language, string>> = {
 	home: { sv: '/', en: '/en' },
+	/** The no-login spec chat → fixed quote (wave 14, F1) */
+	quote: { sv: '/offert', en: '/en/quote' },
 	howItWorks: { sv: '/sa-funkar-det', en: '/how-it-works' },
 	// The public demo gallery (wave 14, F3)
 	demos: { sv: '/demoappar', en: '/en/demos' },

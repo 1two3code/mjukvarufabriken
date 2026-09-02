@@ -98,7 +98,7 @@ export function PricingPage() {
 			</Section>
 
 			<div className={styles.actions}>
-				<ButtonLink href={import.meta.env.VITE_PORTAL_URL}>{t('home.hero.cta')}</ButtonLink>
+				<ButtonLink to={pathTo('quote')}>{t('home.hero.cta')}</ButtonLink>
 				<ButtonLink to={pathTo('contact')} color="secondary">
 					{t('pricing.cta.contact')}
 				</ButtonLink>

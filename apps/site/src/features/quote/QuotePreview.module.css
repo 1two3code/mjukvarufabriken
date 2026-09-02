@@ -1,0 +1,124 @@
+/* MARK: Layout */
+.preview {
+	display: flex;
+	flex-direction: column;
+	gap: var(--spacing-s);
+
+	padding: var(--spacing-s);
+	border: var(--border-width-xs) solid var(--divider-color);
+	border-radius: var(--border-radius-base);
+
+	background: var(--content-background);
+}
+
+.header {
+	display: flex;
+	gap: var(--spacing-xs);
+	align-items: center;
+	justify-content: space-between;
+}
+
+.title {
+	margin: 0;
+}
+
+/* MARK: Status */
+.status {
+	composes: composable-subheader-font from global;
+	padding: var(--spacing-xxs) var(--spacing-xs);
+	border-radius: var(--border-radius-xs);
+	color: var(--inverted-text-color);
+}
+
+.incomplete {
+	background: var(--caution);
+}
+
+.complete {
+	background: var(--success);
+}
+
+.frozen {
+	background: var(--info);
+}
+
+.completeness {
+	margin: 0;
+	color: var(--secondary-text-color);
+}
+
+/* MARK: Price */
+.price {
+	display: flex;
+	gap: var(--spacing-s);
+	align-items: baseline;
+
+	padding: var(--spacing-xs) var(--spacing-s);
+	border-radius: var(--border-radius-s);
+
+	background: var(--secondary-button-color);
+}
+
+.sizeClass {
+	composes: composable-subheader-font from global;
+}
+
+.priceValue {
+	font-size: var(--font-size-l);
+	font-weight: 700;
+}
+
+/* MARK: Blocks */
+.block {
+	display: flex;
+	flex-direction: column;
+	gap: var(--spacing-xxs);
+}
+
+.blockTitle {
+	composes: composable-subheader-font from global;
+	margin: 0;
+	color: var(--secondary-text-color);
+}
+
+.list {
+	margin: 0;
+	padding-left: var(--spacing-base);
+}
+
+.missing {
+	margin: 0;
+	font-style: italic;
+	color: var(--caution);
+}
+
+.none {
+	margin: 0;
+	font-style: italic;
+	color: var(--secondary-text-color);
+}
+
+/* MARK: Features */
+.feature {
+	display: flex;
+	flex-direction: column;
+	gap: var(--spacing-xxs);
+
+	padding: var(--spacing-xs) var(--spacing-s);
+	border-left: 0.3rem solid var(--brand-500);
+}
+
+.featureTitle {
+	margin: 0;
+	font-size: var(--font-size-base);
+}
+
+.featureDescription {
+	margin: 0;
+	color: var(--secondary-text-color);
+}
+
+.criteriaLabel {
+	composes: composable-caption-font from global;
+	color: var(--secondary-text-color);
+}

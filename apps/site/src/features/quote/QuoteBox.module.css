@@ -1,0 +1,58 @@
+/* MARK: Layout */
+.box {
+	display: flex;
+	flex-direction: column;
+	gap: var(--spacing-xs);
+
+	padding: var(--spacing-base);
+	border: var(--border-width-xs) solid var(--divider-color);
+	border-radius: var(--border-radius-base);
+
+	background: var(--content-background);
+}
+
+.fixed {
+	border-color: var(--brand-500);
+}
+
+.title {
+	margin: 0;
+}
+
+/* MARK: Price */
+.label {
+	composes: composable-subheader-font from global;
+	margin: 0;
+	color: var(--secondary-text-color);
+}
+
+.price {
+	margin: 0;
+	font-size: var(--font-size-xl);
+	font-weight: 700;
+	color: var(--brand-500);
+}
+
+.size {
+	margin: 0;
+	color: var(--secondary-text-color);
+}
+
+.terms,
+.pending,
+.hint {
+	margin: 0;
+	font-size: var(--font-size-s);
+	line-height: 1.5;
+	color: var(--secondary-text-color);
+}
+
+/* MARK: Actions */
+.actions {
+	display: flex;
+	flex-wrap: wrap;
+	gap: var(--spacing-xs);
+	align-items: center;
+
+	padding-top: var(--spacing-xs);
+}

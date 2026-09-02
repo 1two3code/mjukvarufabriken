@@ -48,7 +48,7 @@ export function HowItWorksPage() {
 			</Section>
 
 			<div className={styles.actions}>
-				<ButtonLink href={import.meta.env.VITE_PORTAL_URL}>{t('home.hero.cta')}</ButtonLink>
+				<ButtonLink to={pathTo('quote')}>{t('home.hero.cta')}</ButtonLink>
 				<ButtonLink to={pathTo('pricing')} color="secondary">
 					{t('nav.pricing')}
 				</ButtonLink>
