@@ -91,6 +91,34 @@ repair-session staging. **Graduated to:** sandbox/orchestrator fixes in
 
 <!-- New entries above the seed section, newest first. -->
 
+## 2026-09-02 — job 3583768f (Ögonblick, redeliver of run 7) — "delivered" without a URL
+27 757 tokens (~USD 0.10 — the point of the redeliver path, #107). Clone → docs → secret scan →
+repo push (existing repository reused) all passed; the deploy was skipped, the bundle uploaded.
+Two defects, both first-exercise bugs on the redelivery path, both fixed in the same PR:
+
+- **Phase:** delivery (deploy step, database provisioning)
+- **Symptom 1:** `POST /database → 500`: `permission denied to alter role … Only roles with the
+  SUPERUSER attribute may change the SUPERUSER attribute` on
+  `ALTER ROLE mf_app_… WITH LOGIN PASSWORD '…' NOSUPERUSER NOCREATEDB NOCREATEROLE`.
+- **Root cause 1:** the re-key branch (role already exists — exactly the redelivery case, never
+  reached by a fresh build) restated the role attributes. The RDS master user is `rds_superuser`,
+  not SUPERUSER, and Postgres refuses even a no-op `NOSUPERUSER` from it (42501).
+- **Graduated to:** password-only re-key (`ALTER ROLE … WITH PASSWORD`); the unit test now asserts
+  no `ALTER ROLE` statement mentions SUPERUSER.
+- **Symptom 2:** `npm run build failed (127): sh: vite: not found` while building the handover
+  site for the bundle (best-effort, so the bundle still shipped).
+- **Root cause 2:** a redelivery starts from a bare clone; a build starts from a seed with
+  node_modules. Nothing installed dependencies on the clone path, so the boot smoke would have
+  failed the same way had the deploy not been skipped first.
+- **Graduated to:** `installDependencies` (extracted from the seed) runs after every clone.
+- **Recurred, still OPEN (4th time):** `delivered` with `deployUrl: null`.
+
+**Pattern note:** both are "the branch a fresh build never takes" — the same lesson as the
+template's in-memory store and the fake provisioners: a path that only a retry exercises is
+untested until the first retry. Worth a redelivery in the offline e2e (fake clients already
+support it) before the next paid run.
+
+
 ## 2026-09-02 — job c15b94b8 (Ögonblick, M) — dogfood run 7, "delivered" without a URL
 6.58 M budget-tokens (~USD 17). **Every gate green for the first time** — verify, acceptance-tests
 (11 green), review, licence, acceptance-check — and the repository was delivered to GitHub
