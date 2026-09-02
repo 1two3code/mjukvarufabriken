@@ -155,7 +155,12 @@ describe('security baseline', () => {
 					JSON.stringify(s.Resource).includes('mf-preview-app-*')
 				)
 				assert.ok(previewPass, 'the job passes preview app roles (it creates the Express service)')
-				assert.equal(previewPass.Condition.StringEquals['iam:PassedToService'], 'ecs-tasks.amazonaws.com')
+				// Both ECS principals — the Express control plane (`ecs`) is the one that passes the
+				// task role on service creation; `ecs-tasks` alone was refused live (redelivery bed47e0c)
+				assert.deepEqual(
+					new Set([previewPass.Condition.StringEquals['iam:PassedToService']].flat()),
+					new Set(['ecs-tasks.amazonaws.com', 'ecs.amazonaws.com'])
+				)
 				const passedServices = passRoles.flatMap(s => {
 					const value = s.Condition.StringEquals['iam:PassedToService']
 					return Array.isArray(value) ? value : [value]

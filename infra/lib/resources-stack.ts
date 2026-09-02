@@ -793,7 +793,15 @@ export class ResourcesStack extends Stack {
 				sid: 'PassPreviewAppRolesToEcs',
 				actions: ['iam:PassRole'],
 				resources: [`arn:aws:iam::${this.account}:role/mf-preview/mf-preview-app-*`],
-				conditions: { StringEquals: { 'iam:PassedToService': 'ecs-tasks.amazonaws.com' } },
+				// Both principals, like PassExpressRoles above: an Express gateway service is created
+				// by the ECS control plane (`ecs.amazonaws.com`), which is the principal that passes
+				// the task role on — `ecs-tasks` alone was refused on redelivery bed47e0c even though
+				// simulate-principal-policy (asked with ecs-tasks) had said "allowed".
+				conditions: {
+					StringEquals: {
+						'iam:PassedToService': ['ecs-tasks.amazonaws.com', 'ecs.amazonaws.com'],
+					},
+				},
 			})
 		)
 		this.jobTaskDefinition.taskRole.addToPrincipalPolicy(
