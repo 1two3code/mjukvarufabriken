@@ -1,4 +1,4 @@
-import { createPostgresStore, ensureTableSql } from '#/plugins/store.utils.ts'
+import { createPostgresStore, ensureTableSql, sslOptionOf } from '#/plugins/store.utils.ts'
 
 import type { Query } from '#/plugins/store.utils.ts'
 
@@ -108,5 +108,25 @@ describe('Postgres store backend', () => {
 
 		// Assert
 		expect(close).toHaveBeenCalledOnce()
+	})
+})
+
+describe('sslOptionOf', () => {
+	it('translates no-verify (node-postgres vocabulary) into an unverified TLS connection', () => {
+		const { url, ssl } = sslOptionOf('postgres://app:pw@db.example.rds.amazonaws.com:5432/app?sslmode=no-verify')
+		expect(ssl).toEqual({ rejectUnauthorized: false })
+		expect(url).not.toContain('sslmode')
+	})
+
+	it('keeps verify-full as verification and disable as plaintext', () => {
+		expect(sslOptionOf('postgres://a:b@h/db?sslmode=verify-full').ssl).toBe('verify-full')
+		expect(sslOptionOf('postgres://a:b@h/db?sslmode=disable').ssl).toBe(false)
+	})
+
+	it('defaults to plaintext when no mode is given (local docker)', () => {
+		expect(sslOptionOf('postgres://a:b@localhost:5432/db')).toEqual({
+			url: 'postgres://a:b@localhost:5432/db',
+			ssl: false,
+		})
 	})
 })

@@ -291,10 +291,15 @@ export const deliver = async (
 				storageRoleArn = storage.roleArn
 				// The app reads its credentials from the task metadata endpoint (the role below), so
 				// only the NAMES go into the env — never a key.
+				// The template's own names first (its objectStorage plugin reads exactly these — the
+				// first live app kept its uploads in memory because only S3_* were injected), then the
+				// generic ones a worker-written client might read
+				manifest.env.ATTACHMENTS_BUCKET = storage.bucket
+				manifest.env.ATTACHMENTS_PREFIX = storage.prefix
 				manifest.env.S3_BUCKET = storage.bucket
 				manifest.env.S3_PREFIX = storage.prefix
 				manifest.env.AWS_REGION = storage.region
-				for (const name of ['S3_BUCKET', 'AWS_S3_BUCKET', 'STORAGE_BUCKET', 'BUCKET_NAME']) {
+				for (const name of ['ATTACHMENTS_BUCKET', 'S3_BUCKET', 'AWS_S3_BUCKET', 'STORAGE_BUCKET', 'BUCKET_NAME']) {
 					if (manifest.required.includes(name)) manifest.env[name] = storage.bucket
 					manifest.placeholders = manifest.placeholders.filter(entry => entry !== name)
 					manifest.todos = manifest.todos.filter(todo => !todo.includes(name))

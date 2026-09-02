@@ -174,7 +174,10 @@ export const createLiveAcceptanceCheck = ({
 	fetchFn = fetch,
 	render = renderPageInChild,
 	mintToken,
-	readinessTimeoutMs = 3 * 60_000,
+	// A fresh Express load balancer took ~10 minutes to answer at all on the first live delivery
+	// (a92fb019, 2026-09-02): the endpoint name existed before its DNS resolved and its target
+	// went healthy. Three minutes judged a healthy app "no response".
+	readinessTimeoutMs = 12 * 60_000,
 	readinessIntervalMs = 5_000,
 	sleep = defaultSleep,
 	now = Date.now,

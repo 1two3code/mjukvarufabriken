@@ -1,7 +1,7 @@
 import fp from 'fastify-plugin'
 import postgres from 'postgres'
 
-import { createMemoryStore, createPostgresStore } from '#/plugins/store.utils.ts'
+import { createMemoryStore, createPostgresStore, sslOptionOf } from '#/plugins/store.utils.ts'
 
 import type { FastifyPluginAsync } from 'fastify'
 import type { StoreBackend } from '#/plugins/store.utils.ts'
@@ -39,9 +39,10 @@ const plugin: FastifyPluginAsync = async app => {
 	app.addHook('onClose', () => store.close())
 }
 
-/** Connects lazily (first query), fails fast on an unreachable host, honours `?sslmode=` in the URL */
-const durableStore = (url: string) => {
-	const sql = postgres(url, { connect_timeout: 10, max: 5 })
+/** Connects lazily (first query), fails fast on an unreachable host, translates `?sslmode=` itself */
+const durableStore = (rawUrl: string) => {
+	const { url, ssl } = sslOptionOf(rawUrl)
+	const sql = postgres(url, { connect_timeout: 10, max: 5, ssl })
 	return createPostgresStore(
 		(text, params = []) => sql.unsafe(text, params as never),
 		() => sql.end({ timeout: 5 })

@@ -241,7 +241,7 @@ const storageDependencies = [
 ]
 
 /** Env names that mean the app was written expecting a bucket */
-const storageEnvNames = ['S3_BUCKET', 'AWS_S3_BUCKET', 'STORAGE_BUCKET', 'BUCKET_NAME']
+const storageEnvNames = ['ATTACHMENTS_BUCKET', 'S3_BUCKET', 'AWS_S3_BUCKET', 'STORAGE_BUCKET', 'BUCKET_NAME']
 
 export type StorageNeed = { needed: boolean; evidence: string[] }
 

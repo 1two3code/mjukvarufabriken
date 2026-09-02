@@ -923,6 +923,8 @@ describe('deliver', () => {
 			'arn:aws:iam::123456789012:role/mf-preview/mf-preview-app-1111222233334444',
 		])
 		expect(deploy.envs[0]).toMatchObject({
+			ATTACHMENTS_BUCKET: 'mf-preview-test',
+			ATTACHMENTS_PREFIX: 'preview/1111222233334444/',
 			S3_BUCKET: 'mf-preview-test',
 			S3_PREFIX: 'preview/1111222233334444/',
 			AWS_REGION: 'eu-north-1',
