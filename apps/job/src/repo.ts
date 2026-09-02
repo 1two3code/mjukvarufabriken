@@ -100,14 +100,21 @@ export const seedRepo = async (
 		env,
 	})
 
-	if (!(await exists(join(repoDir, 'node_modules')))) {
-		const install = await exec('npm', ['i', '--no-audit', '--no-fund', '--ignore-scripts'], {
-			cwd: repoDir,
-			timeoutMs: 10 * 60_000,
-		})
-		if (install.code !== 0) throw new Error(`npm i in seeded repo failed:\n${install.stderr}`)
-	}
+	if (!(await exists(join(repoDir, 'node_modules')))) await installDependencies(repoDir)
 	return repoDir
+}
+
+/**
+ * `npm i` in a repository that has none: the seeded template when the image ships without
+ * node_modules, and every redelivery clone (the first one built its handover site with
+ * `sh: vite: not found` — job 3583768f, 2026-09-02).
+ */
+export const installDependencies = async (repoDir: string) => {
+	const install = await exec('npm', ['i', '--no-audit', '--no-fund', '--ignore-scripts'], {
+		cwd: repoDir,
+		timeoutMs: 10 * 60_000,
+	})
+	if (install.code !== 0) throw new Error(`npm i in ${repoDir} failed:\n${install.stderr}`)
 }
 
 export { gitIdentity }

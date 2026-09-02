@@ -71,7 +71,9 @@ describe('provisionPreviewDatabase', () => {
 		const { db, statements } = fakeAdminDb({ role: true, database: true })
 		const { name } = await provisionPreviewDatabase(db, 'job-1234-abcd')
 
-		expect(statements.some(text => text.startsWith(`ALTER ROLE ${name} WITH LOGIN PASSWORD`))).toBe(true)
+		expect(statements.some(text => text.startsWith(`ALTER ROLE ${name} WITH PASSWORD`))).toBe(true)
+		// The RDS master user cannot restate role attributes (42501) — the re-key must be password-only
+		expect(statements.filter(text => text.startsWith('ALTER ROLE')).every(text => !/SUPERUSER/.test(text))).toBe(true)
 		expect(statements.some(text => text.startsWith('CREATE DATABASE'))).toBe(false)
 		expect(statements).toContain(`ALTER DATABASE ${name} OWNER TO ${name}`)
 	})

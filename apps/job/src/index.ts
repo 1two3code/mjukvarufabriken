@@ -27,7 +27,7 @@ import { Cassette, recordQuery, recordSpecEngineClient } from '@mf/harness/testi
 import { startAnthropicForwardProxy } from '#/anthropicForwardProxy.ts'
 import { loadConfig } from '#/config.ts'
 import { installCrashHandlers } from '#/crash.ts'
-import { gitIdentity, seedRepo } from '#/repo.ts'
+import { gitIdentity, installDependencies, seedRepo } from '#/repo.ts'
 import { createApiReporter, createDbReporter } from '#/reporter.ts'
 
 import type { NewJobEvent } from '@mf/models'
@@ -169,6 +169,8 @@ const redeliver = async (deliveryClients: DeliveryClients) => {
 	const repoDir = join(config.workDir, 'repo')
 	log('cloning source repository', { jobId, sourceJobId: source.jobId, repositoryUrl: source.repositoryUrl })
 	await deliveryClients.github.clone({ cloneUrl: `${source.repositoryUrl}.git`, dir: repoDir })
+	log('installing dependencies', { jobId, repoDir })
+	await installDependencies(repoDir)
 	await setStatus({ status: 'verifying', repositoryUrl: source.repositoryUrl })
 
 	const target = { ...deliveryTarget(), slug: slugFor(source.jobId) }

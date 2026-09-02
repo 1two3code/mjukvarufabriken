@@ -102,9 +102,13 @@ export const provisionPreviewDatabase = async (
 	const password = generateDbPassword()
 	const roleExists =
 		(await db.query('SELECT 1 FROM pg_roles WHERE rolname = $1', [name])).length > 0
+	// Re-key only on the redelivery path: the attributes were fixed at creation, and the RDS master
+	// user (rds_superuser, not SUPERUSER) may not even restate NOSUPERUSER — `ALTER ROLE … NOSUPERUSER`
+	// is 42501 "only roles with the SUPERUSER attribute may change the SUPERUSER attribute". That
+	// exact statement failed the first redelivery (job 3583768f, 2026-09-02).
 	await db.query(
 		roleExists
-			? `ALTER ROLE ${name} WITH LOGIN PASSWORD '${password}' NOSUPERUSER NOCREATEDB NOCREATEROLE`
+			? `ALTER ROLE ${name} WITH PASSWORD '${password}'`
 			: `CREATE ROLE ${name} WITH LOGIN PASSWORD '${password}' NOSUPERUSER NOCREATEDB NOCREATEROLE CONNECTION LIMIT 20`
 	)
 	await db.query(`GRANT ${name} TO CURRENT_USER`)
