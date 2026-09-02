@@ -15,6 +15,10 @@ export const graceWindowMs = (graceDays: number) => graceDays * dayMs
  * this): Postgres-only, run shortly after boot and hourly, idempotent (a torn-down order leaves the
  * `suspended` set, so a later pass skips it), and fault-tolerant — a single order's teardown that
  * throws is logged and the sweep continues. Returns the counts for logs and tests.
+ *
+ * Since wave 14 every teardown is preceded by the order's final export (`exportService`): the
+ * teardown is refused until it is `done`, so the sweep takes it first and leaves an order whose
+ * export failed `suspended` for the next pass (the hosting sweep does the same for `active`).
  */
 export const runLifecycleSweep = async (
 	app: FastifyInstance
@@ -27,6 +31,15 @@ export const runLifecycleSweep = async (
 	let failed = 0
 	for (const order of due) {
 		try {
+			const exported = await app.exportService.finalExport(order.id)
+			if (exported.status !== 'done') {
+				failed++
+				app.log.warn(
+					{ orderId: order.id, status: exported.status, error: exported.error },
+					'Grace-period export not done — teardown postponed to the next pass'
+				)
+				continue
+			}
 			const result = await app.accountService.runLifecycleAction(order.id, 'teardown', {
 				confirm: true,
 				label: 'grace-period sweep',

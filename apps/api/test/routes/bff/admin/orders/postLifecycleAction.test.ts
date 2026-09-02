@@ -1,5 +1,5 @@
-import postLifecycleAction from '#/routes/bff/admin/orders/postLifecycleAction.ts'
 import { EntityInvalid, EntityNotFound } from '#/lib/entityError.ts'
+import postLifecycleAction from '#/routes/bff/admin/orders/postLifecycleAction.ts'
 
 import type { FastifyInstance } from 'fastify'
 
@@ -21,6 +21,7 @@ describe('POST /bff/admin/orders/:orderId/lifecycle route', () => {
 		expect(response.statusCode).toBe(200)
 		expect(app.accountService.runLifecycleAction).toHaveBeenCalledWith('order-1', 'suspend', {
 			confirm: undefined,
+			skipExport: undefined,
 		})
 		const body = response.json()
 		expect(body).toMatchObject({ action: 'suspend', dryRun: true, applied: false })
@@ -37,8 +38,23 @@ describe('POST /bff/admin/orders/:orderId/lifecycle route', () => {
 		expect(response.statusCode).toBe(200)
 		expect(app.accountService.runLifecycleAction).toHaveBeenCalledWith('order-1', 'teardown', {
 			confirm: true,
+			skipExport: undefined,
 		})
 		expect(response.json()).toMatchObject({ action: 'teardown', dryRun: false, applied: true })
+	})
+
+	it('Passes skipExport through for an admin who knows there is nothing to keep (wave 14)', async () => {
+		const response = await app.inject({
+			method: 'POST',
+			url,
+			payload: { action: 'teardown', confirm: true, skipExport: true },
+		})
+
+		expect(response.statusCode).toBe(200)
+		expect(app.accountService.runLifecycleAction).toHaveBeenCalledWith('order-1', 'teardown', {
+			confirm: true,
+			skipExport: true,
+		})
 	})
 
 	it('Rejects an unknown action with 400', async () => {

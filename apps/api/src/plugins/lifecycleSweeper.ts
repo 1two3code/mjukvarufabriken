@@ -19,5 +19,5 @@ const plugin: FastifyPluginAsync = async app => {
 
 export default fp(plugin, {
 	name: '#internal/lifecycleSweeper',
-	dependencies: ['#internal/db', '#internal/accountService'],
+	dependencies: ['#internal/db', '#internal/accountService', '#internal/exportService'],
 })

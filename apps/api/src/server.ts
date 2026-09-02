@@ -11,6 +11,7 @@ import ecsPlugin from '#/plugins/ecs.ts'
 import emailPlugin from '#/plugins/email.ts'
 import errorHandlingPlugin from '#/plugins/errorHandling.ts'
 import githubOAuthPlugin from '#/plugins/githubOAuth.ts'
+import hostingSweeperPlugin from '#/plugins/hostingSweeper.ts'
 import jobSweeperPlugin from '#/plugins/jobSweeper.ts'
 import lifecycleSweeperPlugin from '#/plugins/lifecycleSweeper.ts'
 import metricsPlugin from '#/plugins/metrics.ts'
@@ -23,6 +24,7 @@ import stripePlugin from '#/plugins/stripe.ts'
 import accountService from '#/services/accountService.ts'
 import authService from '#/services/authService.ts'
 import contactService from '#/services/contactService.ts'
+import exportService from '#/services/exportService.ts'
 import iterationBriefService from '#/services/iterationBriefService.ts'
 import jobService from '#/services/jobService.ts'
 import marginService from '#/services/marginService.ts'
@@ -83,6 +85,7 @@ export async function createServer({ logLevel }: Options = {}): Promise<FastifyI
 		.register(jobService)
 		.register(previewDbService)
 		.register(previewStorageService)
+		.register(exportService)
 		.register(userService)
 		.register(authService)
 		.register(contactService)
@@ -97,6 +100,7 @@ export async function createServer({ logLevel }: Options = {}): Promise<FastifyI
 
 		// Background schedulers depending on services
 		.register(lifecycleSweeperPlugin)
+		.register(hostingSweeperPlugin)
 
 		// Request plugins
 		.register(errorHandlingPlugin)

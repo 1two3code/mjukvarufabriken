@@ -106,6 +106,13 @@ declare module 'fastify' {
 			 * of interest cannot turn into an unbounded token bill).
 			 */
 			demoWeeklyCap: number
+			/**
+			 * The hosting window included in an order's price (wave 14, strategy F4): days from the
+			 * first delivery with a live URL until the scheduled teardown — `HOSTING_WINDOW_DAYS_DEMO`
+			 * (default 14) for the voucher demo, `HOSTING_WINDOW_DAYS_BUILD` (default 30) for a real
+			 * build. Stamped once on `orders.hosting_until`; an admin can move or clear it.
+			 */
+			hosting: { windowDaysDemo: number; windowDaysBuild: number }
 			/** Infra handles (set by the CDK web stack) */
 			infra: {
 				databaseSecretArn?: string
@@ -120,6 +127,8 @@ declare module 'fastify' {
 				 */
 				jobNoProxy?: string
 				artifactsBucket?: string
+				/** The shared bucket delivered apps store objects in (`PREVIEW_BUCKET`), one prefix per job */
+				previewBucket?: string
 				jobsClusterArn?: string
 				jobTaskDefinitionArn?: string
 				jobSubnetIds: string[]
@@ -139,10 +148,13 @@ export const defaultResidentMeterEvent = 'resident_usage_usd_cents'
 /** Grace window (days) a suspended order waits before the sweep tears it down; default 30. */
 export const defaultLifecycleGraceDays = 30
 
-/** Parses `LIFECYCLE_GRACE_DAYS`; a missing / non-positive / non-numeric value falls back to the default. */
-export const parseGraceDays = (value: string | undefined): number => {
+/** Included hosting window (days) of the voucher demo / a real build; the sweep tears down after it */
+export const defaultHostingWindowDays = { demo: 14, build: 30 } as const
+
+/** A positive whole day count, else `fallback` (missing / non-positive / non-numeric) */
+export const parseDays = (value: string | undefined, fallback: number): number => {
 	const parsed = Number(value)
-	return Number.isFinite(parsed) && parsed > 0 ? Math.floor(parsed) : defaultLifecycleGraceDays
+	return Number.isFinite(parsed) && parsed > 0 ? Math.floor(parsed) : fallback
 }
 
 /** Demo builds approvable per rolling week without `force` unless configured (strategy 2026-08-31) */
@@ -156,6 +168,9 @@ export const parseDemoWeeklyCap = (value: string | undefined): number => {
 	const parsed = Number(value?.trim() || Number.NaN)
 	return Number.isFinite(parsed) && parsed >= 0 ? Math.floor(parsed) : defaultDemoWeeklyCap
 }
+/** Parses `LIFECYCLE_GRACE_DAYS`; a missing / non-positive / non-numeric value falls back to the default. */
+export const parseGraceDays = (value: string | undefined): number =>
+	parseDays(value, defaultLifecycleGraceDays)
 
 /**
  * Secrets Manager values are either the raw string or a JSON object with a single key
@@ -286,11 +301,22 @@ const plugin: FastifyPluginAsync = async app => {
 			graceDays: parseGraceDays(process.env.LIFECYCLE_GRACE_DAYS),
 		},
 		demoWeeklyCap: parseDemoWeeklyCap(process.env.DEMO_WEEKLY_CAP),
+		hosting: {
+			windowDaysDemo: parseDays(
+				process.env.HOSTING_WINDOW_DAYS_DEMO,
+				defaultHostingWindowDays.demo
+			),
+			windowDaysBuild: parseDays(
+				process.env.HOSTING_WINDOW_DAYS_BUILD,
+				defaultHostingWindowDays.build
+			),
+		},
 		infra: {
 			databaseSecretArn: process.env.DATABASE_SECRET_ARN,
 			jobApiUrl: process.env.JOB_API_URL || authIssuer,
 			jobNoProxy: process.env.JOB_NO_PROXY || undefined,
 			artifactsBucket: process.env.ARTIFACTS_BUCKET,
+			previewBucket: process.env.PREVIEW_BUCKET?.trim() || undefined,
 			jobsClusterArn: process.env.JOBS_CLUSTER_ARN,
 			jobTaskDefinitionArn: process.env.JOB_TASK_DEFINITION_ARN,
 			jobSubnetIds: process.env.JOB_SUBNET_IDS?.split(',').filter(Boolean) ?? [],

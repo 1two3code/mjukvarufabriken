@@ -3,9 +3,17 @@ import { canTransitionLifecycle, lifecycleActionMode, lifecycleActionTarget } fr
 
 import { customerSlugForOrg } from '#/lib/customerSlug.ts'
 import { EntityInvalid, EntityNotFound } from '#/lib/entityError.ts'
+import { provisioningJobIdOf } from '#/services/jobService.utils.ts'
 
 import type { FastifyInstance, FastifyPluginAsync } from 'fastify'
-import type { DeployedService, LifecycleAction, LifecycleState, Order, Org } from '@mf/models'
+import type {
+	DeployedService,
+	LifecycleAction,
+	LifecycleState,
+	Order,
+	Org,
+	PreviewTeardownReport,
+} from '@mf/models'
 import type { DeprovisionMode, DeprovisionResult, OutcomeTally } from '@mf/org'
 import type { RedeployResult } from '#/lib/expressRedeploy.ts'
 
@@ -35,6 +43,22 @@ export type LifecycleActionResult = {
 	applied: boolean
 	/** The @mf/org deprovision result; absent when the order has no delivery to act on. */
 	deprovision?: DeprovisionResult
+	/**
+	 * A confirmed teardown's preview-resource cleanup (database + role, storage prefix + role) per
+	 * provisioning job (wave 14). Absent for other actions and dry-runs.
+	 */
+	previewResources?: PreviewTeardownReport[]
+}
+
+/**
+ * A confirmed teardown was asked for before the order's final export was `done` (wave 14). The
+ * export is what the customer keeps of their hosting window; skipping it is an explicit admin
+ * decision (`skipExport: true`), never a default.
+ */
+export class ExportRequired extends EntityInvalid {
+	constructor(orderId: string) {
+		super('export', orderId)
+	}
 }
 
 declare module 'fastify' {
@@ -57,12 +81,17 @@ declare module 'fastify' {
 			 * dry-run previews the deprovision and leaves the lifecycle untouched; a confirmed run
 			 * deprovisions the tagged resources (fenced to the order's `Customer=<slug>`) and writes
 			 * the new lifecycle state. Refuses a transition the state machine disallows (e.g. resuming
-			 * a torn-down order).
+			 * a torn-down order). A confirmed `teardown` also refuses (`ExportRequired`) until the
+			 * order's final export is `done` unless `skipExport` is passed, and — after the fenced
+			 * deprovision succeeded and before the state flips — drops every provisioning job's
+			 * preview database + role and storage prefix + role (wave 14; gated on
+			 * `ORG_LIFECYCLE_ENABLED` like the deprovision itself), then writes the deletion
+			 * certificate into the export.
 			 */
 			runLifecycleAction: (
 				orderId: string,
 				action: LifecycleAction,
-				options?: { confirm?: boolean; label?: string }
+				options?: { confirm?: boolean; label?: string; skipExport?: boolean }
 			) => Promise<LifecycleActionResult>
 		}
 	}
@@ -113,7 +142,7 @@ const aggregateDeprovision = (results: DeprovisionResult[]): DeprovisionResult =
 }
 
 const plugin: FastifyPluginAsync = async app => {
-	const { db, org, secrets } = app
+	const { db, org, secrets, previewDbService, previewStorageService, exportService } = app
 
 	const provisionCustomerAccount: FastifyInstance['accountService']['provisionCustomerAccount'] =
 		async orgId => {
@@ -149,6 +178,13 @@ const plugin: FastifyPluginAsync = async app => {
 		const dryRun = !(options?.confirm ?? false)
 		const label = options?.label ?? order.name
 
+		// The export is the customer's copy of everything the window held; a confirmed teardown
+		// without one is only ever an explicit admin choice (`skipExport`), never a default.
+		if (action === 'teardown' && !dryRun && !options?.skipExport) {
+			const exported = await db.orderExports.get(orderId)
+			if (exported?.status !== 'done') throw new ExportRequired(orderId)
+		}
+
 		// Every service this order ever delivered. A rebuild mints a new job-unique fence per build,
 		// so an order accumulates services across builds; teardown/suspend act on ALL of them and
 		// `resume` re-stands-up ALL of them from their recorded image/config (ECS Express has no
@@ -180,13 +216,91 @@ const plugin: FastifyPluginAsync = async app => {
 			return { action, dryRun: false, order, from, to, applied: false, deprovision }
 		}
 
+		// Teardown completeness (wave 14): the fenced deprovision only covers what @mf/org can
+		// discover by tag — the Express service. The preview database/role and storage prefix/role
+		// were minted by this api under deterministic names, so they are dropped here, AFTER the
+		// deprovision succeeded and BEFORE the state flips: a throw leaves the order where it is
+		// (the hosting sweep / grace sweep retries) rather than recording `torn_down` over live data.
+		const previewResources =
+			mode === 'teardown' ? await teardownPreviewResources(orderId) : undefined
+
 		// Persist the record side-effects of a confirmed, successful action before the state flips.
 		await applyRecordEffects(orderId, mode, deprovision)
 
 		const updated = await db.orders.setLifecycle(orderId, [from], to)
 		const applied = Boolean(updated) && from !== to
 		app.log.info({ orderId, action, from, to, applied }, 'Lifecycle action applied')
-		return { action, dryRun: false, order: updated ?? order, from, to, applied, deprovision }
+
+		// The certificate is the last word of a completed teardown. Best-effort: the resources are
+		// gone and the state is written — a failure here is logged for a re-run, never a rollback.
+		if (mode === 'teardown' && previewResources) {
+			await exportService
+				.writeDeletionCertificate(orderId, {
+					label,
+					completedAt: new Date(),
+					deprovision,
+					previewResources,
+					repositoryUrl: await repositoryUrlOf(orderId),
+				})
+				.catch((error: Error) =>
+					app.log.error({ err: error, orderId }, 'Could not write the deletion certificate')
+				)
+		}
+		return {
+			action,
+			dryRun: false,
+			order: updated ?? order,
+			from,
+			to,
+			applied,
+			deprovision,
+			...(previewResources && { previewResources }),
+		}
+	}
+
+	/** The newest repository URL any of the order's jobs delivered (for the certificate) */
+	const repositoryUrlOf = async (orderId: string) =>
+		(await db.jobs.list({ orderId }))
+			.toSorted((a, b) => b.createdAt.localeCompare(a.createdAt))
+			.find(job => job.repositoryUrl)?.repositoryUrl
+
+	/**
+	 * Drops the preview database + role and the storage prefix + role of EVERY provisioning job of
+	 * the order (a rebuilt order has several; a redelivery maps onto its source). Every step is
+	 * idempotent ("already gone" is success). Gated on the same `ORG_LIFECYCLE_ENABLED` flag as
+	 * the deprovision: while it is off the whole teardown is a DB-only state change everywhere,
+	 * and this half must not be the one part that actually deletes.
+	 */
+	const teardownPreviewResources = async (orderId: string): Promise<PreviewTeardownReport[]> => {
+		const jobs = await db.jobs.list({ orderId })
+		const provisioningJobIds = [...new Set(jobs.map(provisioningJobIdOf))]
+		if (!secrets.orgLifecycle.enabled) {
+			return provisioningJobIds.map(jobId => ({
+				jobId,
+				database: 'skipped',
+				databaseRole: 'skipped',
+				storageObjects: 'skipped',
+				storageObjectCount: 0,
+				storageRole: 'skipped',
+				reason: 'ORG_LIFECYCLE_ENABLED is off',
+			}))
+		}
+		const reports: PreviewTeardownReport[] = []
+		for (const jobId of provisioningJobIds) {
+			const database = await previewDbService.teardown(jobId)
+			const storage = await previewStorageService.teardown(jobId)
+			const reason = [database.reason, storage.reason].filter(Boolean).join('; ') || undefined
+			reports.push({
+				jobId,
+				database: database.database,
+				databaseRole: database.role,
+				storageObjects: storage.objects,
+				storageObjectCount: storage.objectCount,
+				storageRole: storage.role,
+				...(reason && { reason }),
+			})
+		}
+		return reports
 	}
 
 	/** Suspend / teardown: deprovision EVERY recorded fence tag for the order, results folded into one. */
@@ -259,5 +373,12 @@ const plugin: FastifyPluginAsync = async app => {
 
 export default fp(plugin, {
 	name: '#internal/accountService',
-	dependencies: ['#internal/db', '#internal/org', '#internal/secrets'],
+	dependencies: [
+		'#internal/db',
+		'#internal/org',
+		'#internal/secrets',
+		'#internal/previewDbService',
+		'#internal/previewStorageService',
+		'#internal/exportService',
+	],
 })

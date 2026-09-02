@@ -19,14 +19,17 @@
 import fp from 'fastify-plugin'
 import {
 	CreateRoleCommand,
+	DeleteRoleCommand,
+	DeleteRolePolicyCommand,
 	EntityAlreadyExistsException,
 	GetRoleCommand,
 	IAMClient,
+	NoSuchEntityException,
 	PutRolePolicyCommand,
 } from '@aws-sdk/client-iam'
 
 import type { FastifyPluginAsync } from 'fastify'
-import type { JobStorageResponse } from '@mf/models'
+import type { JobStorageResponse, PreviewTeardownOutcome } from '@mf/models'
 
 declare module 'fastify' {
 	interface FastifyInstance {
@@ -38,11 +41,29 @@ declare module 'fastify' {
 			 * every upload 500s.
 			 */
 			provision: (jobId: string) => Promise<JobStorageResponse>
+			/**
+			 * Deletes the job's prefix objects and its IAM role (inline policy first) at order
+			 * teardown (wave 14). Idempotent — a missing role / empty prefix reports `already-gone`;
+			 * without a preview bucket the objects are `skipped` and only the role is removed.
+			 */
+			teardown: (jobId: string) => Promise<PreviewStorageTeardown>
 		}
 	}
 }
 
 export class StorageUnavailable extends Error {}
+
+export type PreviewStorageTeardown = {
+	objects: PreviewTeardownOutcome
+	objectCount: number
+	role: PreviewTeardownOutcome
+	reason?: string
+}
+
+/** The two IAM calls the teardown makes (injectable in tests) */
+export type IamRoleDeleter = {
+	send: (command: DeleteRolePolicyCommand | DeleteRoleCommand) => Promise<unknown>
+}
 
 // MARK: Pure helpers (exported for tests)
 
@@ -54,7 +75,10 @@ export class StorageUnavailable extends Error {}
  * IAM grant is fenced to.
  */
 const previewJobToken = (jobId: string): string => {
-	const cleaned = jobId.toLowerCase().replace(/[^a-z0-9]/g, '').slice(0, 24)
+	const cleaned = jobId
+		.toLowerCase()
+		.replace(/[^a-z0-9]/g, '')
+		.slice(0, 24)
 	if (cleaned.length < 4) {
 		throw new Error(`preview storage: job id '${jobId}' is too short to derive a name`)
 	}
@@ -69,6 +93,44 @@ export const previewPrefix = (jobId: string): string => `preview/${previewJobTok
 
 /** IAM path — part of the fence on the api's own `iam:CreateRole` grant */
 export const previewRolePath = '/mf-preview/'
+
+/** Name of the one inline policy a preview role carries */
+export const previewRolePolicyName = 'own-prefix-only'
+
+/**
+ * The exact shape every role name the teardown may delete must have — `previewRoleName` can
+ * only produce it, but DeleteRole is the destructive call, so the fence is restated right here.
+ */
+export const previewRoleNamePattern = /^mf-preview-app-[a-z0-9]{4,24}$/
+
+/**
+ * Deletes the job's role: the inline policy first (IAM refuses to delete a role that still
+ * carries one), then the role. `NoSuchEntity` on either step means "already gone" and is the
+ * idempotent success of a second teardown pass.
+ */
+export const teardownPreviewRole = async (
+	iam: IamRoleDeleter,
+	jobId: string
+): Promise<PreviewTeardownOutcome> => {
+	const roleName = previewRoleName(jobId)
+	if (!previewRoleNamePattern.test(roleName)) {
+		throw new Error(`refusing to delete '${roleName}': not a preview app role`)
+	}
+	const ignoringMissing = async (command: DeleteRolePolicyCommand | DeleteRoleCommand) => {
+		try {
+			await iam.send(command)
+			return true
+		} catch (error) {
+			if (error instanceof NoSuchEntityException) return false
+			throw error
+		}
+	}
+	await ignoringMissing(
+		new DeleteRolePolicyCommand({ RoleName: roleName, PolicyName: previewRolePolicyName })
+	)
+	const deleted = await ignoringMissing(new DeleteRoleCommand({ RoleName: roleName }))
+	return deleted ? 'deleted' : 'already-gone'
+}
 
 /** Trust policy: only ECS tasks may assume it, and only on behalf of this account */
 export const assumeRolePolicy = (account: string) =>
@@ -164,7 +226,7 @@ const plugin: FastifyPluginAsync = async app => {
 			await iam.send(
 				new PutRolePolicyCommand({
 					RoleName: roleName,
-					PolicyName: 'own-prefix-only',
+					PolicyName: previewRolePolicyName,
 					PolicyDocument: prefixPolicy(bucket, prefix),
 				})
 			)
@@ -172,10 +234,30 @@ const plugin: FastifyPluginAsync = async app => {
 			app.log.info({ jobId, roleName, prefix }, 'Provisioned preview object storage')
 			return { bucket, prefix, region, roleArn }
 		},
+		teardown: async (jobId: string): Promise<PreviewStorageTeardown> => {
+			const prefix = previewPrefix(jobId)
+			let objects: PreviewTeardownOutcome = 'skipped'
+			let objectCount = 0
+			if (bucket) {
+				objectCount = await app.s3.deletePrefix(bucket, prefix)
+				objects = objectCount > 0 ? 'deleted' : 'already-gone'
+			}
+			const role = await teardownPreviewRole(iam, jobId)
+			app.log.info(
+				{ jobId, prefix, objects, objectCount, role },
+				'Tore down preview object storage'
+			)
+			return {
+				objects,
+				objectCount,
+				role,
+				...(!bucket && { reason: 'no PREVIEW_BUCKET configured — objects not deleted' }),
+			}
+		},
 	})
 }
 
 export default fp(plugin, {
 	name: '#internal/previewStorageService',
-	dependencies: ['#internal/db'],
+	dependencies: ['#internal/db', '#internal/s3'],
 })

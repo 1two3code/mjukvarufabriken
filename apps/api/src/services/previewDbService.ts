@@ -19,6 +19,7 @@ import { createDb } from '@mf/db'
 import { resolveConnectionString } from '#/plugins/db.ts'
 
 import type { FastifyPluginAsync } from 'fastify'
+import type { PreviewTeardownOutcome } from '@mf/models'
 
 declare module 'fastify' {
 	interface FastifyInstance {
@@ -29,9 +30,44 @@ declare module 'fastify' {
 			 * configured — the job then fails its deploy closed instead of shipping a dead app.
 			 */
 			provision: (jobId: string) => Promise<{ databaseUrl: string }>
+			/**
+			 * The final export of the job's database (wave 14): every table in `public` as
+			 * `{ table, columns, rows }`. Resolves to `undefined` when the job never had a database
+			 * (no admin connection configured, or no such database) — the export then skips it.
+			 */
+			dump: (jobId: string) => Promise<PreviewDatabaseDump | undefined>
+			/**
+			 * Drops the job's database and role at order teardown (wave 14). Idempotent: a missing
+			 * database / role reports `already-gone`; without an admin connection both are `skipped`.
+			 */
+			teardown: (jobId: string) => Promise<PreviewDatabaseTeardown>
 		}
 	}
 }
+
+/** One table of a delivered app's database, as exported (`database.json`) */
+export type PreviewTableDump = {
+	table: string
+	columns: string[]
+	rows: Record<string, unknown>[]
+	/** True when the table held more than `maxDumpRowsPerTable` rows and only the first were taken */
+	truncated: boolean
+}
+
+export type PreviewDatabaseDump = {
+	database: string
+	exportedAt: string
+	tables: PreviewTableDump[]
+}
+
+export type PreviewDatabaseTeardown = {
+	database: PreviewTeardownOutcome
+	role: PreviewTeardownOutcome
+	reason?: string
+}
+
+/** A table larger than this is exported truncated — the export is a courtesy copy, not a backup service */
+export const maxDumpRowsPerTable = 100_000
 
 export class ProvisioningUnavailable extends Error {}
 
@@ -44,8 +80,13 @@ export class ProvisioningUnavailable extends Error {}
  * (re-keys) its database instead of leaking a new one per attempt.
  */
 export const previewDbName = (jobId: string): string => {
-	const cleaned = jobId.toLowerCase().replace(/[^a-z0-9]/g, '').slice(0, 16)
-	if (cleaned.length < 4) throw new Error(`previewDbName: job id '${jobId}' is too short to derive a database name`)
+	const cleaned = jobId
+		.toLowerCase()
+		.replace(/[^a-z0-9]/g, '')
+		.slice(0, 16)
+	if (cleaned.length < 4) {
+		throw new Error(`previewDbName: job id '${jobId}' is too short to derive a database name`)
+	}
 	return `mf_app_${cleaned}`
 }
 
@@ -121,6 +162,95 @@ export const provisionPreviewDatabase = async (
 	return { name, password }
 }
 
+// MARK: Export + teardown
+
+/**
+ * The exact shape every name this file interpolates as an identifier must have. `previewDbName`
+ * can only ever produce it, but the DROP statements below are the destructive path, so the guard
+ * is restated right where it matters rather than trusted from a distance.
+ */
+export const previewDbNamePattern = /^mf_app_[a-z0-9]{4,16}$/
+
+const assertPreviewDbName = (name: string) => {
+	if (!previewDbNamePattern.test(name)) {
+		throw new Error(`refusing to touch '${name}': not a preview database name`)
+	}
+	return name
+}
+
+/** `"name"` with embedded quotes doubled — the delivered app chose its own table names */
+const quoteIdentifier = (name: string) => `"${name.replace(/"/g, '""')}"`
+
+const databaseExists = async (db: AdminDb, name: string) =>
+	(await db.query('SELECT 1 FROM pg_database WHERE datname = $1', [name])).length > 0
+
+const roleExists = async (db: AdminDb, name: string) =>
+	(await db.query('SELECT 1 FROM pg_roles WHERE rolname = $1', [name])).length > 0
+
+/**
+ * Reads every `public` base table of the app's database through a connection to THAT database
+ * (`connect` receives the database name — the admin user reaches it through its membership of
+ * the owning role, granted at provisioning). Column order comes from the catalogue so an empty
+ * table still exports its shape.
+ */
+export const dumpPreviewDatabase = async (
+	appDb: AdminDb,
+	name: string
+): Promise<Omit<PreviewDatabaseDump, 'exportedAt'>> => {
+	assertPreviewDbName(name)
+	const tables = await appDb.query<{ table_name: string }>(
+		`SELECT table_name FROM information_schema.tables
+		 WHERE table_schema = 'public' AND table_type = 'BASE TABLE'
+		 ORDER BY table_name`
+	)
+	const dumped: PreviewTableDump[] = []
+	for (const { table_name: table } of tables) {
+		const columns = await appDb.query<{ column_name: string }>(
+			`SELECT column_name FROM information_schema.columns
+			 WHERE table_schema = 'public' AND table_name = $1
+			 ORDER BY ordinal_position`,
+			[table]
+		)
+		const rows = await appDb.query(
+			`SELECT * FROM ${quoteIdentifier(table)} LIMIT ${maxDumpRowsPerTable + 1}`
+		)
+		dumped.push({
+			table,
+			columns: columns.map(column => column.column_name),
+			rows: rows.slice(0, maxDumpRowsPerTable),
+			truncated: rows.length > maxDumpRowsPerTable,
+		})
+	}
+	return { database: name, tables: dumped }
+}
+
+/**
+ * Drops the job's database (forcing its sessions off first) and then its role. Both statements
+ * are `IF EXISTS`, and the existence checks feed the report, so a second run is a no-op that
+ * still answers truthfully. `WITH (FORCE)` is Postgres 13+ (RDS 17 here).
+ */
+export const teardownPreviewDatabase = async (
+	db: AdminDb,
+	jobId: string
+): Promise<PreviewDatabaseTeardown> => {
+	const name = assertPreviewDbName(previewDbName(jobId))
+	const hadDatabase = await databaseExists(db, name)
+	if (hadDatabase) await db.query(`DROP DATABASE IF EXISTS ${name} WITH (FORCE)`)
+	const hadRole = await roleExists(db, name)
+	if (hadRole) await db.query(`DROP ROLE IF EXISTS ${name}`)
+	return {
+		database: hadDatabase ? 'deleted' : 'already-gone',
+		role: hadRole ? 'deleted' : 'already-gone',
+	}
+}
+
+/** The admin connection string pointed at the app's own database (same server, same credentials) */
+export const adminUrlForDatabase = (adminUrl: string, name: string) => {
+	const url = new URL(adminUrl)
+	url.pathname = `/${name}`
+	return url.toString()
+}
+
 // MARK: Plugin
 
 export type PreviewDbOptions = {
@@ -130,10 +260,22 @@ export type PreviewDbOptions = {
 
 const plugin: FastifyPluginAsync<PreviewDbOptions> = async (app, options) => {
 	const connect = options.connect ?? ((url: string) => createDb(url, { max: 1 }))
+	const resolveAdminUrl = async () =>
+		app.secrets.preview.dbAdminUrl ?? (await resolveConnectionString())
+
+	/** Runs `work` on a fresh single-use admin connection to `url`, closing it afterwards */
+	const withConnection = async <T>(url: string, work: (db: AdminDb) => Promise<T>) => {
+		const admin = connect(url)
+		try {
+			return await work(admin)
+		} finally {
+			await admin.close().catch(() => {})
+		}
+	}
 
 	app.decorate('previewDbService', {
 		provision: async jobId => {
-			const adminUrl = app.secrets.preview.dbAdminUrl ?? (await resolveConnectionString())
+			const adminUrl = await resolveAdminUrl()
 			if (!adminUrl) {
 				throw new ProvisioningUnavailable(
 					'no admin database configured (PREVIEW_DB_ADMIN_URL / DATABASE_URL / DATABASE_SECRET_ARN) — cannot provision a delivered-app database'
@@ -153,7 +295,34 @@ const plugin: FastifyPluginAsync<PreviewDbOptions> = async (app, options) => {
 				await admin.close().catch(() => {})
 			}
 		},
+		dump: async jobId => {
+			const adminUrl = await resolveAdminUrl()
+			if (!adminUrl) return undefined
+			const name = previewDbName(jobId)
+			const exists = await withConnection(adminUrl, db => databaseExists(db, name))
+			if (!exists) return undefined
+			const dump = await withConnection(adminUrlForDatabase(adminUrl, name), db =>
+				dumpPreviewDatabase(db, name)
+			)
+			app.log.info(
+				{ jobId, database: name, tables: dump.tables.length },
+				'Exported the delivered app database'
+			)
+			return { ...dump, exportedAt: new Date().toISOString() }
+		},
+		teardown: async jobId => {
+			const adminUrl = await resolveAdminUrl()
+			if (!adminUrl) {
+				return { database: 'skipped', role: 'skipped', reason: 'no admin database configured' }
+			}
+			const result = await withConnection(adminUrl, db => teardownPreviewDatabase(db, jobId))
+			app.log.info({ jobId, ...result }, 'Tore down the delivered app database')
+			return result
+		},
 	})
 }
 
-export default fp(plugin, { name: '#internal/previewDbService', dependencies: ['#internal/secrets'] })
+export default fp(plugin, {
+	name: '#internal/previewDbService',
+	dependencies: ['#internal/secrets'],
+})

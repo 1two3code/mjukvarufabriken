@@ -6,9 +6,13 @@ describe('Lifecycle grace-period sweep', () => {
 	let app: FastifyInstance
 
 	beforeEach(async () => {
-		// Real accountService + db; the @mf/org seam stays mocked (no AWS in the loop).
-		app = await createTestApp({ skipMock: '#/services/accountService.ts' })
+		// Real accountService + exportService + db; the @mf/org seam stays mocked (no AWS in the loop).
+		app = await createTestApp({
+			skipMock: ['#/services/accountService.ts', '#/services/exportService.ts'],
+		})
 		app.secrets.orgLifecycle.graceDays = 30
+		// No delivered job in the mocked jobs → the export holds nothing, which is a valid `done`
+		vi.spyOn(app.db.jobs, 'list').mockResolvedValue([])
 	})
 
 	afterEach(() => {
@@ -91,6 +95,36 @@ describe('Lifecycle grace-period sweep', () => {
 		expect(result).toEqual({ checked: 1, tornDown: 0, failed: 1 })
 		// Still suspended, so the next hourly pass retries it.
 		expect((await app.db.orders.getOrder(order.id))?.lifecycle).toBe('suspended')
+	})
+
+	it('Takes the final export first and postpones a teardown whose export is not done (wave 14)', async () => {
+		const order = await seedSuspended('order-export')
+		vi.useFakeTimers()
+		vi.setSystemTime(Date.now() + 31 * 24 * 60 * 60 * 1000)
+		const exportSpy = vi.spyOn(app.exportService, 'finalExport').mockResolvedValueOnce({
+			orderId: order.id,
+			key: 'deliverables/order-export/export/',
+			status: 'failed',
+			error: 'S3 down',
+			files: [],
+			createdAt: new Date().toISOString(),
+		})
+		const teardownSpy = vi.spyOn(app.accountService, 'runLifecycleAction')
+
+		const postponed = await runLifecycleSweep(app)
+
+		expect(postponed).toEqual({ checked: 1, tornDown: 0, failed: 1 })
+		expect(teardownSpy).not.toHaveBeenCalled()
+		expect((await app.db.orders.getOrder(order.id))?.lifecycle).toBe('suspended')
+
+		// Next pass: the real export succeeds and the teardown follows it
+		const retried = await runLifecycleSweep(app)
+
+		expect(retried).toEqual({ checked: 1, tornDown: 1, failed: 0 })
+		expect(exportSpy.mock.invocationCallOrder.at(-1)).toBeLessThan(
+			teardownSpy.mock.invocationCallOrder[0]!
+		)
+		expect((await app.db.orders.getOrder(order.id))?.lifecycle).toBe('torn_down')
 	})
 
 	it('Continues past an order whose teardown throws (fault-tolerant)', async () => {

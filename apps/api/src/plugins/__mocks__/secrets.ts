@@ -22,7 +22,13 @@ const mockPlugin: FastifyPluginAsync = async app => {
 		preview: { tokenAudience: 'preview', dbAdminUrl: undefined, dbHost: undefined },
 		orgLifecycle: { enabled: false, region: 'eu-north-1', graceDays: 30 },
 		demoWeeklyCap: 5,
-		infra: { jobSubnetIds: [], jobApiUrl: 'https://api.example.com' },
+		hosting: { windowDaysDemo: 14, windowDaysBuild: 30 },
+		infra: {
+			jobSubnetIds: [],
+			jobApiUrl: 'https://api.example.com',
+			artifactsBucket: 'mf-artifacts-test',
+			previewBucket: 'mf-preview-test',
+		},
 	})
 }
 
