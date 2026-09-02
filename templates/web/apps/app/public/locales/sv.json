@@ -2,6 +2,7 @@
   "api.error.failedToCreateItem": "Objektet kunde inte skapas. Försök igen senare.",
   "api.error.failedToUpdateItem": "Objektet kunde inte uppdateras. Försök igen senare.",
   "api.error.refreshNotConfigured": "Din session kunde inte förnyas. Logga in igen.",
+  "builtBy.caption": "Byggd av Mjukvaruhuset — beställ din egen",
   "common.action.cancel": "Avbryt",
   "common.action.close": "Stäng",
   "common.action.save": "Spara",

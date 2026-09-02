@@ -108,6 +108,7 @@ Errors: `reply.error(status, error, code?)` comes from the `errorHandling` plugi
 - Styling is CSS Modules (`Component.tsx` + `Component.module.css`, camelCase class names, design tokens as CSS custom properties in `src/assets/styles/`). Build class lists as arrays and `join(' ')`.
 - SVGs import as components via the Vite `?react` suffix.
 - User-facing text goes through `useTranslation()`. Locale files live in `public/locales/<lang>.json` (`en` is the source of truth, `sv` is the second example); add every new key to all of them.
+- **Delivery standard — the "Built by Mjukvaruhuset" footer.** `src/components/builtBy/BuiltBy.tsx` is a one-line caption footer mounted in `src/app/App.tsx` *outside* the router; keep it mounted there when rewriting layouts or routes. It links to `VITE_BUILT_BY_URL` (`apps/app/.env`, default `https://mjukvaruhuset.se`); an empty value hides it (`VITE_BUILT_BY_URL=`), which is how a customer removes the footer without a code change.
 
 ### Models (`packages/models`)
 
