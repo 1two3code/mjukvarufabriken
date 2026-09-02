@@ -16,6 +16,14 @@ export const jobStatus = [
 export type JobStatus = (typeof jobStatus)[number]
 
 /** Statuses a job can still move out of — everything else is final */
+/**
+ * `build` plans, builds and delivers from the spec; `redeliver` skips straight to delivery of a
+ * repository an earlier job of the same order already delivered — the retry for a build whose
+ * gates passed but whose hosting side failed (no rebuild, near-zero tokens).
+ */
+export const jobMode = ['build', 'redeliver'] as const
+export type JobMode = (typeof jobMode)[number]
+
 export const activeJobStatus = ['queued', 'planning', 'building', 'verifying'] as const
 export const isActiveJobStatus = (status: JobStatus) =>
 	(activeJobStatus as readonly string[]).includes(status)
@@ -208,6 +216,10 @@ export const JobSchema = z.object({
 	/** ECS task ARN once the job runs on Fargate */
 	taskArn: z.string().optional(),
 	repositoryUrl: z.string().optional(),
+	/** Absent = `build` (rows from before the mode existed) */
+	mode: z.enum(jobMode).optional(),
+	/** The job whose delivered repository a `redeliver` job delivers again */
+	sourceJobId: z.string().optional(),
 	startedAt: z.iso.datetime().optional(),
 	finishedAt: z.iso.datetime().optional(),
 	createdAt: z.iso.datetime(),

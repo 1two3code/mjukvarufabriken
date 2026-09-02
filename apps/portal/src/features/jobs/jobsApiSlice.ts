@@ -40,6 +40,10 @@ export const jobsApiSlice = appApi
 				query: orderId => ({ url: `/orders/${orderId}/jobs`, method: 'POST' }),
 				invalidatesTags: (_result, _error, orderId) => [{ type: 'job', id: `order-${orderId}` }],
 			}),
+			redeliverJob: build.mutation<Job, string>({
+				query: orderId => ({ url: `/orders/${orderId}/jobs/redeliver`, method: 'POST' }),
+				invalidatesTags: (_result, _error, orderId) => [{ type: 'job', id: `order-${orderId}` }],
+			}),
 			killJob: build.mutation<Job, string>({
 				query: jobId => ({ url: `/admin/jobs/${jobId}/kill`, method: 'POST' }),
 				// The upsert echoes the killed row into the open job view immediately; the tags then
@@ -66,5 +70,6 @@ export const {
 	useGetJobQuery,
 	useGetJobEventsQuery,
 	useStartJobMutation,
+	useRedeliverJobMutation,
 	useKillJobMutation,
 } = jobsApiSlice

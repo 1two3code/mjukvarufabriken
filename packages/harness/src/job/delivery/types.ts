@@ -33,10 +33,15 @@ export type CreatedRepo = {
 }
 
 export type GitHubClient = {
-	/** Creates a private repository in the org; an existing repo of that name is an error */
+	/**
+	 * Creates a private repository in the org. A repository of that name that already exists is
+	 * REUSED (its urls returned), not an error: a redelivery pushes the same repository again.
+	 */
 	createRepo: (input: { org: string; name: string; description: string }) => Promise<CreatedRepo>
 	/** Pushes `branch` of `repoDir` to the created repo */
 	push: (input: { repoDir: string; cloneUrl: string; branch: string }) => Promise<void>
+	/** Clones an org repository into `dir` (a redelivery's starting point) */
+	clone: (input: { cloneUrl: string; dir: string }) => Promise<void>
 	addCollaborator: (input: {
 		org: string
 		name: string
@@ -199,6 +204,11 @@ export type DeliveryClients = {
 
 export type DeliveryInput = {
 	jobId: string
+	/**
+	 * The job the preview service is named after — the SOURCE job on a redelivery, so the same
+	 * Express service is updated rather than a second one created. Defaults to `jobId`.
+	 */
+	serviceJobId?: string
 	spec: Spec
 	plan?: Plan
 	gates: GateReport[]

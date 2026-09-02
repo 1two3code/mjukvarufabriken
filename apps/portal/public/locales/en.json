@@ -53,6 +53,8 @@
   "error.body.pageNotFound": "The page you are looking for does not exist.",
   "error.label.pageNotFound": "Page not found",
   "job.card.action.kill": "Kill job",
+  "job.card.action.redeliver": "Deliver again",
+  "job.card.action.redeliverHint": "Re-runs only the delivery of this build’s repository — docs, deploy and the live check — without rebuilding it.",
   "job.card.finished": "Finished",
   "job.card.started": "Started",
   "job.card.tasks": "Tasks",

@@ -3,6 +3,7 @@ import { z } from 'zod'
 import {
 	GateReportSchema,
 	JobBudgetSchema,
+	jobMode,
 	jobStatus,
 	NewJobEventSchema,
 	PlanSchema,
@@ -38,6 +39,22 @@ export const JobReportSchema = z.object({
 	 */
 	approveBeforeDeliver: z.boolean().optional(),
 	approved: z.boolean().optional(),
+	/** Absent = `build` */
+	mode: z.enum(jobMode).optional(),
+	/**
+	 * For a `redeliver` job: what to deliver again — the source job's repository plus the plan and
+	 * gate reports its handover docs are written from. The Express service, database and storage
+	 * role stay keyed to the SOURCE job, so a redelivery updates the same preview instead of
+	 * minting a second one.
+	 */
+	source: z
+		.object({
+			jobId: z.string(),
+			repositoryUrl: z.string(),
+			plan: PlanSchema.optional(),
+			gates: z.array(GateReportSchema).optional(),
+		})
+		.optional(),
 })
 export type JobReport = z.infer<typeof JobReportSchema>
 

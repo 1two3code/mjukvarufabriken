@@ -11,10 +11,12 @@ import Anthropic from '@anthropic-ai/sdk'
 import {
 	appNameOf,
 	createLiveDeliveryClients,
+	deliver,
 	createLivePorts,
 	debugKeyOf,
 	git,
 	runJob,
+	runRedelivery,
 	sdkSessionQuery,
 	setSessionQuery,
 	slugify,
@@ -29,7 +31,7 @@ import { gitIdentity, seedRepo } from '#/repo.ts'
 import { createApiReporter, createDbReporter } from '#/reporter.ts'
 
 import type { NewJobEvent } from '@mf/models'
-import type { OnUsage, SpecEngineClient, TokenUsage } from '@mf/harness'
+import type { DeliveryClients, OnUsage, SpecEngineClient, TokenUsage } from '@mf/harness'
 import type { JobReporter } from '#/reporter.ts'
 
 const log = (message: string, extra?: Record<string, unknown>) =>
@@ -142,13 +144,80 @@ const trackPhase = async (event: NewJobEvent) => {
  * GitHub login comes from the report view (the api resolves it from the order's creator once
  * they signed in with GitHub); without it the repo stays "transfer pending".
  */
+const slugFor = (ofJobId: string) =>
+	`${slugify(appNameOf(job.spec.goal)).slice(0, 50)}-${ofJobId.slice(0, 8)}`
+
 const deliveryTarget = () => {
 	const appName = appNameOf(job.spec.goal)
 	return {
-		slug: `${slugify(appName).slice(0, 50)}-${jobId.slice(0, 8)}`,
+		slug: slugFor(jobId),
 		appName,
 		customerGithubLogin: job.customerGithubLogin,
 	}
+}
+
+/**
+ * A `redeliver` job: clone the source job's delivered repository and run only the delivery half
+ * over it — no seed, no plan, no workers, no gates (they passed once; the repository is the
+ * proof). The Express service, database and storage role are the SOURCE job's (the api keys the
+ * provisioning endpoints on it too), so this updates the customer's preview rather than minting
+ * a second one. Exits the process itself, exactly like the build path below.
+ */
+const redeliver = async (deliveryClients: DeliveryClients) => {
+	if (!job.source) throw new Error('redeliver job has no source repository to deliver')
+	const source = job.source
+	const repoDir = join(config.workDir, 'repo')
+	log('cloning source repository', { jobId, sourceJobId: source.jobId, repositoryUrl: source.repositoryUrl })
+	await deliveryClients.github.clone({ cloneUrl: `${source.repositoryUrl}.git`, dir: repoDir })
+	await setStatus({ status: 'verifying', repositoryUrl: source.repositoryUrl })
+
+	const target = { ...deliveryTarget(), slug: slugFor(source.jobId) }
+	log('delivery target', { jobId, ...target, mode: 'redeliver', dryRun: config.delivery.dryRun })
+	const outcome = await runRedelivery(
+		{
+			id: job.id,
+			sourceJobId: source.jobId,
+			spec: job.spec,
+			plan: source.plan,
+			gates: source.gates,
+			budget: job.budget,
+			repoDir,
+			delivery: target,
+		},
+		{
+			ports: { deliver: input => deliver(input, deliveryClients) },
+			hooks: {
+				emit,
+				onTokens: async (tokensUsed, usage) => {
+					await reporter.update({ tokensUsed, usage })
+				},
+				isKilled: async () => killedByApi || (await reporter.isKilled()),
+				pollIntervalMs: 10_000,
+			},
+		}
+	)
+	const final = await setStatus({
+		status: outcome.status,
+		tokensUsed: outcome.tokensUsed,
+		usage: outcome.usage,
+		plan: outcome.plan,
+		reason: outcome.reason,
+		gates: outcome.gates,
+		repositoryUrl: outcome.deliverable?.repositoryUrl ?? source.repositoryUrl,
+		finishedAt: new Date().toISOString(),
+	})
+	const status = final.killed ? 'killed' : final.status
+	log('job finished', {
+		jobId,
+		mode: 'redeliver',
+		status,
+		tokensUsed: outcome.tokensUsed,
+		repositoryUrl: outcome.deliverable?.repositoryUrl,
+		deployUrl: outcome.deliverable?.deployUrl,
+		deliverableKey: outcome.deliverable?.deliverableKey,
+	})
+	await reporter.close()
+	process.exit(status === 'delivered' ? 0 : 1)
 }
 
 /** Any crash after the row went active must leave a terminal status behind, never a stuck job */
@@ -167,19 +236,6 @@ installCrashHandlers(process, { fail })
 try {
 	const started = await setStatus({ status: 'planning', startedAt: new Date().toISOString() })
 	if (started.killed) throw new Error('job was killed before it started')
-	log('seeding repo', { jobId, templateDir: config.templateDir, workDir: config.workDir })
-	const repoDir = await seedRepo(
-		config.templateDir,
-		config.workDir,
-		jobId,
-		appNameOf(job.spec.goal)
-	)
-	await reporter.update({ repositoryUrl: `file://${repoDir}` })
-	// The review gate diffs everything the workers did against this commit. `git` (= execOrThrow),
-	// not `exec`: a silent failure here used to hand the gate an empty seed, which git reads as
-	// `HEAD..HEAD` — an empty diff, and a green review of nothing (audit ORC-02).
-	const seedCommit = (await git(['rev-parse', 'HEAD'], { cwd: repoDir })).stdout.trim()
-
 	const deliveryClients = createLiveDeliveryClients({
 		...config.delivery,
 		jobId,
@@ -203,6 +259,22 @@ try {
 			config.report.mode === 'api' ? config.report.token : config.report.databaseUrl,
 		].filter((value): value is string => Boolean(value)),
 	})
+	if (job.mode === 'redeliver') {
+		await redeliver(deliveryClients)
+	}
+	log('seeding repo', { jobId, templateDir: config.templateDir, workDir: config.workDir })
+	const repoDir = await seedRepo(
+		config.templateDir,
+		config.workDir,
+		jobId,
+		appNameOf(job.spec.goal)
+	)
+	await reporter.update({ repositoryUrl: `file://${repoDir}` })
+	// The review gate diffs everything the workers did against this commit. `git` (= execOrThrow),
+	// not `exec`: a silent failure here used to hand the gate an empty seed, which git reads as
+	// `HEAD..HEAD` — an empty diff, and a green review of nothing (audit ORC-02).
+	const seedCommit = (await git(['rev-parse', 'HEAD'], { cwd: repoDir })).stdout.trim()
+
 	// Record seam (off unless `MF_CASSETTE`/`--record <dir>`): wrap the planner client and the Agent
 	// SDK `query()` so this one live run writes a cassette that replays offline with no tokens.
 	let client: SpecEngineClient = new Anthropic({ apiKey: config.anthropicApiKey })

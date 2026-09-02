@@ -5,6 +5,7 @@ import type {
 	Job,
 	JobBudget,
 	JobEvent,
+	JobMode,
 	JobStatus,
 	JobUsage,
 	NewJobEvent,
@@ -35,6 +36,8 @@ type JobRow = {
 	gate_waivers: string[] | null
 	task_arn: string | null
 	repository_url: string | null
+	mode: JobMode
+	source_job_id: string | null
 	report_token_hash: string | null
 	awaiting_approval: boolean
 	approved: boolean
@@ -73,6 +76,8 @@ export const toJob = (row: JobRow): Job => ({
 	gateWaivers: row.gate_waivers?.length ? row.gate_waivers : undefined,
 	taskArn: row.task_arn ?? undefined,
 	repositoryUrl: row.repository_url ?? undefined,
+	mode: row.mode,
+	sourceJobId: row.source_job_id ?? undefined,
 	awaitingApproval: row.awaiting_approval || undefined,
 	approved: row.approved || undefined,
 	startedAt: iso(row.started_at),
@@ -101,7 +106,10 @@ export type NewJob = {
 	spec: Spec
 	budget: JobBudget
 	/** sha256 (hex) of the per-job report token the api hands to the build container */
-	reportTokenHash?: string
+	reportTokenHash?: string	/** `build` (default) or `redeliver` — see `jobMode` */
+	mode?: JobMode
+	/** Required for `redeliver`: the job whose delivered repository is delivered again */
+	sourceJobId?: string
 }
 
 export type JobUpdate = Partial<{
@@ -131,12 +139,13 @@ export const insertJob = async (db: Db, job: NewJob): Promise<Job> => {
 	const { sql } = db
 	const [row] = await sql<JobRow[]>`
 		insert into jobs (
-			order_id, org_id, spec, budget_tokens, max_workers, max_duration_minutes, report_token_hash
+			order_id, org_id, spec, budget_tokens, max_workers, max_duration_minutes, report_token_hash,
+			mode, source_job_id
 		)
 		values (
 			${job.orderId}, ${job.orgId}, ${sql.json(job.spec as never)},
 			${job.budget.maxTokens}, ${job.budget.maxWorkers}, ${job.budget.maxDurationMinutes},
-			${job.reportTokenHash ?? null}
+			${job.reportTokenHash ?? null}, ${job.mode ?? 'build'}, ${job.sourceJobId ?? null}
 		)
 		returning *`
 	return toJob(row!)
@@ -163,12 +172,13 @@ export const insertRetryJob = async (db: Db, job: NewJob, ofJob: RetryOf): Promi
 	const [row] = await sql.begin(async tx => {
 		const [inserted] = await tx<JobRow[]>`
 			insert into jobs (
-				order_id, org_id, spec, budget_tokens, max_workers, max_duration_minutes, report_token_hash
+				order_id, org_id, spec, budget_tokens, max_workers, max_duration_minutes, report_token_hash,
+				mode, source_job_id
 			)
 			values (
 				${job.orderId}, ${job.orgId}, ${tx.json(job.spec as never)},
 				${job.budget.maxTokens}, ${job.budget.maxWorkers}, ${job.budget.maxDurationMinutes},
-				${job.reportTokenHash ?? null}
+				${job.reportTokenHash ?? null}, ${job.mode ?? 'build'}, ${job.sourceJobId ?? null}
 			)
 			returning *`
 		const linkOut = {

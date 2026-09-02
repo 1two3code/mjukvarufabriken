@@ -55,6 +55,8 @@ describe('jobs repository', () => {
 			gate_waivers: ['apps/api/src/x.ts:12'],
 			task_arn: null,
 			repository_url: null,
+			mode: 'build' as const,
+			source_job_id: null,
 			report_token_hash: null,
 			awaiting_approval: false,
 			approved: false,

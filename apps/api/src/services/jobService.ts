@@ -41,6 +41,12 @@ declare module 'fastify' {
 		jobService: {
 			/** Starts a build for a frozen spec: inserts the job, then `ecs:RunTask` when configured */
 			start: (orderId: string, session: BackendSession) => Promise<Job>
+			/**
+			 * Delivers the order's most recently delivered repository again — docs, deploy, live
+			 * acceptance, bundle — without rebuilding (a `redeliver` job, docs/LEARNINGS.md run 7).
+			 * The retry for a build whose gates passed but whose hosting side failed.
+			 */
+			redeliver: (orderId: string, session: BackendSession) => Promise<Job>
 			/** Org-scoped read; admins see every job */
 			get: (jobId: string, session: BackendSession) => Promise<Job>
 			listForOrder: (orderId: string, session: BackendSession) => Promise<Job[]>
@@ -133,6 +139,12 @@ export class SpecNotFrozen extends EntityInvalid {
 }
 
 /** Only one active job per order */
+export class NothingToRedeliver extends EntityInvalid {
+	constructor(orderId: string) {
+		super('job', orderId)
+	}
+}
+
 export class JobAlreadyActive extends EntityInvalid {
 	constructor(orderId: string) {
 		super('job', orderId)
@@ -157,6 +169,25 @@ export const budgetForSize: Record<SizeClass, JobBudget> = {
 	M: { maxTokens: 15_000_000, maxWorkers: 3, maxDurationMinutes: 240 },
 	L: { maxTokens: 40_000_000, maxWorkers: 4, maxDurationMinutes: 480 },
 }
+
+/**
+ * A redelivery runs no workers: only the handover prose session and the live acceptance probes
+ * spend tokens. Sized well above what those cost so the cap never ends a redelivery, and well
+ * below a build so a runaway one cannot cost a build.
+ */
+export const redeliveryBudget: JobBudget = { maxTokens: 3_000_000, maxWorkers: 1, maxDurationMinutes: 90 }
+
+/** A job whose repository is on GitHub — i.e. its delivery got past the repo step */
+export const hasDeliveredRepository = (job: Job) =>
+	!isActiveJobStatus(job.status) && /^https:\/\/github\.com\//.test(job.repositoryUrl ?? '')
+
+/**
+ * Which job the preview resources belong to: a redelivery reuses its SOURCE job's database,
+ * storage role and Express service (deterministic names), so a retry of the hosting side never
+ * mints a second set the customer's app would not be pointed at.
+ */
+export const provisioningJobIdOf = (job: Job) =>
+	job.mode === 'redeliver' && job.sourceJobId ? job.sourceJobId : job.id
 
 const isAdmin = (session: BackendSession) => session.role === 'admin'
 
@@ -290,6 +321,22 @@ const plugin: FastifyPluginAsync = async app => {
 		const order = await db.orders.getOrder(job.orderId)
 		const user = order?.createdBy ? await db.users.get(order.createdBy) : undefined
 		return user?.githubLogin
+	}
+
+	/**
+	 * What a `redeliver` job delivers again: the source job's repository, plus its plan and gate
+	 * reports (the handover docs are written from them). Undefined for a build.
+	 */
+	const redeliverySourceOf = async (job: Job) => {
+		if (job.mode !== 'redeliver' || !job.sourceJobId) return undefined
+		const source = await db.jobs.get(job.sourceJobId)
+		if (!source?.repositoryUrl) return undefined
+		return {
+			jobId: source.id,
+			repositoryUrl: source.repositoryUrl,
+			plan: source.plan,
+			gates: source.gates,
+		}
 	}
 
 	/** The approve-before-deliver flag lives on the order (W9); the job reads it via its report view */
@@ -499,6 +546,30 @@ const plugin: FastifyPluginAsync = async app => {
 			)
 	}
 
+	/** `ecs:RunTask` for an inserted row, or a terminal `failed` row when the launch itself fails */
+	const launch = async (job: Job, reportToken: string): Promise<Job> => {
+		if (!ecs.configured) {
+			app.log.warn({ jobId: job.id }, `ECS not configured — run: npm run job:dev -- ${job.id}`)
+			return job
+		}
+		try {
+			const taskArn = await ecs.runJob(job.id, reportToken)
+			return (await db.jobs.update(job.id, { taskArn })) ?? job
+		} catch (error) {
+			const reason = `ecs:RunTask failed: ${(error as Error).message}`
+			app.log.error({ err: error, jobId: job.id }, reason)
+			await db.jobs.appendEvent(job.id, { type: 'failed', payload: { reason } })
+			return (
+				(await db.jobs.update(job.id, {
+					status: 'failed',
+					reason,
+					finishedAt: new Date(),
+					reportTokenHash: null,
+				})) ?? job
+			)
+		}
+	}
+
 	app.decorate('jobService', {
 		get,
 		start: async (orderId, session) => {
@@ -536,26 +607,40 @@ const plugin: FastifyPluginAsync = async app => {
 					app.log.warn({ err: error, jobId: job.id }, 'Could not record the order customer slug')
 				)
 
-			if (!ecs.configured) {
-				app.log.warn({ jobId: job.id }, `ECS not configured — run: npm run job:dev -- ${job.id}`)
-				return job
-			}
-			try {
-				const taskArn = await ecs.runJob(job.id, reportToken)
-				return (await db.jobs.update(job.id, { taskArn })) ?? job
-			} catch (error) {
-				const reason = `ecs:RunTask failed: ${(error as Error).message}`
-				app.log.error({ err: error, jobId: job.id }, reason)
-				await db.jobs.appendEvent(job.id, { type: 'failed', payload: { reason } })
-				return (
-					(await db.jobs.update(job.id, {
-						status: 'failed',
-						reason,
-						finishedAt: new Date(),
-						reportTokenHash: null,
-					})) ?? job
-				)
-			}
+			return launch(job, reportToken)
+		},
+		redeliver: async (orderId, session) => {
+			// Org-scoped the same way `start` is: the spec draft is EntityNotFound for another org
+			const draft = await specService.get(orderId, session)
+			const orgId = draft.orgId ?? session.orgId
+			const jobs = await db.jobs.list({ orderId })
+			if (jobs.some(job => isActiveJobStatus(job.status))) throw new JobAlreadyActive(orderId)
+			// The newest job that got its repository onto GitHub — a build, or an earlier redelivery
+			// (whose source is then carried forward, so the chain always points at the build)
+			const latest = jobs
+				.filter(hasDeliveredRepository)
+				.toSorted((a, b) => b.createdAt.localeCompare(a.createdAt))[0]
+			if (!latest) throw new NothingToRedeliver(orderId)
+			const sourceJobId = provisioningJobIdOf(latest)
+			const source = latest.id === sourceJobId ? latest : await db.jobs.get(sourceJobId)
+			if (!source) throw new NothingToRedeliver(orderId)
+
+			const reportToken = mintReportToken()
+			const job = await db.jobs
+				.insert({
+					orderId,
+					orgId,
+					spec: source.spec,
+					budget: redeliveryBudget,
+					mode: 'redeliver',
+					sourceJobId: source.id,
+					reportTokenHash: hashReportToken(reportToken),
+				})
+				.catch((error: Error & { code?: string }) => {
+					if (error.code === '23505') throw new JobAlreadyActive(orderId)
+					throw error
+				})
+			return launch(job, reportToken)
 		},
 		listForOrder: async (orderId, session) => {
 			const jobs = await db.jobs.list({ orderId })
@@ -642,6 +727,8 @@ const plugin: FastifyPluginAsync = async app => {
 			customerGithubLogin: await customerGithubLoginOf(job),
 			approveBeforeDeliver: await approveBeforeDeliverOf(job),
 			approved: job.approved ?? false,
+			mode: job.mode ?? 'build',
+			source: await redeliverySourceOf(job),
 		}),
 		reportEvents: async (job, events) => {
 			const gateReports = parseGateReports(job, events)

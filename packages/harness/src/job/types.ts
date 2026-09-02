@@ -188,6 +188,8 @@ export type OrchestratorPorts = {
 
 export type DeliveryPortInput = {
 	jobId: string
+	/** Names the preview service (a redelivery passes its SOURCE job here); defaults to `jobId` */
+	serviceJobId?: string
 	spec: Spec
 	plan?: Plan
 	gates: GateReport[]

@@ -42,6 +42,9 @@ export const createMockDeliverables = (
 const mockPlugin: FastifyPluginAsync = async app => {
 	const mock: FastifyInstance['jobService'] = {
 		start: vi.fn((orderId: string) => Promise.resolve(createMockJob({ orderId }))),
+		redeliver: vi.fn((orderId: string) =>
+			Promise.resolve(createMockJob({ orderId, mode: 'redeliver', sourceJobId: 'job-0' }))
+		),
 		get: vi.fn((id: string) => Promise.resolve(createMockJob({ id }))),
 		listForOrder: vi.fn((orderId: string) => Promise.resolve([createMockJob({ orderId })])),
 		listEvents: vi.fn((jobId: string) => Promise.resolve([createMockJobEvent({ jobId })])),

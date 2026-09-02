@@ -72,6 +72,7 @@ export const acceptanceFailedNotification = (
 export const deliver = async (
 	{
 		jobId,
+		serviceJobId = jobId,
 		spec,
 		plan,
 		gates,
@@ -324,7 +325,7 @@ export const deliver = async (
 			// Per-job CodeBuild source: this job's repo zip in S3, so the image build is of THIS repo
 			const source = await uploadSource(jobId, repoDir, artifacts, signal)
 			const deployed = await deploy.deployFromRepo({
-				serviceName: previewServiceName(jobId, target.slug),
+				serviceName: previewServiceName(serviceJobId, target.slug),
 				repositoryUrl,
 				branch: 'main',
 				source,

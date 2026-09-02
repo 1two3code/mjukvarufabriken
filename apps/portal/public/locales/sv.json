@@ -53,6 +53,8 @@
   "error.body.pageNotFound": "Sidan du letar efter finns inte.",
   "error.label.pageNotFound": "Sidan hittades inte",
   "job.card.action.kill": "Avbryt jobbet",
+  "job.card.action.redeliver": "Leverera igen",
+  "job.card.action.redeliverHint": "Kör bara om leveransen av byggets kodförråd — dokumentation, driftsättning och livekontrollen — utan att bygga om.",
   "job.card.finished": "Avslutat",
   "job.card.started": "Startat",
   "job.card.tasks": "Uppgifter",

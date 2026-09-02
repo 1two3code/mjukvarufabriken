@@ -216,6 +216,7 @@ export const createLiveDeliveryClients = ({
 			: {
 					createRepo: notConfigured('GITHUB_APP (id/key/installation)'),
 					push: notConfigured('GITHUB_APP (id/key/installation)'),
+					clone: notConfigured('GITHUB_APP (id/key/installation)'),
 					addCollaborator: notConfigured('GITHUB_APP (id/key/installation)'),
 				},
 		deploy: (() => {
