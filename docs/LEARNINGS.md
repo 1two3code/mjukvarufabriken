@@ -123,6 +123,12 @@ live URL; the job still finished `delivered`.
   no URL is presented to the customer as a delivery (first logged after run 4). The repo + bundle
   contract is honoured, but the status word is wrong for what the customer bought.
 
+**Graduated to (second half):** a `redeliver` job mode (`POST /bff/orders/:orderId/jobs/redeliver`,
+"Deliver again" on the job page). It clones the order's delivered repository and runs only the
+delivery half — docs, secret scan, deploy, live acceptance, bundle — under the SOURCE job's
+Express service, database and storage role. A hosting-side failure now costs a near-zero-token
+retry instead of a ~USD 17 rebuild, which is what run 7 should have had.
+
 **Next run's expectation:** with TagRole granted, the storage role mints, the deploy proceeds and
 the live acceptance check runs for the first time on this app — against a database-backed store
 and an S3-backed upload path, both of which are exercised live for the first time.
