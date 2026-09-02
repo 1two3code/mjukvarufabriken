@@ -1,9 +1,12 @@
 import {
+	demoPriceFromTiers,
+	demoPriceSek,
+	demoTierKey,
 	estimatePrice,
 	priceCeilingSek,
 	priceForSize,
-	sizePricesFromTiers,
 	sizeClass,
+	sizePricesFromTiers,
 	tierKeyForSize,
 } from '#spec/priceEstimator.ts'
 
@@ -114,7 +117,12 @@ describe('priceEstimator', () => {
 				tier({ price: 3_000, effectiveFrom: '2026-08-31T00:00:00.000Z' }),
 				tier({ id: 'tier-2', price: 2_000, effectiveFrom: '2026-09-10T00:00:00.000Z' }),
 				tier({ id: 'tier-3', price: 1_000, effectiveFrom: '2027-01-01T00:00:00.000Z' }),
-				tier({ id: 'tier-4', price: 100, currency: 'USD', effectiveFrom: '2026-09-12T00:00:00.000Z' }),
+				tier({
+					id: 'tier-4',
+					price: 100,
+					currency: 'USD',
+					effectiveFrom: '2026-09-12T00:00:00.000Z',
+				}),
 			]
 			expect(sizePricesFromTiers(tiers, at)).toEqual({ S: 2_000 })
 		})
@@ -126,6 +134,35 @@ describe('priceEstimator', () => {
 
 		it('Maps every size class to a build tier key', () => {
 			expect(tierKeyForSize).toEqual({ S: 'build_s', M: 'build_m', L: 'build_l' })
+		})
+
+		it('Prices a demo from the effective demo row, falling back to 500 kr, capped at the ceiling', () => {
+			expect(demoTierKey).toBe('demo')
+			expect(demoPriceSek).toBe(500)
+			// No demo row (a fresh install, the in-memory db): the ladder default
+			expect(demoPriceFromTiers([tier({ price: 2_500 })], at)).toBe(500)
+			// The latest non-future SEK demo row wins; build rows never leak into the demo price
+			const tiers = [
+				tier({ tierKey: 'demo', price: 500, effectiveFrom: '2026-08-31T00:00:00.000Z' }),
+				tier({
+					id: 'tier-2',
+					tierKey: 'demo',
+					price: 450,
+					effectiveFrom: '2026-09-10T00:00:00.000Z',
+				}),
+				tier({
+					id: 'tier-3',
+					tierKey: 'demo',
+					price: 300,
+					effectiveFrom: '2027-01-01T00:00:00.000Z',
+				}),
+				tier({ id: 'tier-4', tierKey: 'demo', price: 40, currency: 'USD' }),
+				tier({ id: 'tier-5', tierKey: 'build_l', price: 4_800 }),
+			]
+			expect(demoPriceFromTiers(tiers, at)).toBe(450)
+			expect(demoPriceFromTiers([tier({ tierKey: 'demo', price: 9_000 })], at)).toBe(
+				priceCeilingSek
+			)
 		})
 	})
 })
