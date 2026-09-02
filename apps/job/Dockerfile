@@ -2,7 +2,12 @@ FROM --platform=linux/amd64 node:24-alpine3.22
 
 # git for worktrees/merges, bash + coreutils for the agent's shell tool, ripgrep for Grep,
 # setpriv (util-linux) for the uid/capability switch below
-RUN apk add --no-cache git bash coreutils ripgrep setpriv
+# chromium: the live acceptance check renders the delivered app in a REAL browser (playwright-core
+# drives the system chromium; no browser download). jsdom cannot execute the <script type="module">
+# every Vite build ships, so without this every working app is judged a blank page (run 8, 2026-09-02).
+RUN apk add --no-cache git bash coreutils ripgrep setpriv \
+	chromium nss freetype harfbuzz ca-certificates ttf-freefont
+ENV PLAYWRIGHT_CHROMIUM_EXECUTABLE_PATH=/usr/bin/chromium-browser MF_REQUIRE_BROWSER=1
 
 WORKDIR /usr/src
 

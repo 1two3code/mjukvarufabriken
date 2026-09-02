@@ -91,6 +91,29 @@ repair-session staging. **Graduated to:** sandbox/orchestrator fixes in
 
 <!-- New entries above the seed section, newest first. -->
 
+## 2026-09-02 — job 9bfd0c56 (Ögonblick, M) — dogfood run 8, everything green but the render
+6.72 M budget-tokens (~USD 17). **All five gates green** (review: 2 findings, none open), all
+tasks merged clean without a repair, repository delivered, **deploy green** at a public Express
+URL, every API probe passing — `/bff/photos` answers `[]` with 200, i.e. the durable store is
+talking to its provisioned database over TLS (the #113 fix, first time exercised). The live
+acceptance check then failed on one line: `blank page: the headless render put nothing into
+#root`. The URL was withheld.
+
+- **Root cause:** the headless renderer was jsdom (`runScripts: 'dangerously'`). jsdom does not
+  execute `<script type="module">` at all, and that is the only kind of script a Vite build
+  ships. The check would have judged every correct app in the factory's history a blank page;
+  it had simply never reached a correct app before.
+- **Graduated to:** a real headless Chromium. `playwright-core` drives the job image's `chromium`
+  (Alpine package, no browser download), honours the egress proxy, collects page errors, and
+  polls `#root` like before. jsdom stays only as a local fallback, and the job image sets
+  `MF_REQUIRE_BROWSER=1` so a missing browser is a reported failure, never a silent downgrade.
+  Tests: a module-script SPA renders in the browser and stays blank under jsdom (pinning the
+  reason), and a configured-but-missing browser reports itself.
+- **Cheap retry:** run 8's repository is correct, so the fix is proven by a *redelivery* of it —
+  the deploy step reuses the running service, the browser check runs against it.
+- **Recurred, still OPEN (10th time):** `delivered` with `deployUrl: null`.
+
+
 ## 2026-09-02 — job a92fb019 (Ögonblick, redeliver of run 7, 6th) — the first live URL
 69 874 tokens (~USD 0.20). **Deploy step green for the first time**: an internet-facing Express
 service at `https://mf-….ecs.eu-north-1.on.aws`, the SPA served, the container logging
