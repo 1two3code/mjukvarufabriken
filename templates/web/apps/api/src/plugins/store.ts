@@ -1,48 +1,51 @@
 import fp from 'fastify-plugin'
+import postgres from 'postgres'
+
+import { createMemoryStore, createPostgresStore } from '#/plugins/store.utils.ts'
 
 import type { FastifyPluginAsync } from 'fastify'
+import type { StoreBackend } from '#/plugins/store.utils.ts'
 
 declare module 'fastify' {
 	interface FastifyInstance {
-		store: {
-			get: <T>(collection: string, id: string) => Promise<T | undefined>
-			list: <T>(collection: string) => Promise<T[]>
-			put: <T>(collection: string, id: string, value: T) => Promise<void>
-			delete: (collection: string, id: string) => Promise<boolean>
-		}
+		store: StoreBackend
 	}
 }
 
 /**
- * In-memory key/value store keyed by collection. It exists so the template runs
- * without external services; replace it with a real database client (DynamoDB,
- * Postgres, …) while keeping the same interface so services stay untouched.
+ * The app's persistence: a key/value store keyed by collection, durable on Postgres.
+ *
+ * With `DATABASE_URL` set (every deployed environment — the platform provisions a database for
+ * each delivered app and injects the URL) values live in a Postgres table and survive restarts,
+ * redeploys and scaling. Without it (local development, tests) the same interface runs in memory
+ * so the template works with no external services.
+ *
+ * USE THIS for anything the app must remember — do not add a second database client, an ORM or
+ * a hand-rolled table layer for ordinary records; `app.store` already is the database. Reach for
+ * raw SQL only when a feature genuinely needs relational queries the key/value contract cannot
+ * express, and then keep using `DATABASE_URL`.
  */
 const plugin: FastifyPluginAsync = async app => {
-	const collections = new Map<string, Map<string, unknown>>()
+	const url = process.env.DATABASE_URL
+	const store = url ? durableStore(url) : createMemoryStore()
 
-	const getCollection = (name: string) => {
-		const existing = collections.get(name)
-		if (existing) return existing
-		const created = new Map<string, unknown>()
-		collections.set(name, created)
-		return created
+	if (store.kind === 'memory') {
+		app.log.warn('store: DATABASE_URL is not set — data is kept in memory and lost on restart')
+	} else {
+		app.log.info('store: durable on Postgres')
 	}
 
-	app.decorate('store', {
-		get: async (collection, id) => {
-			const value = getCollection(collection).get(id)
-			return value === undefined ? undefined : structuredClone(value as never)
-		},
-		list: async collection =>
-			[...getCollection(collection).values()].map(x => structuredClone(x as never)),
-		put: async (collection, id, value) => {
-			getCollection(collection).set(id, structuredClone(value))
-		},
-		delete: async (collection, id) => getCollection(collection).delete(id),
-	})
+	app.decorate('store', store)
+	app.addHook('onClose', () => store.close())
+}
 
-	app.addHook('onClose', async () => collections.clear())
+/** Connects lazily (first query), fails fast on an unreachable host, honours `?sslmode=` in the URL */
+const durableStore = (url: string) => {
+	const sql = postgres(url, { connect_timeout: 10, max: 5 })
+	return createPostgresStore(
+		(text, params = []) => sql.unsafe(text, params as never),
+		() => sql.end({ timeout: 5 })
+	)
 }
 
 export default fp(plugin, { name: '#internal/store' })
