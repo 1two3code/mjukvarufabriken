@@ -1,0 +1,84 @@
+/* MARK: Layout */
+.timeline {
+	display: flex;
+	flex-direction: column;
+	gap: var(--spacing-xs);
+
+	padding: var(--spacing-s);
+	border: var(--border-width-xs) solid var(--divider-color);
+	border-radius: var(--border-radius-base);
+
+	background: var(--content-background);
+}
+
+.title {
+	margin: 0;
+}
+
+.steps {
+	display: flex;
+	flex-direction: column;
+	gap: var(--spacing-xxs);
+
+	margin: 0;
+	padding: 0;
+
+	list-style: none;
+}
+
+/* MARK: Steps */
+.step {
+	display: grid;
+	grid-template-columns: max-content max-content max-content 1fr;
+	gap: var(--spacing-xs);
+	align-items: baseline;
+
+	padding: var(--spacing-xxs) 0;
+}
+
+.marker {
+	display: inline-block;
+
+	width: 0.8rem;
+	height: 0.8rem;
+	border-radius: 50%;
+
+	background: var(--divider-color);
+}
+
+.name {
+	composes: composable-subheader-font from global;
+}
+
+.verdict {
+	composes: composable-caption-font from global;
+	color: var(--secondary-text-color);
+}
+
+.detail {
+	composes: composable-caption-font from global;
+
+	display: flex;
+	flex-wrap: wrap;
+	gap: var(--spacing-xs);
+
+	overflow-wrap: anywhere;
+	white-space: pre-wrap;
+}
+
+/* MARK: Tones */
+.ok .marker {
+	background: var(--success);
+}
+
+.failed .marker {
+	background: var(--error);
+}
+
+.failed .verdict {
+	color: var(--error);
+}
+
+.pending {
+	color: var(--secondary-text-color);
+}

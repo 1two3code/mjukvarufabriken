@@ -1,0 +1,10 @@
+.list {
+	display: flex;
+	flex-direction: column;
+	gap: var(--spacing-xs);
+	margin-bottom: var(--spacing-base);
+}
+
+.title {
+	margin: 0;
+}

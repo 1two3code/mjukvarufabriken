@@ -24,6 +24,7 @@ const toneByType: Partial<Record<JobEventType, string>> = {
 	failed: styles.error,
 	killed: styles.error,
 	task_failed: styles.error,
+	retry: styles.info,
 }
 
 /** Tone of a `gate` event depends on its verdict, not its type */
@@ -60,7 +61,10 @@ const eventText = (event: JobEvent, t: TFunction) => {
 				output: payload.output ?? '',
 			})
 		case 'done':
-			return t('job.event.done', { tokens: payload.tokensUsed })
+			// A delivered job whose preview URL was withheld carries why (harness → `reason`)
+			return payload.reason
+				? t('job.event.doneUnhosted', { tokens: payload.tokensUsed, reason: payload.reason })
+				: t('job.event.done', { tokens: payload.tokensUsed })
 		case 'failed':
 		case 'killed':
 			return t(`job.event.${event.type}`, { reason: payload.reason ?? '' })
@@ -79,6 +83,12 @@ const eventText = (event: JobEvent, t: TFunction) => {
 		case 'notify':
 			// Admin-only: customers never receive `notify` events (redacted by the api)
 			return t('job.event.notify', { subject: payload.subject ?? '' })
+		case 'retry':
+			// Both rows of an automatic rebuild carry one: the failed job `{retryJobId}`, the retry
+			// `{ofJobId, attempt}` (db.jobs.insertRetry)
+			return payload.retryJobId
+				? t('job.event.retrySpawned', { jobId: payload.retryJobId })
+				: t('job.event.retryOf', { jobId: payload.ofJobId ?? '' })
 		default:
 			return JSON.stringify(payload)
 	}

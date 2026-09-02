@@ -2,10 +2,12 @@ import styles from './OrderStatusBadge.module.css'
 
 import { useTranslation } from 'react-i18next'
 
-import type { OrderStatus } from '@mf/models'
+import type { HostingStatus, OrderStatus } from '@mf/models'
 
 type OrderStatusBadgeProps = {
 	status: OrderStatus
+	/** What the customer actually got; a `delivered` order without a preview says so (F7) */
+	hosting?: HostingStatus
 }
 
 const tone: Record<OrderStatus, string> = {
@@ -20,9 +22,12 @@ const tone: Record<OrderStatus, string> = {
 	cancelled: styles.error,
 }
 
-export function OrderStatusBadge({ status }: OrderStatusBadgeProps) {
+export function OrderStatusBadge({ status, hosting }: OrderStatusBadgeProps) {
 	const { t } = useTranslation()
+	const unhosted = status === 'delivered' && hosting === 'unhosted'
 	return (
-		<span className={[styles.badge, tone[status]].join(' ')}>{t(`order.status.${status}`)}</span>
+		<span className={[styles.badge, unhosted ? styles.caution : tone[status]].join(' ')}>
+			{t(unhosted ? 'order.status.deliveredUnhosted' : `order.status.${status}`)}
+		</span>
 	)
 }
