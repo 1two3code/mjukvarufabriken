@@ -21,6 +21,7 @@ const mockPlugin: FastifyPluginAsync = async app => {
 		provisionAccounts: false,
 		preview: { tokenAudience: 'preview', dbAdminUrl: undefined, dbHost: undefined },
 		orgLifecycle: { enabled: false, region: 'eu-north-1', graceDays: 30 },
+		demoWeeklyCap: 5,
 		infra: { jobSubnetIds: [], jobApiUrl: 'https://api.example.com' },
 	})
 }

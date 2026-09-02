@@ -1,3 +1,5 @@
+import { defaultDemoWeeklyCap, parseDemoWeeklyCap } from '#/plugins/secrets.ts'
+
 // Clearly mocked: no real AWS calls are made in this suite.
 const sendMock = vi.hoisted(() => vi.fn())
 vi.mock('@aws-sdk/client-secrets-manager', () => ({
@@ -70,7 +72,13 @@ describe('Secrets plugin (secrets)', () => {
 			residentBilling: { meterEvent: 'resident_usage_usd_cents', priceId: 'price_123' },
 			provisionAccounts: false,
 			preview: { tokenAudience: 'preview', dbAdminUrl: undefined, dbHost: undefined },
-			orgLifecycle: { enabled: false, region: 'eu-north-1', customersOuId: undefined, graceDays: 30 },
+			orgLifecycle: {
+				enabled: false,
+				region: 'eu-north-1',
+				customersOuId: undefined,
+				graceDays: 30,
+			},
+			demoWeeklyCap: 5,
 			infra: expect.objectContaining({
 				artifactsBucket: 'mf-artifacts',
 				jobSubnetIds: ['subnet-a', 'subnet-b'],
@@ -111,6 +119,24 @@ describe('Secrets plugin (secrets)', () => {
 			emailTransport: 'log',
 			emailFrom: 'noreply@mjukvaruhuset.se',
 		})
+	})
+
+	it('Reads the weekly demo cap, allows zero and falls back to 5 for garbage', async () => {
+		// Arrange
+		stubRequiredEnv()
+		vi.stubEnv('DEMO_WEEKLY_CAP', '0')
+
+		// Act
+		const app = await createTestApp({ skipMock: '#/plugins/secrets.ts' })
+
+		// Assert
+		expect(app.secrets.demoWeeklyCap).toBe(0)
+		expect(parseDemoWeeklyCap('8')).toBe(8)
+		expect(parseDemoWeeklyCap('2.9')).toBe(2)
+		expect(parseDemoWeeklyCap(undefined)).toBe(defaultDemoWeeklyCap)
+		expect(parseDemoWeeklyCap('')).toBe(defaultDemoWeeklyCap)
+		expect(parseDemoWeeklyCap('-1')).toBe(defaultDemoWeeklyCap)
+		expect(parseDemoWeeklyCap('many')).toBe(defaultDemoWeeklyCap)
 	})
 
 	it('Defaults the email transport to ses in live', async () => {

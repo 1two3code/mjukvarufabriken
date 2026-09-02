@@ -100,6 +100,12 @@ declare module 'fastify' {
 				customersOuId?: string
 				graceDays: number
 			}
+			/**
+			 * How many voucher demo builds an admin may approve per rolling week without `force`
+			 * (`DEMO_WEEKLY_CAP`, default 5; strategy 2026-08-31 — demos are capped so a good week
+			 * of interest cannot turn into an unbounded token bill).
+			 */
+			demoWeeklyCap: number
 			/** Infra handles (set by the CDK web stack) */
 			infra: {
 				databaseSecretArn?: string
@@ -137,6 +143,18 @@ export const defaultLifecycleGraceDays = 30
 export const parseGraceDays = (value: string | undefined): number => {
 	const parsed = Number(value)
 	return Number.isFinite(parsed) && parsed > 0 ? Math.floor(parsed) : defaultLifecycleGraceDays
+}
+
+/** Demo builds approvable per rolling week without `force` unless configured (strategy 2026-08-31) */
+export const defaultDemoWeeklyCap = 5
+
+/**
+ * Parses `DEMO_WEEKLY_CAP`; a missing / negative / non-numeric value falls back to the default.
+ * Zero is a valid value: every approval then needs `force` (the demo rung is paused).
+ */
+export const parseDemoWeeklyCap = (value: string | undefined): number => {
+	const parsed = Number(value?.trim() || Number.NaN)
+	return Number.isFinite(parsed) && parsed >= 0 ? Math.floor(parsed) : defaultDemoWeeklyCap
 }
 
 /**
@@ -267,6 +285,7 @@ const plugin: FastifyPluginAsync = async app => {
 			customersOuId: process.env.ORG_CUSTOMERS_OU_ID || undefined,
 			graceDays: parseGraceDays(process.env.LIFECYCLE_GRACE_DAYS),
 		},
+		demoWeeklyCap: parseDemoWeeklyCap(process.env.DEMO_WEEKLY_CAP),
 		infra: {
 			databaseSecretArn: process.env.DATABASE_SECRET_ARN,
 			jobApiUrl: process.env.JOB_API_URL || authIssuer,

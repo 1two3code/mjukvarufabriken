@@ -63,6 +63,37 @@ describe('POST /bff/orders/:orderId/jobs route', () => {
 		expect(app.jobService.start).not.toHaveBeenCalled()
 	})
 
+	it('Responds 409 demoAwaitingApproval for a paid demo an admin has not approved (customers)', async () => {
+		// Arrange
+		vi.spyOn(app.orderService, 'get').mockResolvedValue(
+			createMockOrder({ id: 'order-1', kind: 'demo', status: 'deposit_paid' })
+		)
+
+		// Act
+		const response = await app.inject({ method: 'POST', url })
+
+		// Assert
+		expect(response.statusCode).toBe(409)
+		expect(response.json().error.code).toBe('demoAwaitingApproval')
+		expect(app.jobService.start).not.toHaveBeenCalled()
+	})
+
+	it('Lets a customer restart an approved demo (a failed build) like any paid order', async () => {
+		vi.spyOn(app.orderService, 'get').mockResolvedValue(
+			createMockOrder({
+				id: 'order-1',
+				kind: 'demo',
+				status: 'deposit_paid',
+				buildApprovedAt: '2026-09-02T10:00:00.000Z',
+			})
+		)
+
+		const response = await app.inject({ method: 'POST', url })
+
+		expect(response.statusCode).toBe(201)
+		expect(app.jobService.start).toHaveBeenCalledWith('order-1', session)
+	})
+
 	it('Lets an admin start a build on a frozen order and marks it building', async () => {
 		// Arrange: the admin override — the auth mock's session is patched to the admin role
 		app = await createTestApp()

@@ -1,9 +1,15 @@
 import { EntityNotFound } from '#/lib/entityError.ts'
 import { createMockJob } from '#/plugins/__mocks__/db.ts'
-import { InvalidOrderTransition, transitionSources } from '#/services/orderService.ts'
+import {
+	demoCapWindowMs,
+	DemoNotApprovable,
+	DemoWeeklyCapReached,
+	InvalidOrderTransition,
+	transitionSources,
+} from '#/services/orderService.ts'
 
 import type { FastifyInstance } from 'fastify'
-import type { BackendSession, OrderStatus } from '@mf/models'
+import type { BackendSession, OrderKind, OrderStatus } from '@mf/models'
 
 const user: BackendSession = { userId: 'user-1', role: 'user', orgId: 'org-1' }
 const other: BackendSession = { userId: 'user-2', role: 'user', orgId: 'org-2' }
@@ -275,9 +281,9 @@ describe('Order Service', () => {
 			await app.db.orders.markPaymentPaid(payment.id, {})
 		}
 		const jobDelivered = (id: string) =>
-			vi.spyOn(app.db.jobs, 'list').mockResolvedValue([
-				createMockJob({ orderId: id, status: 'delivered' }),
-			])
+			vi
+				.spyOn(app.db.jobs, 'list')
+				.mockResolvedValue([createMockJob({ orderId: id, status: 'delivered' })])
 
 		it('Closes a delivered full-upfront order as paid (no balance step)', async () => {
 			const id = await toBuilding(500)
@@ -379,6 +385,170 @@ describe('Order Service', () => {
 		it("Hides another org's order", async () => {
 			const { id } = await app.orderService.create('x', user)
 			await expect(app.orderService.getDetail(id, other)).rejects.toBeInstanceOf(EntityNotFound)
+		})
+	})
+
+	describe('startBuild (deposit webhook + demo approval)', () => {
+		const paidOrder = async (kind: OrderKind = 'build') => {
+			const order = await app.orderService.create('x', user, kind)
+			for (const status of ['ready', 'frozen', 'deposit_paid'] as const) {
+				await app.orderService.transition(order.id, status)
+			}
+			return order
+		}
+
+		it('Starts the job as the caller, marks the order building and provisions the account', async () => {
+			const { id } = await paidOrder()
+
+			await app.orderService.startBuild(id, admin)
+
+			expect(app.jobService.start).toHaveBeenCalledWith(id, admin)
+			expect(app.accountService.provisionCustomerAccount).toHaveBeenCalledWith('org-1')
+			await expect(app.orderService.get(id, user)).resolves.toMatchObject({ status: 'building' })
+		})
+
+		it('Throws when the job cannot start, leaves the order paid, still provisions the account', async () => {
+			const { id } = await paidOrder()
+			vi.mocked(app.jobService.start).mockRejectedValueOnce(new Error('ECS down'))
+			vi.mocked(app.accountService.provisionCustomerAccount).mockRejectedValueOnce(
+				new Error('CreateAccount failed')
+			)
+
+			await expect(app.orderService.startBuild(id, admin)).rejects.toThrow('ECS down')
+
+			await expect(app.orderService.get(id, user)).resolves.toMatchObject({
+				status: 'deposit_paid',
+			})
+			expect(app.accountService.provisionCustomerAccount).toHaveBeenCalledWith('org-1')
+			// The provisioning rejection is fire-and-forget: let its .catch() settle
+			await new Promise(resolve => setImmediate(resolve))
+		})
+
+		it("Is org-scoped like every other read: another org's order is not found", async () => {
+			const { id } = await paidOrder()
+			await expect(app.orderService.startBuild(id, other)).rejects.toBeInstanceOf(EntityNotFound)
+			expect(app.jobService.start).not.toHaveBeenCalled()
+		})
+	})
+
+	describe('approveDemoBuild / demoQueue (voucher demo, wave 14)', () => {
+		const paidDemo = async (kind: OrderKind = 'demo') => {
+			const order = await app.orderService.create('demo', user, kind)
+			for (const status of ['ready', 'frozen', 'deposit_paid'] as const) {
+				await app.orderService.transition(order.id, status)
+			}
+			return order
+		}
+
+		it('Stamps the approval and starts the build like the webhook does', async () => {
+			const { id } = await paidDemo()
+
+			const approved = await app.orderService.approveDemoBuild(id, admin)
+
+			expect(approved).toMatchObject({
+				id,
+				kind: 'demo',
+				status: 'building',
+				buildApprovedAt: expect.any(String),
+			})
+			expect(app.jobService.start).toHaveBeenCalledWith(id, admin)
+			expect(app.accountService.provisionCustomerAccount).toHaveBeenCalledWith('org-1')
+			await expect(app.db.orders.countDemoApprovalsSince(new Date(0))).resolves.toBe(1)
+		})
+
+		it('Refuses a real build and a demo that is not deposit_paid', async () => {
+			const build = await paidDemo('build')
+			await expect(app.orderService.approveDemoBuild(build.id, admin)).rejects.toBeInstanceOf(
+				DemoNotApprovable
+			)
+
+			const frozen = await app.orderService.create('demo', user, 'demo')
+			await app.orderService.transition(frozen.id, 'ready')
+			await app.orderService.transition(frozen.id, 'frozen')
+			await expect(app.orderService.approveDemoBuild(frozen.id, admin)).rejects.toBeInstanceOf(
+				DemoNotApprovable
+			)
+
+			expect(app.jobService.start).not.toHaveBeenCalled()
+			await expect(app.orderService.approveDemoBuild('missing', admin)).rejects.toBeInstanceOf(
+				EntityNotFound
+			)
+		})
+
+		it('Enforces the weekly cap over a rolling seven days, and `force` bypasses it', async () => {
+			app.secrets.demoWeeklyCap = 2
+			// Last week's approval is outside the rolling window and does not count
+			const stale = await paidDemo()
+			await app.db.orders.setBuildApprovedAt(stale.id, new Date(Date.now() - demoCapWindowMs - 1))
+			const first = await paidDemo()
+			const second = await paidDemo()
+			const third = await paidDemo()
+			await app.orderService.approveDemoBuild(first.id, admin)
+			await app.orderService.approveDemoBuild(second.id, admin)
+
+			// The week is full: refused with the count, nothing stamped, nothing started
+			await expect(app.orderService.approveDemoBuild(third.id, admin)).rejects.toMatchObject({
+				approved: 2,
+				cap: 2,
+			})
+			await expect(app.orderService.approveDemoBuild(third.id, admin)).rejects.toBeInstanceOf(
+				DemoWeeklyCapReached
+			)
+			expect(app.jobService.start).toHaveBeenCalledTimes(2)
+			const refused = await app.orderService.get(third.id, user)
+			expect(refused.status).toBe('deposit_paid')
+			expect(refused.buildApprovedAt).toBeUndefined()
+
+			// An admin may deliberately over-allocate the week
+			await expect(
+				app.orderService.approveDemoBuild(third.id, admin, { force: true })
+			).resolves.toMatchObject({ status: 'building', buildApprovedAt: expect.any(String) })
+			expect(app.jobService.start).toHaveBeenCalledTimes(3)
+			await expect(app.orderService.demoQueue()).resolves.toMatchObject({
+				orders: [],
+				approvedThisWeek: 3,
+				cap: 2,
+			})
+		})
+
+		it('Restarts an approved demo whose build failed to start without a second approval', async () => {
+			const { id } = await paidDemo()
+			vi.mocked(app.jobService.start).mockRejectedValueOnce(new Error('ECS down'))
+
+			await expect(app.orderService.approveDemoBuild(id, admin)).rejects.toThrow('ECS down')
+			const stamped = await app.orderService.get(id, user)
+			expect(stamped).toMatchObject({ status: 'deposit_paid', buildApprovedAt: expect.any(String) })
+
+			// The retry: same approval instant, one more start, the week's count unchanged
+			const started = await app.orderService.approveDemoBuild(id, admin)
+
+			expect(started).toMatchObject({
+				status: 'building',
+				buildApprovedAt: stamped.buildApprovedAt,
+			})
+			expect(app.jobService.start).toHaveBeenCalledTimes(2)
+			await expect(app.db.orders.countDemoApprovalsSince(new Date(0))).resolves.toBe(1)
+		})
+
+		it('Lists the paid, unapproved demos oldest first with the cap state', async () => {
+			vi.useFakeTimers({ toFake: ['Date'], now: new Date('2026-09-02T10:00:00.000Z') })
+			try {
+				const older = await paidDemo()
+				vi.setSystemTime(new Date('2026-09-02T11:00:00.000Z'))
+				const approved = await paidDemo()
+				await app.orderService.approveDemoBuild(approved.id, admin)
+				vi.setSystemTime(new Date('2026-09-02T12:00:00.000Z'))
+				const newer = await paidDemo()
+				await paidDemo('build')
+				await app.orderService.create('drafting demo', user, 'demo')
+
+				const queue = await app.orderService.demoQueue()
+
+				expect(queue.orders.map(order => order.id)).toEqual([older.id, newer.id])
+				expect(queue).toMatchObject({ approvedThisWeek: 1, cap: 5 })
+			} finally {
+				vi.useRealTimers()
+			}
 		})
 	})
 })

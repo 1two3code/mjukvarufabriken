@@ -34,6 +34,7 @@ import type {
 	JobReportUpdateResponse,
 	JobStatus,
 	SizeClass,
+	Spec,
 } from '@mf/models'
 
 declare module 'fastify' {
@@ -169,6 +170,12 @@ export const budgetForSize: Record<SizeClass, JobBudget> = {
 	M: { maxTokens: 15_000_000, maxWorkers: 3, maxDurationMinutes: 240 },
 	L: { maxTokens: 40_000_000, maxWorkers: 4, maxDurationMinutes: 480 },
 }
+
+/**
+ * A voucher demo order (wave 14) builds on the S budget whatever its spec's size class: the
+ * price is fixed at the demo tier, so the spend ceiling is too (≈ USD 15 against 500 kr).
+ */
+export const demoBudget: JobBudget = budgetForSize.S
 
 /**
  * A redelivery runs no workers: only the handover prose session and the live acceptance probes
@@ -328,6 +335,16 @@ const plugin: FastifyPluginAsync = async app => {
 	const approveBeforeDeliverOf = async (job: Job) =>
 		(await db.orders.getOrder(job.orderId))?.approveBeforeDeliver ?? false
 
+	/**
+	 * The budget a build of this order gets: its size class's, except a voucher demo (wave 14)
+	 * always runs on the S budget — the customer paid ~500 kr whatever the classifier said, so
+	 * the class sizes nothing but the spend ceiling, and that ceiling is the demo's.
+	 */
+	const budgetFor = async (orderId: string, spec: Spec): Promise<JobBudget> => {
+		const order = await db.orders.getOrder(orderId)
+		return order?.kind === 'demo' ? demoBudget : budgetForSize[spec.sizeClass ?? 'S']
+	}
+
 	const scoped = (job: Job | undefined, session: BackendSession, id: string) => {
 		if (!job || (!isAdmin(session) && job.orgId !== session.orgId)) {
 			throw new EntityNotFound('job', id)
@@ -372,9 +389,13 @@ const plugin: FastifyPluginAsync = async app => {
 	 * disqualifies it, so two failed attempts can never chain into a third. The bound is
 	 * structural: `db.jobs.insertRetry` writes the retry row and BOTH events in one transaction,
 	 * so no crash can leave a retry row that reads as a fresh first attempt.
+	 *
+	 * The class is the ORDER's rung first (a voucher demo retries whatever its spec was classified
+	 * as — it runs on the S budget anyway, see `budgetFor`), then the spec's size class.
 	 */
 	const autoRetryCandidate = async (job: Job) => {
-		if ((job.spec.sizeClass ?? 'S') !== 'S') return false
+		const order = await db.orders.getOrder(job.orderId)
+		if (order?.kind !== 'demo' && (job.spec.sizeClass ?? 'S') !== 'S') return false
 		const events = await db.jobs.listEvents(job.id)
 		return !events.some(event => event.type === 'retry')
 	}
@@ -412,7 +433,8 @@ const plugin: FastifyPluginAsync = async app => {
 					orderId: job.orderId,
 					orgId: job.orgId,
 					spec: job.spec,
-					budget: budgetForSize[job.spec.sizeClass ?? 'S'],
+					// The failed attempt's own budget: S for an S spec and for a demo of any class
+					budget: job.budget,
 					reportTokenHash: hashReportToken(reportToken),
 				},
 				{ id: job.id, reason: job.reason, tokensUsed: job.tokensUsed }
@@ -565,7 +587,6 @@ const plugin: FastifyPluginAsync = async app => {
 			const draft = await specService.get(orderId, session)
 			if (draft.status !== 'frozen') throw new SpecNotFrozen(orderId)
 			const spec = SpecSchema.parse(draft.spec)
-			const sizeClass = spec.sizeClass ?? 'S'
 			const orgId = draft.orgId ?? session.orgId
 
 			// Friendly fast path; the jobs_one_active_per_order index is the real guard (23505)
@@ -578,7 +599,7 @@ const plugin: FastifyPluginAsync = async app => {
 					orderId,
 					orgId,
 					spec,
-					budget: budgetForSize[sizeClass],
+					budget: await budgetFor(orderId, spec),
 					reportTokenHash: hashReportToken(reportToken),
 				})
 				.catch((error: Error & { code?: string }) => {

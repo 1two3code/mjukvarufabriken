@@ -1,12 +1,18 @@
 import fp from 'fastify-plugin'
-import { createSpecEngine, estimatePrice, sizePricesFromTiers } from '@mf/harness'
 import { rateLimitWindowStart } from '@mf/db'
+import {
+	createSpecEngine,
+	demoPriceFromTiers,
+	estimatePrice,
+	sizePricesFromTiers,
+} from '@mf/harness'
 import { isSpecComplete } from '@mf/models'
 
 import { EntityInvalid, EntityNotFound } from '#/lib/entityError.ts'
 
 import type { FastifyInstance, FastifyPluginAsync } from 'fastify'
-import type { BackendSession, ChatMessage, SpecDraft } from '@mf/models'
+import type { PriceEstimate } from '@mf/harness'
+import type { BackendSession, ChatMessage, PartialSpec, SpecDraft } from '@mf/models'
 
 /**
  * Ceilings on the spec chat (audit P1-2). Every turn is a paid Anthropic call, `spec:write` is
@@ -99,11 +105,17 @@ const plugin: FastifyPluginAsync = async app => {
 	const engine = createSpecEngine({ client: anthropic, model: secrets.specModel })
 
 	/**
-	 * Build prices per size class from the operator-editable `pricing_tiers` table. An empty
-	 * table (the in-memory db, a fresh install) falls back to the ladder defaults in
-	 * `priceForSize`; a db error fails the request rather than quoting a stale default.
+	 * Prices the spec for its order from the operator-editable `pricing_tiers` table. A real
+	 * build is priced by its size class; a voucher demo (wave 14) at the `demo` tier whatever the
+	 * class — the class is still computed and stored, it sizes the build budget. An empty table
+	 * (the in-memory db, a fresh install) falls back to the ladder defaults; a db error fails the
+	 * request rather than quoting a stale default.
 	 */
-	const sizePrices = async () => sizePricesFromTiers(await db.pricingTiers.list())
+	const priceFor = async (orderId: string, spec: PartialSpec): Promise<PriceEstimate> => {
+		const [order, tiers] = await Promise.all([db.orders.getOrder(orderId), db.pricingTiers.list()])
+		const estimate = estimatePrice(spec, sizePricesFromTiers(tiers))
+		return order?.kind === 'demo' ? { ...estimate, priceSek: demoPriceFromTiers(tiers) } : estimate
+	}
 
 	/**
 	 * Counts one turn against the order, org and global windows and refuses when any is full.
@@ -174,7 +186,7 @@ const plugin: FastifyPluginAsync = async app => {
 			await countTurn(orderId, draft.orgId ?? session.orgId)
 
 			const turn = await engine.nextTurn(draft, content)
-			const price = turn.complete ? estimatePrice(turn.spec, await sizePrices()) : undefined
+			const price = turn.complete ? await priceFor(orderId, turn.spec) : undefined
 			const updated: SpecDraft = {
 				...draft,
 				status: turn.complete ? 'ready' : 'drafting',
@@ -197,7 +209,7 @@ const plugin: FastifyPluginAsync = async app => {
 			if (draft.status === 'frozen') return draft
 			if (!isSpecComplete(draft.spec)) throw new EntityInvalid('spec', orderId)
 
-			const price = estimatePrice(draft.spec, await sizePrices())
+			const price = await priceFor(orderId, draft.spec)
 			const frozen: SpecDraft = {
 				...draft,
 				status: 'frozen',

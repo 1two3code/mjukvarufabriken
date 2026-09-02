@@ -86,10 +86,11 @@ export async function createServer({ logLevel }: Options = {}): Promise<FastifyI
 		.register(userService)
 		.register(authService)
 		.register(contactService)
+		// orderService starts builds (wave 14 demo approval) and provisions the customer account
+		.register(accountService)
 		.register(orderService)
 		.register(residentService)
 		.register(iterationBriefService)
-		.register(accountService)
 		.register(paymentService)
 		.register(marginService)
 		.register(showcaseService)

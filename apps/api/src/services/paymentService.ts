@@ -16,6 +16,7 @@ import type { FastifyPluginAsync } from 'fastify'
 import type {
 	BackendSession,
 	CheckoutResponse,
+	Order,
 	OrderStatus,
 	Payment,
 	PaymentKind,
@@ -42,8 +43,9 @@ declare module 'fastify' {
 			) => Promise<CheckoutResponse>
 			/**
 			 * Verifies and applies one webhook delivery: idempotent on the event id, marks the
-			 * session's payment paid, moves the order on and, for the deposit, starts the build.
-			 * A failure while applying forgets the event id again so Stripe's retry is processed.
+			 * session's payment paid, moves the order on and, for the deposit of a real build,
+			 * starts the build (a demo waits for an admin approval instead). A failure while
+			 * applying forgets the event id again so Stripe's retry is processed.
 			 */
 			handleWebhook: (rawBody: string, signature: string | undefined) => Promise<WebhookResult>
 			/**
@@ -146,17 +148,7 @@ export const usageReportIdentifier = (
 type Applied = { payment: Payment; refundDue: boolean }
 
 const plugin: FastifyPluginAsync = async app => {
-	const {
-		db,
-		paymentProvider,
-		orderService,
-		jobService,
-		userService,
-		residentService,
-		accountService,
-		secrets,
-		email,
-	} = app
+	const { db, paymentProvider, orderService, userService, residentService, secrets, email } = app
 
 	const orderPageUrl = (orderId: string) => `${secrets.portalUrl}/orders/${orderId}`
 
@@ -229,27 +221,28 @@ const plugin: FastifyPluginAsync = async app => {
 			app.log.error({ err: error, orderId: order.id }, `Paid but could not move to ${to}`)
 			return { payment, refundDue: false }
 		}
-		if (payment.kind === 'deposit') await startBuild(order.id, order.orgId)
+		if (payment.kind === 'deposit') await startBuild(order)
 		return { payment, refundDue: false }
 	}
 
-	/** Deposit paid → the build starts on its own */
-	const startBuild = async (orderId: string, orgId: string) => {
-		try {
-			await jobService.start(orderId, webhookSession(orgId))
-			await orderService.transition(orderId, 'building')
-		} catch (error) {
-			app.log.error({ err: error, orderId }, 'Deposit paid but the build could not be started')
+	/**
+	 * Deposit paid → the build starts on its own — for a real build. A voucher demo (wave 14)
+	 * stays `deposit_paid` until an admin approves it (`orderService.approveDemoBuild`): demos are
+	 * capped per week and no tokens are spent before a human has looked at the spec.
+	 */
+	const startBuild = async (order: Order) => {
+		if (order.kind === 'demo') {
+			app.log.info({ orderId: order.id }, 'Demo paid — the build waits for an admin approval')
+			return
 		}
-		// Fire-and-forget: real AWS account creation can take minutes (polled), so this must not
-		// hold up the webhook response. Deliberately triggered here rather than at delivery time —
-		// the build itself takes tens of minutes, plenty of lead time for the account to be ready
-		// before delivery needs it. Idempotent and safe to retry (no-ops once an account is
-		// recorded, or while PROVISION_CUSTOMER_ACCOUNTS is off); a failure here is an admin
-		// follow-up (retry via the same admin endpoint), not a reason to fail the build.
-		accountService.provisionCustomerAccount(orgId).catch(error => {
-			app.log.error({ err: error, orgId }, 'Deposit paid but the AWS account could not be provisioned')
-		})
+		try {
+			await orderService.startBuild(order.id, webhookSession(order.orgId))
+		} catch (error) {
+			app.log.error(
+				{ err: error, orderId: order.id },
+				'Deposit paid but the build could not be started'
+			)
+		}
 	}
 
 	const handleEvent = async (event: PaymentEvent): Promise<WebhookResult> => {
@@ -475,9 +468,7 @@ export default fp(plugin, {
 		'#internal/secrets',
 		'#internal/email',
 		'#internal/orderService',
-		'#internal/jobService',
 		'#internal/userService',
 		'#internal/residentService',
-		'#internal/accountService',
 	],
 })
