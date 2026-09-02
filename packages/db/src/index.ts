@@ -18,6 +18,7 @@ import { createOrdersRepository } from './orders.ts'
 import { createPricingTiersRepository } from './pricingTiers.ts'
 import { createResidentRepository } from './resident.ts'
 import { createRateLimitsRepository } from './rateLimits.ts'
+import { createShowcasesRepository } from './showcases.ts'
 import { createUsersRepository } from './users.ts'
 
 import type { Sql } from 'postgres'
@@ -35,6 +36,7 @@ export * from './pricingTiers.ts'
 export * from './rateLimits.ts'
 export * from './repositories.ts'
 export * from './resident.ts'
+export * from './showcases.ts'
 export * from './users.ts'
 
 export type Db = {
@@ -141,6 +143,7 @@ export const createPostgresRepositories = (db: Db): Repositories => ({
 	pricingTiers: createPricingTiersRepository(db),
 	iterationBrief: createIterationBriefRepository(db),
 	orders: createOrdersRepository(db),
+	showcases: createShowcasesRepository(db),
 	deployedServices: createDeployedServicesRepository(db),
 	users: createUsersRepository(db),
 	auth: createAuthRepository(db),

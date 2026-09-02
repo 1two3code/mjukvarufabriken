@@ -4,28 +4,31 @@
  * by its tests). Services depend on these types only.
  */
 import type {
-	IterationBrief,
-	IterationBriefEntry,
 	DeployedService,
 	DeployedServiceConfig,
+	IterationBrief,
+	IterationBriefEntry,
 	Job,
 	JobEvent,
+	LifecycleState,
 	ModelPriceRow,
 	ModelPrices,
-	NewModelPrice,
-	LifecycleState,
 	NewJobEvent,
+	NewModelPrice,
+	NewPricingTier,
 	Order,
 	OrderKind,
 	OrderStatus,
 	Org,
 	Payment,
-	NewPricingTier,
 	PricingTierRow,
 	ResidentInstallation,
 	ResidentUsageRecord,
 	ResidentUsageReport,
 	ResidentUsageSummary,
+	Showcase,
+	ShowcaseAdminRow,
+	ShowcaseItem,
 	SpecDraft,
 	User,
 } from '@mf/models'
@@ -457,11 +460,38 @@ export type PricingTiersRepository = {
 	insert: (tier: NewPricingTier) => Promise<PricingTierRow>
 }
 
+// MARK: Showcases (wave 14, demo gallery)
+
+/** The whole row an admin writes; `url: null` only on an unpublished draft (the service enforces it) */
+export type ShowcaseUpsert = Pick<
+	Showcase,
+	'orderId' | 'published' | 'title' | 'blurbSv' | 'blurbEn' | 'sort'
+> & { url: string | null }
+
+/**
+ * One row per order marked for the public demo gallery (migration 0023). The row follows its
+ * order: `listPublished` JOINs orders and drops torn-down ones, so a teardown hides the demo
+ * without a hook of its own.
+ */
+export type ShowcasesRepository = {
+	/** Inserts or replaces the order's row (`createdAt` is kept on update) */
+	upsert: (showcase: ShowcaseUpsert) => Promise<Showcase>
+	getByOrder: (orderId: string) => Promise<Showcase | undefined>
+	/** Every row with its order's name/status/lifecycle, gallery order first (admin view) */
+	list: () => Promise<ShowcaseAdminRow[]>
+	/**
+	 * The public gallery: published rows with a URL whose order is not `torn_down`, `sort`
+	 * ascending then newest change first
+	 */
+	listPublished: () => Promise<ShowcaseItem[]>
+}
+
 export type Repositories = {
 	jobs: JobsRepository
 	modelPrices: ModelPricesRepository
 	pricingTiers: PricingTiersRepository
 	orders: OrdersRepository
+	showcases: ShowcasesRepository
 	deployedServices: DeployedServicesRepository
 	users: UsersRepository
 	auth: AuthRepository
