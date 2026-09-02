@@ -91,6 +91,44 @@ repair-session staging. **Graduated to:** sandbox/orchestrator fixes in
 
 <!-- New entries above the seed section, newest first. -->
 
+<!-- New entries above the seed section, newest first. -->
+## 2026-09-01 — job 491b0b4a (Ögonblick, M) — dogfood run 5, FAILED at merge repair
+4.46 M budget-tokens (~USD 11). Final run of the authorised five.
+
+- **Phase:** repair
+- **Symptom:** `merge repair of task/photo-gallery discarded the branch's changes (files identical
+  to pre-merge main): apps/app/src/pages/GalleryPage.test.tsx`
+- **Root cause:** the repair session resolved a merge conflict by keeping main's side verbatim,
+  silently throwing away what the task had built.
+- **Graduated to:** already gated — this is wave 12's conflict-repair validation (#75) doing
+  exactly what it was added for. It refused rather than merging a branch whose work had vanished.
+- **OPEN — the harness side:** detecting the bad repair is right, but *failing the whole task* is a
+  blunt response. A repair that drops a branch should be retried (the session told what it did
+  wrong) before the task is abandoned, the way a failed demo build now auto-retries once. As it
+  stands one unlucky conflict resolution costs a whole paid build.
+
+### Day summary — five runs, 2026-09-01
+Never reached a live URL. What it bought instead: **8 real defects fixed and 5 deterministic guards
+added**, in a system that had never once been exercised end to end by a real customer-shaped build.
+
+Three separate wave-12 safety mechanisms proved themselves on real failures, which is the strongest
+evidence of the day that the Gate C work was worth doing:
+- **gate-on-merge** (#75) caught a task that passed its own scoped gate and broke the full suite
+  after merging (run 3).
+- **fail-closed delivery** refused to ship an app whose uploads would 500, while still delivering
+  the repo and bundle (run 2).
+- **conflict-repair validation** (#75) refused a repair that had discarded a branch's work (run 5).
+
+The recurring lesson across the day, in three costumes: **a test double simpler than the real thing
+deletes the failure mode.** The proxy stub never sent `content-encoding`; the service mock was
+always present; a route's unit test calls the handler directly and never notices the wrong prefix.
+Each is now a deterministic guard rather than a habit.
+
+Where a paid run was NOT needed: four infrastructure defects (#94, #96, #97 and the CloudFormation
+export deadlock) were found by pre-checks, deploys and IAM simulation. Pre-checking before run 3
+saved a run outright. That is the cheapest debugging available and should come before every future
+paid build.
+
 ## 2026-09-01 — job d5618973 (Ögonblick, M) — dogfood run 4, FAILED at review
 Gates: verify ok, acceptance-tests ok, **review failed** (2 high open after one repair). 7.15 M
 budget-tokens (~USD 18). The first failure of the day that was about the GENERATED CODE rather
