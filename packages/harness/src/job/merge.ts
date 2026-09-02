@@ -178,63 +178,95 @@ export const mergeTask = async ({
 		}
 	}
 
-	const session = await runSession({
-		cwd: repoDir,
-		systemPrompt: repairSystemPrompt(spec, task, files),
-		prompt: `Resolve the merge conflicts in: ${files.join(', ')}. Then run lint + tests. Do not stage or commit — the harness does.`,
-		signal,
-		onUsage: usage => {
-			tokens += totalTokens(usage)
-			onUsage(usage)
-		},
-		model,
-		maxTurns: 60,
-	})
+	/**
+	 * A repair can fail in two recoverable ways: leave conflicts unresolved, or "resolve" one by
+	 * keeping main's side verbatim and silently discarding the branch's work. Both were previously
+	 * terminal for the TASK — and since a task is a whole slice of a paid build, one unlucky
+	 * conflict resolution cost the build (dogfood run 5, 2026-09-01).
+	 *
+	 * Neither is a reason to give up on the first try: the session simply did the wrong thing and
+	 * can be told so. Each retry re-creates the conflict from scratch (the previous attempt was
+	 * aborted) and states precisely what went wrong, so the model is correcting a named mistake
+	 * rather than repeating a guess. Detection is unchanged — a bad repair is still never merged.
+	 */
+	const maxRepairAttempts = 2
+	let priorProblem: string | undefined
 
-	// The session runs as the worker uid and cannot write main's index (the job's own .git), so
-	// the job stages the repaired files itself before checking what is still unmerged
-	// (Fargate run 43e7f528, 2026-08-27: six files "still conflicted" that were resolved on disk)
-	if (!signal.aborted && session.ok) {
-		await exec('git', ['add', '--', ...files], { cwd: repoDir, signal })
-	}
-	const remaining = signal.aborted
-		? files
-		: [
-				...new Set([
-					...(await conflictedFiles(repoDir, signal)),
-					...(await filesWithConflictMarkers(repoDir, files, signal)),
-				]),
-			]
-	if (!session.ok || remaining.length) {
-		await exec('git', ['merge', '--abort'], { cwd: repoDir })
-		const reason = remaining.length
-			? `merge of ${branch} still conflicted after repair: ${remaining.join(', ')}`
-			: `merge repair session failed: ${session.result}`
-		return { ok: false, tokens, reason }
-	}
+	for (let attempt = 1; attempt <= maxRepairAttempts; attempt++) {
+		if (signal.aborted) return { ok: false, tokens, reason: 'aborted' }
 
-	// A repair that "resolves" a conflict by keeping main's side verbatim passes the marker scan
-	// and — when the dropped work has no test — the merge gate too, silently shipping without the
-	// branch's work. Both sides of a conflicted file changed it, so its resolution must differ
-	// from pre-merge main; one that does not means the branch's work in it was discarded.
-	const diffedVsMain = new Set(
-		(
-			await exec('git', ['diff', '--name-only', preMergeHead, '--', ...files], {
-				cwd: repoDir,
-				signal,
-			})
-		).stdout
-			.split('\n')
-			.filter(Boolean)
-	)
-	const dropped = files.filter(file => !diffedVsMain.has(file))
-	if (dropped.length) {
-		await exec('git', ['merge', '--abort'], { cwd: repoDir })
-		return {
-			ok: false,
-			tokens,
-			reason: `merge repair of ${branch} discarded the branch's changes (files identical to pre-merge main): ${dropped.join(', ')}`,
+		const session = await runSession({
+			cwd: repoDir,
+			systemPrompt: repairSystemPrompt(spec, task, files),
+			prompt: priorProblem
+				? `Your previous attempt at this merge was REJECTED: ${priorProblem}\n\nResolve the merge conflicts in: ${files.join(', ')} — this time keeping BOTH sides' intent. Every one of these files was changed on both branches, so a correct resolution differs from both. Then run lint + tests. Do not stage or commit — the harness does.`
+				: `Resolve the merge conflicts in: ${files.join(', ')}. Then run lint + tests. Do not stage or commit — the harness does.`,
+			signal,
+			onUsage: usage => {
+				tokens += totalTokens(usage)
+				onUsage(usage)
+			},
+			model,
+			maxTurns: 60,
+		})
+
+		// The session runs as the worker uid and cannot write main's index (the job's own .git), so
+		// the job stages the repaired files itself before checking what is still unmerged
+		// (Fargate run 43e7f528, 2026-08-27: six files "still conflicted" that were resolved on disk)
+		if (!signal.aborted && session.ok) {
+			await exec('git', ['add', '--', ...files], { cwd: repoDir, signal })
 		}
+		const remaining = signal.aborted
+			? files
+			: [
+					...new Set([
+						...(await conflictedFiles(repoDir, signal)),
+						...(await filesWithConflictMarkers(repoDir, files, signal)),
+					]),
+				]
+
+		// A repair that "resolves" a conflict by keeping main's side verbatim passes the marker scan
+		// and — when the dropped work has no test — the merge gate too, silently shipping without the
+		// branch's work. Both sides of a conflicted file changed it, so its resolution must differ
+		// from pre-merge main; one that does not means the branch's work in it was discarded.
+		const diffedVsMain = new Set(
+			remaining.length
+				? []
+				: (
+						await exec('git', ['diff', '--name-only', preMergeHead, '--', ...files], {
+							cwd: repoDir,
+							signal,
+						})
+					).stdout
+						.split('\n')
+						.filter(Boolean)
+		)
+		const dropped = remaining.length ? [] : files.filter(file => !diffedVsMain.has(file))
+
+		if (session.ok && !remaining.length && !dropped.length) break
+
+		priorProblem = !session.ok
+			? `the repair session itself failed: ${session.result}`
+			: remaining.length
+				? `these files were still conflicted afterwards: ${remaining.join(', ')}`
+				: `you kept main's version verbatim of ${dropped.join(', ')}, discarding this branch's work in them`
+		const reason = !session.ok
+			? `merge repair session failed: ${session.result}`
+			: remaining.length
+				? `merge of ${branch} still conflicted after repair: ${remaining.join(', ')}`
+				: `merge repair of ${branch} discarded the branch's changes (files identical to pre-merge main): ${dropped.join(', ')}`
+
+		await exec('git', ['merge', '--abort'], { cwd: repoDir })
+		if (attempt === maxRepairAttempts || signal.aborted) {
+			return { ok: false, tokens, reason: `${reason} (after ${attempt} repair attempt(s))` }
+		}
+		// Re-create the same conflict for the next attempt; the abort above cleared it
+		const retryMerge = await exec(
+			'git',
+			['merge', '--no-ff', '--no-edit', '-m', `merge(${task.id}): ${task.title}`, branch],
+			{ cwd: repoDir, signal }
+		)
+		if (retryMerge.code === 0) return acceptMerge()
 	}
 
 	await exec('git', ['add', '-A'], { cwd: repoDir, signal })
