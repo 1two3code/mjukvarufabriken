@@ -21,7 +21,16 @@ A small menu of preview resources on shared infra, provisioned per job, scoped p
 - **Everything exotic** (Fortnox, SMS, third-party APIs): stubbed at preview; real integrations
   belong to the paid stage in the customer's vended account (M11).
 - Teardown: preview prefix + DB dropped together with the existing deployed_services teardown
-  path (same open item as the wave-12 DB note).
+  path (same open item as the wave-12 DB note). **Done, wave 14 (hosting window):**
+  `previewStorageService.teardown(jobId)` deletes every object under `preview/<token>/` and the
+  `mf-preview-app-<token>` role (inline policy first; `NoSuchEntity` = already gone) and
+  `previewDbService.teardown(jobId)` drops the database + role, both from
+  `accountService.runLifecycleAction('teardown')` after the fenced deprovision succeeds. A final
+  export (`exportService.finalExport`: `repo.zip`, `database.json`, `storage/*` +
+  `storage-manifest.json`, then `DELETION-CERTIFICATE.md` at completion) is taken first — a
+  confirmed teardown is refused until it is `done` unless an admin passes `skipExport`. The api's
+  own bucket grants are now prefix-fenced (`deliverables/*` Get/Put, `preview/*` Get/Delete).
+  Gated on `ORG_LIFECYCLE_ENABLED` like the deprovision (off → `skipped`, nothing deleted).
 
 ## Non-goals
 No per-preview CDK stacks (cost/speed/blast-radius — see the preview-vs-paid split rationale in
