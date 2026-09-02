@@ -91,6 +91,37 @@ repair-session staging. **Graduated to:** sandbox/orchestrator fixes in
 
 <!-- New entries above the seed section, newest first. -->
 
+## 2026-09-02 — job a92fb019 (Ögonblick, redeliver of run 7, 6th) — the first live URL
+69 874 tokens (~USD 0.20). **Deploy step green for the first time**: an internet-facing Express
+service at `https://mf-….ecs.eu-north-1.on.aws`, the SPA served, the container logging
+`store: durable on Postgres`. The live acceptance check then failed and the URL was withheld
+from the deliverable — the wave-12 fail-closed rule doing its job on a real broken app.
+
+Three defects, none of them the deploy:
+
+- **`/bff/photos → 500`: `SELF_SIGNED_CERT_IN_CHAIN`.** The platform hands out
+  `?sslmode=no-verify` (node-postgres vocabulary). The template store's driver (`postgres`)
+  does not know that value and falls back to full verification against the managed
+  database's certificate. **Graduated to:** the store translates `sslmode` itself
+  (`sslOptionOf`, tested) and passes the driver an explicit `ssl` option.
+- **Uploads in memory.** The container warned `ATTACHMENTS_BUCKET is not set`. The worker
+  followed the template's documented convention (`ATTACHMENTS_BUCKET`); the delivery injected
+  only `S3_BUCKET`/`S3_PREFIX`. And the worker's own S3 plugin knew nothing of the key prefix
+  the per-app role is fenced to, so even with the bucket set every upload would have been
+  AccessDenied. **Graduated to:** the template ships an `objectStorage` plugin (S3 under
+  `ATTACHMENTS_BUCKET`/`ATTACHMENTS_PREFIX`, memory otherwise — the store pattern), and the
+  delivery injects those names too. Same lesson as the store: make the natural choice correct.
+- **Acceptance judged "no response" after 3 minutes.** A fresh Express load balancer took
+  about ten minutes before its name resolved and its target went healthy; the check gave up
+  at three. **Graduated to:** a 12-minute readiness window.
+
+The first two are app-side: run 7's repository carries the old store and its own storage
+plugin, so a redelivery cannot pick them up. A **rebuild** (run 8) is the path to a green live
+check for this app. Both fixes are in the template, so every later build inherits them.
+
+- **Recurred, still OPEN (9th time):** `delivered` with `deployUrl: null`.
+
+
 ## 2026-09-02 — job 0f497ced (Ögonblick, redeliver of run 7, 5th) — a live app nobody can reach
 32 646 tokens (~USD 0.10). **The IAM chain is complete**: the Express service was created, its
 task started, the target registered healthy, the service reached steady state. The delivered

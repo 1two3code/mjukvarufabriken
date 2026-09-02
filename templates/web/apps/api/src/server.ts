@@ -5,6 +5,7 @@ import cors from '@fastify/cors'
 import accessControlPlugin from '#/plugins/accessControl.ts'
 import authPlugin from '#/plugins/auth.ts'
 import errorHandlingPlugin from '#/plugins/errorHandling.ts'
+import objectStoragePlugin from '#/plugins/objectStorage.ts'
 import secretsPlugin from '#/plugins/secrets.ts'
 import storePlugin from '#/plugins/store.ts'
 import itemService from '#/services/itemService.ts'
@@ -39,6 +40,7 @@ export async function createServer({ logLevel }: Options = {}): Promise<FastifyI
 		// Plugins
 		.register(secretsPlugin)
 		.register(storePlugin)
+		.register(objectStoragePlugin)
 
 		// Services
 		.register(itemService)

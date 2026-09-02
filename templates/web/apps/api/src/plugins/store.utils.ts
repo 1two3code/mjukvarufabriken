@@ -50,6 +50,34 @@ export const createMemoryStore = (): StoreBackend => {
 
 // MARK: Postgres
 
+/**
+ * `sslmode` in a connection URL, translated for the `postgres` driver. The platform (and most
+ * hosting) writes node-postgres vocabulary — `?sslmode=no-verify` for "encrypted, certificate
+ * not verified" — which `postgres` does not know and therefore treats as full verification. That
+ * failed the first live delivery with SELF_SIGNED_CERT_IN_CHAIN against the managed database.
+ * Returns the driver's `ssl` option; the URL is handed over without the parameter so the driver
+ * cannot re-read it differently.
+ */
+export const sslOptionOf = (
+	url: string
+): { url: string; ssl: false | 'verify-full' | { rejectUnauthorized: false } } => {
+	let parsed: URL
+	try {
+		parsed = new URL(url)
+	} catch {
+		return { url, ssl: false }
+	}
+	const mode = (parsed.searchParams.get('sslmode') ?? '').toLowerCase()
+	parsed.searchParams.delete('sslmode')
+	const cleaned = parsed.toString()
+	if (mode === 'disable') return { url: cleaned, ssl: false }
+	if (mode === 'verify-full' || mode === 'verify-ca') return { url: cleaned, ssl: 'verify-full' }
+	if (mode === 'no-verify' || mode === 'require' || mode === 'prefer' || mode === 'allow') {
+		return { url: cleaned, ssl: { rejectUnauthorized: false } }
+	}
+	return { url: cleaned, ssl: false }
+}
+
 /** One table for every collection: the value is JSONB, the key is (collection, id) */
 export const storeTable = 'store'
 
