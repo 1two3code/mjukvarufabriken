@@ -16,6 +16,7 @@ import type {
 	LifecycleState,
 	NewJobEvent,
 	Order,
+	OrderKind,
 	OrderStatus,
 	Org,
 	Payment,
@@ -64,7 +65,14 @@ export type JobsRepository = {
 	listEvents: (jobId: string, afterId?: number) => Promise<JobEvent[]>
 }
 
-export type NewOrder = { id: string; orgId: string; name: string; createdBy?: string }
+/** `kind` defaults to `build` (the pricing-ladder rung, wave 14) */
+export type NewOrder = {
+	id: string
+	orgId: string
+	name: string
+	createdBy?: string
+	kind?: OrderKind
+}
 
 export type NewPayment = Pick<
 	Payment,
@@ -125,6 +133,27 @@ export type OrdersRepository = {
 	setCustomerSlug: (orderId: string, customerSlug: string) => Promise<Order | undefined>
 	/** Suspended orders whose lifecycle changed before the instant — the grace-period sweep's candidates */
 	listSuspendedBefore: (changedBefore: Date) => Promise<Order[]>
+
+	// MARK: Pricing ladder (wave 14: order kind, hosting window, demo approval)
+	/**
+	 * Sets (or with `null` clears) the end of the included hosting window; `undefined` when the
+	 * order is missing. Idempotent — writing the same instant returns the row unchanged.
+	 */
+	setHostingUntil: (orderId: string, hostingUntil: Date | null) => Promise<Order | undefined>
+	/**
+	 * Records the instant an admin approved a demo's build to start — compare-and-set from
+	 * "not yet approved": `undefined` when the order is missing OR already carries an approval, so
+	 * the first approval wins and a double click cannot move the timestamp (the weekly voucher cap
+	 * counts these instants).
+	 */
+	setBuildApprovedAt: (orderId: string, approvedAt: Date) => Promise<Order | undefined>
+	/**
+	 * Orders still `active` whose included hosting window ended at or before the instant — the
+	 * scheduled-teardown sweep's candidates. Earliest end first, capped like the other list reads.
+	 */
+	listActiveWithHostingUntilBefore: (until: Date) => Promise<Order[]>
+	/** Demo orders whose build was approved at or after the instant (the weekly voucher cap) */
+	countDemoApprovalsSince: (since: Date) => Promise<number>
 
 	// MARK: Payments (M6)
 	insertPayment: (payment: NewPayment) => Promise<Payment>

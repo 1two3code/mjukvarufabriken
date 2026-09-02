@@ -11,13 +11,24 @@ import {
 import { EntityInvalid, EntityNotFound } from '#/lib/entityError.ts'
 
 import type { FastifyInstance, FastifyPluginAsync } from 'fastify'
-import type { BackendSession, Job, JobSummary, Order, OrderDetail, OrderStatus } from '@mf/models'
+import type {
+	BackendSession,
+	Job,
+	JobSummary,
+	Order,
+	OrderDetail,
+	OrderKind,
+	OrderStatus,
+} from '@mf/models'
 
 declare module 'fastify' {
 	interface FastifyInstance {
 		orderService: {
-			/** Creates a `drafting` order owned by the session's org with an api-minted id */
-			create: (name: string, session: BackendSession) => Promise<Order>
+			/**
+			 * Creates a `drafting` order owned by the session's org with an api-minted id. `kind` is
+			 * the pricing-ladder rung (wave 14), a real `build` unless asked otherwise.
+			 */
+			create: (name: string, session: BackendSession, kind?: OrderKind) => Promise<Order>
 			/** The org's orders, newest first; admins see every org */
 			list: (session: BackendSession) => Promise<Order[]>
 			/** Org-scoped read; another org's order is EntityNotFound (admins see all) */
@@ -165,11 +176,12 @@ const plugin: FastifyPluginAsync = async app => {
 			if (!updated) throw new EntityNotFound('order', orderId)
 			return updated
 		},
-		create: async (name, session) =>
+		create: async (name, session, kind = 'build') =>
 			db.orders.insert({
 				id: crypto.randomUUID(),
 				orgId: session.orgId,
 				name,
+				kind,
 				createdBy: session.userId,
 			}),
 		list: session => db.orders.listOrders(isAdmin(session) ? {} : { orgId: session.orgId }),

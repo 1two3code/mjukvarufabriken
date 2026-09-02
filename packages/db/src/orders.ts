@@ -6,6 +6,7 @@ import type {
 	ChatMessage,
 	LifecycleState,
 	Order,
+	OrderKind,
 	OrderStatus,
 	PartialSpec,
 	Payment,
@@ -22,6 +23,7 @@ type OrderRow = {
 	created_by: string | null
 	name: string
 	status: OrderStatus
+	kind: OrderKind
 	spec: PartialSpec
 	messages: ChatMessage[]
 	open_questions: string[]
@@ -32,6 +34,8 @@ type OrderRow = {
 	lifecycle: LifecycleState
 	lifecycle_changed_at: Date | null
 	customer_slug: string | null
+	hosting_until: Date | null
+	build_approved_at: Date | null
 	created_at: Date
 	updated_at: Date
 }
@@ -69,6 +73,7 @@ export const toOrder = (row: OrderRow): Order => ({
 	orgId: row.org_id,
 	name: row.name,
 	status: row.status,
+	kind: row.kind,
 	sizeClass: row.size_class ?? undefined,
 	priceSek: row.price_sek ?? undefined,
 	frozenAt: row.frozen_at?.toISOString(),
@@ -77,6 +82,8 @@ export const toOrder = (row: OrderRow): Order => ({
 	lifecycle: row.lifecycle,
 	lifecycleChangedAt: row.lifecycle_changed_at?.toISOString(),
 	customerSlug: row.customer_slug ?? undefined,
+	hostingUntil: row.hosting_until?.toISOString(),
+	buildApprovedAt: row.build_approved_at?.toISOString(),
 	createdAt: row.created_at.toISOString(),
 	updatedAt: row.updated_at.toISOString(),
 })
@@ -178,8 +185,11 @@ export const updateOrderUnlessFrozen = async (
 
 export const insertOrder = async (db: Db, order: NewOrder): Promise<Order> => {
 	const [row] = await db.sql<OrderRow[]>`
-		insert into orders (id, org_id, created_by, name)
-		values (${order.id}, ${order.orgId}, ${order.createdBy ?? null}, ${order.name})
+		insert into orders (id, org_id, created_by, name, kind)
+		values (
+			${order.id}, ${order.orgId}, ${order.createdBy ?? null}, ${order.name},
+			${order.kind ?? 'build'}
+		)
 		returning *`
 	return toOrder(row!)
 }
@@ -278,6 +288,59 @@ export const listSuspendedBefore = async (db: Db, changedBefore: Date): Promise<
 		order by lifecycle_changed_at asc
 		limit 200`
 	return rows.map(toOrder)
+}
+
+// MARK: Pricing ladder (wave 14)
+
+/** Sets or clears (`null`) the end of the included hosting window; `undefined` when missing */
+export const setHostingUntil = async (
+	db: Db,
+	orderId: string,
+	hostingUntil: Date | null
+): Promise<Order | undefined> => {
+	const [row] = await db.sql<OrderRow[]>`
+		update orders set hosting_until = ${hostingUntil}, updated_at = now()
+		where id = ${orderId}
+		returning *`
+	return row && toOrder(row)
+}
+
+/**
+ * Compare-and-set from "not yet approved": records the demo build approval instant only while
+ * `build_approved_at` is null, so `undefined` means missing OR already approved (the first
+ * approval wins).
+ */
+export const setBuildApprovedAt = async (
+	db: Db,
+	orderId: string,
+	approvedAt: Date
+): Promise<Order | undefined> => {
+	const [row] = await db.sql<OrderRow[]>`
+		update orders set build_approved_at = ${approvedAt}, updated_at = now()
+		where id = ${orderId} and build_approved_at is null
+		returning *`
+	return row && toOrder(row)
+}
+
+/**
+ * Active orders whose included hosting window ended at or before `until` — the scheduled-teardown
+ * sweep's candidates, earliest end first (served by the partial `orders_hosting_until_idx`).
+ */
+export const listActiveWithHostingUntilBefore = async (db: Db, until: Date): Promise<Order[]> => {
+	const rows = await db.sql<OrderRow[]>`
+		select * from orders
+		where lifecycle = 'active' and hosting_until is not null and hosting_until <= ${until}
+		order by hosting_until asc
+		limit 200`
+	return rows.map(toOrder)
+}
+
+/** Demo orders whose build was approved at or after `since` (the weekly voucher cap) */
+export const countDemoApprovalsSince = async (db: Db, since: Date): Promise<number> => {
+	const [row] = await db.sql<{ count: number | string }[]>`
+		select count(*) as count from orders
+		where kind = 'demo' and build_approved_at is not null and build_approved_at >= ${since}`
+	return Number(row?.count ?? 0)
 }
 
 // MARK: Payments (M6)
@@ -382,6 +445,10 @@ export const createOrdersRepository = (db: Db): OrdersRepository => ({
 	setLifecycle: (orderId, from, to) => setLifecycle(db, orderId, from, to),
 	setCustomerSlug: (orderId, customerSlug) => setCustomerSlug(db, orderId, customerSlug),
 	listSuspendedBefore: changedBefore => listSuspendedBefore(db, changedBefore),
+	setHostingUntil: (orderId, hostingUntil) => setHostingUntil(db, orderId, hostingUntil),
+	setBuildApprovedAt: (orderId, approvedAt) => setBuildApprovedAt(db, orderId, approvedAt),
+	listActiveWithHostingUntilBefore: until => listActiveWithHostingUntilBefore(db, until),
+	countDemoApprovalsSince: since => countDemoApprovalsSince(db, since),
 	insertPayment: payment => insertPayment(db, payment),
 	getPayment: id => getPayment(db, id),
 	findPaymentBySession: sessionId => findPaymentBySession(db, sessionId),

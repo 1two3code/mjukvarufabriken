@@ -24,9 +24,36 @@ describe('POST /bff/orders route', () => {
 		const response = await app.inject({ method: 'POST', url, payload: { name: 'Gym booking' } })
 
 		// Assert
-		expect(app.orderService.create).toHaveBeenCalledWith('Gym booking', session)
+		expect(app.orderService.create).toHaveBeenCalledWith('Gym booking', session, 'build')
 		expect(response.statusCode).toBe(201)
 		expect(response.json()).toEqual(order)
+	})
+
+	it('Creates a real build by default and a demo when asked (pricing ladder)', async () => {
+		// Act
+		const build = await app.inject({ method: 'POST', url, payload: { name: 'Gym booking' } })
+		const demo = await app.inject({
+			method: 'POST',
+			url,
+			payload: { name: 'Gym booking', kind: 'demo' },
+		})
+
+		// Assert
+		expect(build.statusCode).toBe(201)
+		expect(build.json()).toMatchObject({ kind: 'build' })
+		expect(demo.statusCode).toBe(201)
+		expect(demo.json()).toMatchObject({ kind: 'demo' })
+		expect(app.orderService.create).toHaveBeenLastCalledWith('Gym booking', session, 'demo')
+	})
+
+	it('Rejects an unknown kind with 400', async () => {
+		const response = await app.inject({
+			method: 'POST',
+			url,
+			payload: { name: 'Gym booking', kind: 'enterprise' },
+		})
+		expect(response.statusCode).toBe(400)
+		expect(app.orderService.create).not.toHaveBeenCalled()
 	})
 
 	it('Rejects an empty or too long name with 400', async () => {

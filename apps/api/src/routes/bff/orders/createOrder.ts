@@ -18,7 +18,7 @@ const route: FastifyPluginAsyncZod = async function (app) {
 		const { session, body } = request
 
 		try {
-			const order = await orderService.create(body.name, session)
+			const order = await orderService.create(body.name, session, body.kind)
 			return reply.code(201).send(order)
 		} catch (error) {
 			return reply.error(500, error as Error)

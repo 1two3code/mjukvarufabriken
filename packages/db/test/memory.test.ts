@@ -321,6 +321,81 @@ describe('memory repositories', () => {
 			expect((await repos.orders.listOrders({ orgId: 'a' })).map(o => o.id)).toEqual(['o1'])
 		})
 
+		it('Creates orders as a real build unless a kind is given (pricing ladder, 0022)', async () => {
+			await expect(repos.orders.insert({ id: 'o1', orgId: 'a', name: 'x' })).resolves.toMatchObject(
+				{ kind: 'build' }
+			)
+			await expect(
+				repos.orders.insert({ id: 'o2', orgId: 'a', name: 'x', kind: 'demo' })
+			).resolves.toMatchObject({ kind: 'demo' })
+			const created = await repos.orders.getOrder('o1')
+			expect(created?.hostingUntil).toBeUndefined()
+			expect(created?.buildApprovedAt).toBeUndefined()
+		})
+
+		it('Sets and clears the hosting window and lists active orders whose window has ended', async () => {
+			const cutoff = new Date('2026-09-30T00:00:00.000Z')
+			const before = new Date('2026-09-15T00:00:00.000Z')
+			const after = new Date('2026-10-15T00:00:00.000Z')
+			await repos.orders.insert({ id: 'ended', orgId: 'a', name: 'x' })
+			await repos.orders.insert({ id: 'exact', orgId: 'a', name: 'x' })
+			await repos.orders.insert({ id: 'later', orgId: 'a', name: 'x' })
+			await repos.orders.insert({ id: 'open', orgId: 'a', name: 'x' })
+			await repos.orders.insert({ id: 'suspended', orgId: 'a', name: 'x' })
+
+			await expect(repos.orders.setHostingUntil('missing', before)).resolves.toBeUndefined()
+			await expect(repos.orders.setHostingUntil('ended', before)).resolves.toMatchObject({
+				hostingUntil: before.toISOString(),
+			})
+			await repos.orders.setHostingUntil('exact', cutoff)
+			await repos.orders.setHostingUntil('later', after)
+			await repos.orders.setHostingUntil('suspended', before)
+			await repos.orders.setLifecycle('suspended', ['active'], 'suspended')
+
+			// Earliest end first; `<=` includes the exact instant; only `active` orders with a window
+			expect(
+				(await repos.orders.listActiveWithHostingUntilBefore(cutoff)).map(order => order.id)
+			).toEqual(['ended', 'exact'])
+
+			// Null clears the window and the order leaves the sweep's candidates
+			const cleared = await repos.orders.setHostingUntil('ended', null)
+			expect(cleared?.hostingUntil).toBeUndefined()
+			expect(
+				(await repos.orders.listActiveWithHostingUntilBefore(cutoff)).map(order => order.id)
+			).toEqual(['exact'])
+		})
+
+		it('Records a demo build approval once and counts approvals since an instant', async () => {
+			const weekAgo = new Date('2026-09-01T00:00:00.000Z')
+			const older = new Date('2026-08-20T00:00:00.000Z')
+			const recent = new Date('2026-09-02T12:00:00.000Z')
+			await repos.orders.insert({ id: 'd1', orgId: 'a', name: 'x', kind: 'demo' })
+			await repos.orders.insert({ id: 'd2', orgId: 'a', name: 'x', kind: 'demo' })
+			await repos.orders.insert({ id: 'd3', orgId: 'a', name: 'x', kind: 'demo' })
+			await repos.orders.insert({ id: 'b1', orgId: 'a', name: 'x' })
+
+			await expect(repos.orders.setBuildApprovedAt('missing', recent)).resolves.toBeUndefined()
+			await expect(repos.orders.setBuildApprovedAt('d1', recent)).resolves.toMatchObject({
+				buildApprovedAt: recent.toISOString(),
+			})
+			// Compare-and-set from "not yet approved": the first approval wins
+			await expect(repos.orders.setBuildApprovedAt('d1', older)).resolves.toBeUndefined()
+			await expect(repos.orders.getOrder('d1')).resolves.toMatchObject({
+				buildApprovedAt: recent.toISOString(),
+			})
+			await repos.orders.setBuildApprovedAt('d2', weekAgo)
+			await repos.orders.setBuildApprovedAt('d3', older)
+			// A real build's approval (should one ever be recorded) never counts against the demo cap
+			await repos.orders.setBuildApprovedAt('b1', recent)
+
+			// `>=` includes the exact instant; unapproved and older demos are out
+			await expect(repos.orders.countDemoApprovalsSince(weekAgo)).resolves.toBe(2)
+			await expect(repos.orders.countDemoApprovalsSince(recent)).resolves.toBe(1)
+			await expect(
+				repos.orders.countDemoApprovalsSince(new Date('2026-09-03T00:00:00.000Z'))
+			).resolves.toBe(0)
+		})
+
 		it('Stores payments per session, marks paid once and dedupes webhook events', async () => {
 			await repos.orders.insert({ id: 'o1', orgId: 'a', name: 'x' })
 			const payment = await repos.orders.insertPayment({

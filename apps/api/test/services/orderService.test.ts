@@ -34,6 +34,15 @@ describe('Order Service', () => {
 			})
 		})
 
+		it('Creates a real build unless a pricing-ladder kind is given', async () => {
+			const build = await app.orderService.create('Gym booking', user)
+			const demo = await app.orderService.create('Gym booking', user, 'demo')
+
+			expect(build.kind).toBe('build')
+			expect(demo.kind).toBe('demo')
+			await expect(app.db.orders.getOrder(demo.id)).resolves.toMatchObject({ kind: 'demo' })
+		})
+
 		it('Scopes list and get to the org; admins see every org', async () => {
 			const mine = await app.orderService.create('mine', user)
 			const theirs = await app.orderService.create('theirs', other)

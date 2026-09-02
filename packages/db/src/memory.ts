@@ -19,6 +19,7 @@ import type {
 	JobEvent,
 	ModelPriceRow,
 	Order,
+	OrderKind,
 	OrderStatus,
 	Org,
 	Payment,
@@ -117,13 +118,14 @@ export const createMemoryRepositories = (): MemoryRepositories => {
 	const isSpecPhase = (status: OrderStatus) =>
 		status === 'drafting' || status === 'ready' || status === 'frozen'
 	const createOrder = (
-		order: { id: string; orgId: string; name: string; createdBy?: string },
+		order: { id: string; orgId: string; name: string; createdBy?: string; kind?: OrderKind },
 		status: OrderStatus
 	): Order => ({
 		id: order.id,
 		orgId: order.orgId,
 		name: order.name,
 		status,
+		kind: order.kind ?? 'build',
 		approveBeforeDeliver: false,
 		lifecycle: 'active',
 		createdBy: order.createdBy,
@@ -566,6 +568,46 @@ export const createMemoryRepositories = (): MemoryRepositories => {
 					.sort((a, b) => (a.lifecycleChangedAt ?? '').localeCompare(b.lifecycleChangedAt ?? ''))
 					.slice(0, 200)
 					.map(clone),
+
+			setHostingUntil: async (orderId, hostingUntil) => {
+				const entry = orders.get(orderId)
+				if (!entry) return undefined
+				entry.order = {
+					...entry.order,
+					hostingUntil: hostingUntil?.toISOString(),
+					updatedAt: now(),
+				}
+				return clone(entry.order)
+			},
+			setBuildApprovedAt: async (orderId, approvedAt) => {
+				const entry = orders.get(orderId)
+				if (!entry || entry.order.buildApprovedAt !== undefined) return undefined
+				entry.order = {
+					...entry.order,
+					buildApprovedAt: approvedAt.toISOString(),
+					updatedAt: now(),
+				}
+				return clone(entry.order)
+			},
+			listActiveWithHostingUntilBefore: async until =>
+				[...orders.values()]
+					.map(entry => entry.order)
+					.filter(
+						order =>
+							order.lifecycle === 'active' &&
+							order.hostingUntil !== undefined &&
+							new Date(order.hostingUntil) <= until
+					)
+					.sort((a, b) => (a.hostingUntil ?? '').localeCompare(b.hostingUntil ?? ''))
+					.slice(0, 200)
+					.map(clone),
+			countDemoApprovalsSince: async since =>
+				[...orders.values()].filter(
+					({ order }) =>
+						order.kind === 'demo' &&
+						order.buildApprovedAt !== undefined &&
+						new Date(order.buildApprovedAt) >= since
+				).length,
 
 			insertPayment: async payment => {
 				if ([...payments.values()].some(p => p.sessionId === payment.sessionId)) {
