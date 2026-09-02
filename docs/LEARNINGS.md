@@ -91,6 +91,27 @@ repair-session staging. **Graduated to:** sandbox/orchestrator fixes in
 
 <!-- New entries above the seed section, newest first. -->
 
+## 2026-09-02 — job 4922e82d (Ögonblick, redeliver of run 7, 2nd) — "delivered" without a URL
+42 828 tokens (~USD 0.15). Furthest any delivery has reached: database re-keyed (the #108 fix),
+storage role minted (the #106 fix), boot smoke passed with dependencies installed (#108), the
+CodeBuild image built — and `CreateExpressGatewayService` was refused:
+
+- **Phase:** delivery (deploy step, Express service creation)
+- **Symptom:** `ecs express: User: …/resources-dev-JobTaskDefinitionTaskRole…/… is not authorized
+  to perform: iam:PassRole on resource: arn:aws:iam::…:role/mf-preview/mf-preview-app-c15b94b8…`
+- **Root cause:** the PassRole grant for preview app roles was on the **api** task role. The api
+  mints the role; the **job** passes it — it is the job that calls ECS with `taskRoleArn`. The
+  earlier IAM simulation asked the api role and said "allowed": right question, wrong principal.
+- **Graduated to:** `PassPreviewAppRolesToEcs` moved to the job task role (resources-stack, path +
+  ECS-tasks fence), removed from the api (least privilege). `security-baseline` now asserts the
+  job's three PassRole statements include the preview roles → ECS tasks, and that the api has
+  none. The IAM simulation script asks the job role too.
+- **Recurred, still OPEN (5th time):** `delivered` with `deployUrl: null`.
+
+**Cost note:** two redeliveries so far have cost ~USD 0.25 combined and found three defects the
+deploy half was hiding. The same two retries as rebuilds would have been ~USD 34.
+
+
 ## 2026-09-02 — job 3583768f (Ögonblick, redeliver of run 7) — "delivered" without a URL
 27 757 tokens (~USD 0.10 — the point of the redeliver path, #107). Clone → docs → secret scan →
 repo push (existing repository reused) all passed; the deploy was skipped, the bundle uploaded.

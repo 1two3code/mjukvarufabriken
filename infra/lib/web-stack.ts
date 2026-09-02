@@ -391,17 +391,10 @@ export class WebStack extends Stack {
 				resources: [previewRoleArn],
 			})
 		)
-		// ECS must be able to hand the minted role to the delivered task. Fenced to the same path,
-		// and to ECS alone — PassRole is how a PassRole grant becomes privilege escalation, so it
-		// carries the service condition rather than standing open.
-		taskRole.addToPrincipalPolicy(
-			new PolicyStatement({
-				sid: 'PassPreviewAppRolesToEcs',
-				actions: ['iam:PassRole'],
-				resources: [previewRoleArn],
-				conditions: { StringEquals: { 'iam:PassedToService': 'ecs-tasks.amazonaws.com' } },
-			})
-		)
+		// The api mints the role; the JOB passes it to ECS when it creates the Express service, so
+		// iam:PassRole lives on the job task role (resources-stack), not here. The api holds no
+		// PassRole on preview roles at all — least privilege, and one fewer path from an api
+		// compromise to a running task with a role of the attacker's choosing.
 		resources.previewBucket.grantReadWrite(taskRole)
 
 		// MARK: DNS

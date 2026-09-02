@@ -149,7 +149,13 @@ describe('security baseline', () => {
 				const passRoles = statements.filter(
 					s => JSON.stringify(s.Action) === JSON.stringify('iam:PassRole')
 				) as { Resource: unknown; Condition: { StringEquals: Record<string, unknown> } }[]
-				assert.equal(passRoles.length, 2)
+				assert.equal(passRoles.length, 3)
+				// …and the per-app preview role (minted by the api, passed by the job) to ECS tasks only
+				const previewPass = passRoles.find(s =>
+					JSON.stringify(s.Resource).includes('mf-preview-app-*')
+				)
+				assert.ok(previewPass, 'the job passes preview app roles (it creates the Express service)')
+				assert.equal(previewPass.Condition.StringEquals['iam:PassedToService'], 'ecs-tasks.amazonaws.com')
 				const passedServices = passRoles.flatMap(s => {
 					const value = s.Condition.StringEquals['iam:PassedToService']
 					return Array.isArray(value) ? value : [value]
@@ -323,7 +329,11 @@ describe('security baseline', () => {
 
 			// PassRole is how a PassRole grant turns into privilege escalation: without a service
 			// condition, anything that can pass a role can hand it to a service of its choosing.
-			it('restricts iam:PassRole on preview roles to ECS tasks', () => {
+			// The api mints preview roles but never passes them — the job does, when it creates the
+			// Express service (asserted on the job task role above). A PassRole here would be an
+			// unused grant on the internet-facing principal, and the first redelivery (4922e82d,
+			// 2026-09-02) showed the grant had been sitting on this wrong principal all along.
+			it('gives the api no iam:PassRole on preview roles at all', () => {
 				const statements = Object.values(web.findResources('AWS::IAM::Policy'))
 					.flatMap(policy => policy.Properties?.PolicyDocument?.Statement ?? [])
 					.filter((statement: { Action?: unknown }) =>
@@ -331,12 +341,8 @@ describe('security baseline', () => {
 					)
 				const previewPass = statements.filter((statement: { Resource?: unknown }) =>
 					JSON.stringify(statement.Resource ?? '').includes('mf-preview-app-*')
-				) as { Condition?: Record<string, Record<string, unknown>> }[]
-				assert.equal(previewPass.length, 1, 'one PassRole grant for preview roles')
-				assert.equal(
-					previewPass[0]?.Condition?.StringEquals?.['iam:PassedToService'],
-					'ecs-tasks.amazonaws.com'
 				)
+				assert.equal(previewPass.length, 0, 'the api must not hold PassRole on preview roles')
 			})
 
 			// Mirror of the assertion above for the OTHER principal that touches the artifacts bucket.

@@ -783,6 +783,19 @@ export class ResourcesStack extends Stack {
 				},
 			})
 		)
+		// The JOB creates the Express service and hands the delivered app its per-job storage role
+		// (minted by the api, docs/PREVIEW-RESOURCES.md) — so the PassRole for those roles belongs
+		// here, not on the api, which never passes them. Redelivery 4922e82d (2026-09-02) failed at
+		// exactly this call with the grant sitting on the wrong principal. Fenced to the preview
+		// role path and to ECS tasks alone: PassRole is how a grant becomes privilege escalation.
+		this.jobTaskDefinition.taskRole.addToPrincipalPolicy(
+			new PolicyStatement({
+				sid: 'PassPreviewAppRolesToEcs',
+				actions: ['iam:PassRole'],
+				resources: [`arn:aws:iam::${this.account}:role/mf-preview/mf-preview-app-*`],
+				conditions: { StringEquals: { 'iam:PassedToService': 'ecs-tasks.amazonaws.com' } },
+			})
+		)
 		this.jobTaskDefinition.taskRole.addToPrincipalPolicy(
 			new PolicyStatement({
 				sid: 'PassCodeBuildRole',
