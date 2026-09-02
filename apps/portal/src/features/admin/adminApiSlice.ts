@@ -1,9 +1,20 @@
 import { ApiCaching, appApi } from '#/app/api.ts'
 
-import type { Job, ModelPriceRow, NewModelPrice, Order, Org, ProvisionAccountResponse } from '@mf/models'
+import type {
+	DemoQueueResponse,
+	Job,
+	ModelPriceRow,
+	NewModelPrice,
+	Order,
+	OrderMutation,
+	Org,
+	ProvisionAccountResponse,
+} from '@mf/models'
 
 export const adminApiSlice = appApi
-	.enhanceEndpoints({ addTagTypes: ['adminJobs', 'adminOrders', 'adminOrgs', 'modelPrices'] })
+	.enhanceEndpoints({
+		addTagTypes: ['adminJobs', 'adminOrders', 'adminOrgs', 'modelPrices', 'demoQueue'],
+	})
 	.injectEndpoints({
 		endpoints: build => ({
 			getAdminJobs: build.query<Job[], void>({
@@ -14,6 +25,21 @@ export const adminApiSlice = appApi
 			getAdminOrders: build.query<Order[], void>({
 				query: () => '/admin/orders',
 				providesTags: ['adminOrders'],
+			}),
+			/** Paid voucher demos waiting for a build approval, plus the weekly cap state (wave 14) */
+			getDemoQueue: build.query<DemoQueueResponse, void>({
+				query: () => '/admin/orders/demo-queue',
+				providesTags: ['demoQueue'],
+				keepUnusedDataFor: ApiCaching.none,
+			}),
+			/** Approves a demo's build (`force` bypasses the weekly cap); the build starts at once */
+			approveDemoBuild: build.mutation<Order, { orderId: string } & OrderMutation['ApproveBuild']>({
+				query: ({ orderId, ...body }) => ({
+					url: `/admin/orders/${orderId}/approve-build`,
+					method: 'POST',
+					body,
+				}),
+				invalidatesTags: ['demoQueue', 'adminOrders', 'adminJobs'],
 			}),
 			getAdminOrgs: build.query<Org[], void>({
 				query: () => '/admin/orgs',
@@ -41,6 +67,8 @@ export const adminApiSlice = appApi
 export const {
 	useGetAdminJobsQuery,
 	useGetAdminOrdersQuery,
+	useGetDemoQueueQuery,
+	useApproveDemoBuildMutation,
 	useGetAdminOrgsQuery,
 	useGetModelPricesQuery,
 	useAddModelPriceMutation,

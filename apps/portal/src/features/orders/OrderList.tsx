@@ -17,6 +17,12 @@ export function OrderList() {
 	const columns: TableColumn<Order>[] = [
 		{ header: t('order.field.name'), field: 'name', sortable: true },
 		{
+			header: t('order.field.kind'),
+			field: 'kind',
+			sortable: true,
+			cell: row => t(`order.kind.${row.kind}`),
+		},
+		{
 			header: t('order.field.status'),
 			field: 'status',
 			sortable: true,

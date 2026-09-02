@@ -1,0 +1,39 @@
+.panel {
+	display: flex;
+	flex-direction: column;
+	gap: var(--spacing-xs);
+	margin-top: var(--spacing-m);
+}
+
+.heading {
+	display: flex;
+	flex-wrap: wrap;
+	gap: var(--spacing-xs) var(--spacing-s);
+	align-items: baseline;
+}
+
+.title {
+	margin: 0;
+}
+
+.cap {
+	composes: composable-caption-font from global;
+
+	padding: var(--spacing-xxs) var(--spacing-xs);
+	border-radius: var(--border-radius-xs);
+
+	color: var(--secondary-text-color);
+
+	background: var(--base-background);
+}
+
+.capReached {
+	color: var(--white);
+	background: var(--error);
+}
+
+.intro,
+.empty {
+	margin: 0;
+	color: var(--secondary-text-color);
+}
