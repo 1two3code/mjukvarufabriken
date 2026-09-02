@@ -272,6 +272,26 @@ export const createLiveDeliveryClients = ({
 	}
 }
 
+/**
+ * A provisioner that hands out a database URL without provisioning anything. Every template-derived
+ * app needs a database now (the template's `store` is Postgres-backed and lists `postgres` as a
+ * dependency, so `detectDatabaseNeed` fires for all of them) — a fake world therefore has to
+ * provision one, or every fake delivery would fail closed at the deploy step.
+ */
+export const createFakeDbProvisioner = (
+	databaseUrl = 'postgres://app:fake@db.fake.internal:5432/mf_app_fake'
+): DbProvisioner => ({ provision: async () => ({ databaseUrl }) })
+
+/** The storage analogue of {@link createFakeDbProvisioner} */
+export const createFakeStorageProvisioner = (): StorageProvisioner => ({
+	provision: async () => ({
+		bucket: 'mf-preview-fake',
+		prefix: 'preview/fake/',
+		region: 'eu-north-1',
+		roleArn: 'arn:aws:iam::000000000000:role/mf-preview/mf-preview-app-fake',
+	}),
+})
+
 /** Everything faked in memory — what the unit tests and the orchestrator test use */
 export const createFakeDeliveryClients = (): DeliveryClients => ({
 	github: createFakeGitHubClient(),
@@ -280,4 +300,6 @@ export const createFakeDeliveryClients = (): DeliveryClients => ({
 	prose: createFakeProseWriter(),
 	boot: createFakeBootCheck(),
 	liveCheck: createFakeLiveCheck(),
+	dbProvisioner: createFakeDbProvisioner(),
+	storageProvisioner: createFakeStorageProvisioner(),
 })
