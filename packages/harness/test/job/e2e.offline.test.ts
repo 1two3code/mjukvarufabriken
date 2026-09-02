@@ -405,6 +405,28 @@ describe('offline build-job e2e', () => {
 
 			// The pushed repo + preview were the fakes, so zero network happened
 			expect((delivery.github as FakeGitHub).pushes).toHaveLength(1)
+
+			// F5: the "Built by Mjukvaruhuset" footer survives the simulated build — in the delivered
+			// tree (workers + gates + docs commits on top of the seed) and in the BUILT site bundle
+			// (`npm run build` inlined VITE_BUILT_BY_URL, the locales carry the caption)
+			expect(tracked.stdout).toContain('apps/app/src/components/builtBy/BuiltBy.tsx')
+			const appShell = await exec('git', ['show', 'HEAD:apps/app/src/app/App.tsx'], {
+				cwd: repoDir,
+			})
+			expect(appShell.stdout).toContain('<BuiltBy />')
+			const siteText = (key: string) => {
+				const object = artifacts.objects.get(key)
+				return object ? Buffer.from(object.body as Uint8Array).toString('utf8') : ''
+			}
+			const bundles = keys.filter(
+				key => key.startsWith(`${prefix}site/assets/`) && key.endsWith('.js')
+			)
+			expect(bundles.length).toBeGreaterThan(0)
+			expect(bundles.some(key => siteText(key).includes('https://mjukvaruhuset.se'))).toBe(true)
+			expect(siteText(`${prefix}site/locales/sv.json`)).toContain('Byggd av Mjukvaruhuset')
+			expect(siteText(`${prefix}site/locales/en.json`)).toContain('Built by Mjukvaruhuset')
+			// …and the handover tells the customer how to hide it
+			expect(siteText(`${prefix}HANDOVER.md`)).toContain('VITE_BUILT_BY_URL=')
 		} finally {
 			await removeRoot(root)
 		}
