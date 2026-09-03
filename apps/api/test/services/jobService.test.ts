@@ -8,6 +8,7 @@ import { createMockSpec, createMockSpecDraft } from '#/services/__mocks__/specSe
 import {
 	budgetForSize,
 	deliverableFromEvents,
+	demoBudget,
 	hashReportToken,
 	JobAlreadyActive,
 	JobNotAwaitingApproval,
@@ -109,6 +110,24 @@ describe('Job Service', () => {
 			expect(job.taskArn).toBe(mockTaskArn)
 		})
 
+		it('Builds a voucher demo on the S budget whatever the spec was classified as', async () => {
+			// The order's kind decides, not the spec's size class (M here): a 500 kr demo never gets
+			// an M/L spend ceiling — the class is still stored on the job's spec for the record
+			await app.db.orders.insert({ id: 'order-1', orgId: 'org-1', name: 'demo', kind: 'demo' })
+			vi.spyOn(app.specService, 'get').mockResolvedValue(frozen())
+			vi.spyOn(app.db.jobs, 'list').mockResolvedValue([])
+
+			await app.jobService.start('order-1', user)
+
+			expect(demoBudget).toEqual(budgetForSize.S)
+			expect(app.db.jobs.insert).toHaveBeenCalledWith(
+				expect.objectContaining({
+					budget: budgetForSize.S,
+					spec: expect.objectContaining({ sizeClass: 'M' }),
+				})
+			)
+		})
+
 		it('Only inserts the row when ECS is not configured', async () => {
 			vi.spyOn(app.specService, 'get').mockResolvedValue(frozen())
 			vi.spyOn(app.db.jobs, 'list').mockResolvedValue([])
@@ -142,11 +161,19 @@ describe('Job Service', () => {
 			await expect(app.jobService.get('job-1', admin)).resolves.toMatchObject({ id: 'job-1' })
 		})
 
-		it('Strips gate details from a customer job read but not an admin\'s', async () => {
+		it("Strips gate details from a customer job read but not an admin's", async () => {
 			const gated = createMockJob({
 				id: 'job-1',
 				gates: [
-					{ name: 'review', ok: true, tokens: 10, durationMs: 5, startedAt: '2026-08-28T00:00:00.000Z', summary: 'ok', details: { findings: [{ file: 'apps/api/src/x.ts', line: 1 }] } },
+					{
+						name: 'review',
+						ok: true,
+						tokens: 10,
+						durationMs: 5,
+						startedAt: '2026-08-28T00:00:00.000Z',
+						summary: 'ok',
+						details: { findings: [{ file: 'apps/api/src/x.ts', line: 1 }] },
+					},
 				],
 			})
 			vi.spyOn(app.db.jobs, 'get').mockResolvedValue(gated)
@@ -216,7 +243,11 @@ describe('Job Service', () => {
 			// The platform judged the live app at that URL broken and withheld it from the
 			// deliverable — the event stream must not hand it out either.
 			expect(forCustomer[0]!.payload).toEqual({ step: 'deploy', ok: true })
-			expect(forCustomer[1]!.payload).toEqual({ step: 'acceptance', ok: false, reason: 'blank page' })
+			expect(forCustomer[1]!.payload).toEqual({
+				step: 'acceptance',
+				ok: false,
+				reason: 'blank page',
+			})
 
 			const forAdmin = await app.jobService.listEvents('job-1', 0, admin)
 			expect(forAdmin).toEqual([deploy, acceptance])
@@ -225,10 +256,22 @@ describe('Job Service', () => {
 		it('Keeps delivery-event URLs whose acceptance check passed — including a re-delivery that later passes', async () => {
 			const url = 'https://mf-11111111-app.eu-north-1.on.aws'
 			const events = [
-				{ ...createMockJobEvent({ id: 2, type: 'delivery' }), payload: { step: 'deploy', ok: true, url } },
-				{ ...createMockJobEvent({ id: 3, type: 'delivery' }), payload: { step: 'acceptance', ok: false, url, reason: 'probed too early' } },
-				{ ...createMockJobEvent({ id: 4, type: 'delivery' }), payload: { step: 'deploy', ok: true, url } },
-				{ ...createMockJobEvent({ id: 5, type: 'delivery' }), payload: { step: 'acceptance', ok: true, url } },
+				{
+					...createMockJobEvent({ id: 2, type: 'delivery' }),
+					payload: { step: 'deploy', ok: true, url },
+				},
+				{
+					...createMockJobEvent({ id: 3, type: 'delivery' }),
+					payload: { step: 'acceptance', ok: false, url, reason: 'probed too early' },
+				},
+				{
+					...createMockJobEvent({ id: 4, type: 'delivery' }),
+					payload: { step: 'deploy', ok: true, url },
+				},
+				{
+					...createMockJobEvent({ id: 5, type: 'delivery' }),
+					payload: { step: 'acceptance', ok: true, url },
+				},
 			]
 			vi.spyOn(app.db.jobs, 'listEvents').mockResolvedValue(events)
 
@@ -718,10 +761,16 @@ describe('Job Service', () => {
 
 	describe('retryFailedBuild (demo auto-retry, Gate C)', () => {
 		const failed = () =>
-			createMockJob({ id: 'job-1', status: 'failed', reason: 'gates red', tokensUsed: 42 })
+			createMockJob({
+				id: 'job-1',
+				status: 'failed',
+				reason: 'gates red',
+				tokensUsed: 42,
+				budget: budgetForSize.S,
+			})
 		const retryRow = () => createMockJob({ id: 'job-2', orderId: 'order-1' })
 
-		it('Retries a failed S job once: fresh job, S budget, launched, rows linked atomically', async () => {
+		it('Retries a failed S job once: fresh job, same budget, launched, rows linked atomically', async () => {
 			vi.spyOn(app.db.jobs, 'insertRetry').mockResolvedValue(retryRow())
 
 			const retry = await app.jobService.retryFailedBuild(failed())
@@ -766,6 +815,22 @@ describe('Job Service', () => {
 
 			await expect(app.jobService.retryFailedBuild(job)).resolves.toBeUndefined()
 			expect(app.db.jobs.insertRetry).not.toHaveBeenCalled()
+		})
+
+		it('Retries a voucher demo whatever its spec was classified as, on the demo (S) budget', async () => {
+			await app.db.orders.insert({ id: 'order-1', orgId: 'org-1', name: 'demo', kind: 'demo' })
+			vi.spyOn(app.db.jobs, 'insertRetry').mockResolvedValue(retryRow())
+			const job = createMockJob({
+				status: 'failed',
+				spec: { sizeClass: 'M' },
+				budget: demoBudget,
+			})
+
+			await expect(app.jobService.retryFailedBuild(job)).resolves.toMatchObject({ id: 'job-2' })
+			expect(app.db.jobs.insertRetry).toHaveBeenCalledWith(
+				expect.objectContaining({ budget: demoBudget }),
+				expect.anything()
+			)
 		})
 
 		it('Never retries twice: a job with a retry event (either direction) is not a candidate', async () => {
@@ -876,7 +941,12 @@ describe('Job Service', () => {
 			await app.jobService.reportEvents(createMockJob({ id: 'job-2' }), [
 				{
 					type: 'notify',
-					payload: { to: 'admins', subject: 'Build job job-2 failed', text: 't', kind: 'job-failed' },
+					payload: {
+						to: 'admins',
+						subject: 'Build job job-2 failed',
+						text: 't',
+						kind: 'job-failed',
+					},
 				},
 			])
 
@@ -1088,16 +1158,16 @@ describe('Job Service', () => {
 		it("Is scoped to the caller's org through the spec draft", async () => {
 			vi.spyOn(app.specService, 'get').mockRejectedValue(new EntityNotFound('spec', 'order-1'))
 
-			await expect(app.jobService.redeliver('order-1', user)).rejects.toBeInstanceOf(
-				EntityNotFound
-			)
+			await expect(app.jobService.redeliver('order-1', user)).rejects.toBeInstanceOf(EntityNotFound)
 			expect(app.db.jobs.insert).not.toHaveBeenCalled()
 		})
 	})
 
 	describe('redelivery resources', () => {
 		it('provisions a redeliver job on its SOURCE job id, a build on its own', () => {
-			expect(provisioningJobIdOf(createMockJob({ id: 'job-2', mode: 'redeliver', sourceJobId: 'job-1' }))).toBe('job-1')
+			expect(
+				provisioningJobIdOf(createMockJob({ id: 'job-2', mode: 'redeliver', sourceJobId: 'job-1' }))
+			).toBe('job-1')
 			expect(provisioningJobIdOf(createMockJob({ id: 'job-2' }))).toBe('job-2')
 		})
 

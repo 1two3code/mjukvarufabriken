@@ -6,10 +6,11 @@ import {
 	licenceGateSummary,
 	reviewGateSummary,
 } from '#/features/jobs/gateReport.ts'
-import { orderSteps, stepsFor } from '#/features/orders/OrderStepper.tsx'
+import { nextStep } from '#/features/orders/nextStep.ts'
 import { paymentOf } from '#/features/orders/payments.ts'
+import { orderSteps, stepsFor } from '#/features/orders/OrderStepper.tsx'
 
-import type { GateName, GateReport, Payment } from '@mf/models'
+import type { GateName, GateReport, OrderDetail, Payment } from '@mf/models'
 
 const makeGate = (name: GateName, details?: Record<string, unknown>): GateReport => ({
 	name,
@@ -51,6 +52,51 @@ describe('Payments on the order page', () => {
 		expect(stepsFor(3_000)).toEqual([...orderSteps])
 		// Price unknown while the spec is still open: show the full journey
 		expect(stepsFor(undefined)).toEqual([...orderSteps])
+	})
+})
+
+describe('Next step on the order page', () => {
+	const detail = (order: Partial<OrderDetail['order']>, complete = false): OrderDetail => ({
+		order: {
+			id: 'order',
+			orgId: 'org',
+			name: 'x',
+			status: 'drafting',
+			kind: 'build',
+			lifecycle: 'active',
+			createdAt: '2026-09-02T00:00:00.000Z',
+			updatedAt: '2026-09-02T00:00:00.000Z',
+			...order,
+		},
+		spec: { status: 'drafting', complete, openQuestions: 0 },
+		payments: [],
+	})
+
+	it('Tells a paid demo it waits for our approval, and a real build that it is starting', () => {
+		expect(nextStep(detail({ status: 'deposit_paid', kind: 'demo' }))).toBe('demoApproval')
+		expect(nextStep(detail({ status: 'deposit_paid', kind: 'build' }))).toBe('starting')
+		// Approved (the build failed to start, or is about to): back to the ordinary copy
+		expect(
+			nextStep(
+				detail({
+					status: 'deposit_paid',
+					kind: 'demo',
+					buildApprovedAt: '2026-09-02T10:00:00.000Z',
+				})
+			)
+		).toBe('starting')
+		expect(nextStep(detail({ status: 'building', kind: 'demo' }))).toBe('building')
+	})
+
+	it('Follows the spec phase: chat until complete, then freeze, then the deposit', () => {
+		expect(nextStep(detail({ status: 'drafting' }))).toBe('spec')
+		expect(nextStep(detail({ status: 'drafting' }, true))).toBe('freeze')
+		expect(nextStep(detail({ status: 'ready' }))).toBe('freeze')
+		expect(nextStep(detail({ status: 'frozen' }))).toBe('deposit')
+		// A frozen demo pays upfront and waits for approval — no "starts automatically" promise
+		expect(nextStep(detail({ status: 'frozen', kind: 'demo' }))).toBe('demoDeposit')
+		expect(nextStep(detail({ status: 'frozen', kind: 'build' }))).toBe('deposit')
+		expect(nextStep(detail({ status: 'paid' }))).toBe('done')
 	})
 })
 
@@ -105,9 +151,7 @@ describe('Gate reports', () => {
 	})
 
 	it('Drops malformed review findings and returns undefined when none are present', () => {
-		expect(reviewGateSummary(makeGate('review', { findings: [{ id: 'x' }] }))?.findings).toEqual(
-			[]
-		)
+		expect(reviewGateSummary(makeGate('review', { findings: [{ id: 'x' }] }))?.findings).toEqual([])
 		expect(reviewGateSummary(makeGate('review'))).toBeUndefined()
 	})
 

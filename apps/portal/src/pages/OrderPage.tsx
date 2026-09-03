@@ -6,12 +6,13 @@ import { customerCancellableOrderStatus, isActiveJobStatus } from '@mf/models'
 
 import { usePermission } from '#/hooks/usePermission.ts'
 import { useGetJobQuery } from '#/features/jobs/jobsApiSlice.ts'
+import { nextStep } from '#/features/orders/nextStep.ts'
 import { useCancelOrderMutation, useGetOrderQuery } from '#/features/orders/ordersApiSlice.ts'
 import { Deliverables } from '#/features/jobs/Deliverables.tsx'
 import { GateReports } from '#/features/jobs/GateReports.tsx'
+import { ApprovalPanel } from '#/features/orders/ApprovalPanel.tsx'
 import { OrderStatusBadge } from '#/features/orders/OrderStatusBadge.tsx'
 import { OrderStepper } from '#/features/orders/OrderStepper.tsx'
-import { ApprovalPanel } from '#/features/orders/ApprovalPanel.tsx'
 import { PaymentPanel } from '#/features/orders/PaymentPanel.tsx'
 
 import { Button } from '#/components/Button.tsx'
@@ -20,31 +21,6 @@ import { Spinner } from '#/components/Spinner.tsx'
 import type { OrderDetail } from '@mf/models'
 
 const pollingInterval = 5000
-
-/** What the customer should do next, per status */
-const nextStep = (detail: OrderDetail) => {
-	const { order, spec } = detail
-	switch (order.status) {
-		case 'drafting':
-			return spec.complete ? 'freeze' : 'spec'
-		case 'ready':
-			return 'freeze'
-		case 'frozen':
-			return 'deposit'
-		case 'deposit_paid':
-			return 'starting'
-		case 'building':
-			return 'building'
-		case 'awaiting_approval':
-			return 'approval'
-		case 'delivered':
-			return 'balance'
-		case 'paid':
-			return 'done'
-		case 'cancelled':
-			return 'cancelled'
-	}
-}
 
 /** Admins may also cancel after the deposit (the build is killed, the deposit refunded) */
 const adminCancellable = new Set<OrderDetail['order']['status']>([
@@ -127,6 +103,8 @@ export function OrderPage() {
 					</div>
 
 					<dl className={styles.facts}>
+						<dt className={styles.label}>{t('order.field.kind')}</dt>
+						<dd className={styles.value}>{t(`order.kind.${order.kind}`)}</dd>
 						<dt className={styles.label}>{t('order.field.price')}</dt>
 						<dd className={styles.value}>
 							{order.priceSek === undefined

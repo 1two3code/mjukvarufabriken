@@ -27,6 +27,18 @@ export const priceCeilingSek = 5_000
 export type SizePrices = Partial<Record<SizeClass, number>>
 
 /**
+ * The SEK price of one tier key as of `at`: the row with the latest `effectiveFrom` that is not
+ * in the future wins; `undefined` when the table has no such row (the caller falls back).
+ */
+const effectiveTierPrice = (tiers: PricingTierRow[], tierKey: string, at: Date) => {
+	const effective = tiers
+		.filter(tier => tier.tierKey === tierKey && tier.currency === 'SEK')
+		.filter(tier => new Date(tier.effectiveFrom).getTime() <= at.getTime())
+		.sort((a, b) => b.effectiveFrom.localeCompare(a.effectiveFrom))[0]
+	return effective && Math.round(effective.price)
+}
+
+/**
  * The effective build price per size class from the `pricing_tiers` rows: for each size's tier
  * key, the SEK row with the latest `effectiveFrom` that is not in the future wins. Sizes without
  * such a row are left out (the estimator falls back to `priceForSize`).
@@ -34,14 +46,28 @@ export type SizePrices = Partial<Record<SizeClass, number>>
 export const sizePricesFromTiers = (tiers: PricingTierRow[], at = new Date()): SizePrices => {
 	const prices: SizePrices = {}
 	for (const [size, tierKey] of Object.entries(tierKeyForSize) as [SizeClass, string][]) {
-		const effective = tiers
-			.filter(tier => tier.tierKey === tierKey && tier.currency === 'SEK')
-			.filter(tier => new Date(tier.effectiveFrom).getTime() <= at.getTime())
-			.sort((a, b) => b.effectiveFrom.localeCompare(a.effectiveFrom))[0]
-		if (effective) prices[size] = Math.round(effective.price)
+		const price = effectiveTierPrice(tiers, tierKey, at)
+		if (price !== undefined) prices[size] = price
 	}
 	return prices
 }
+
+/** `pricing_tiers` row key that prices the voucher demo build (seeded by migration 0020) */
+export const demoTierKey = 'demo'
+
+/**
+ * Fallback price of a demo order, SEK ex moms — the decided ladder's ~500 kr voucher demo
+ * (strategy 2026-08-31 #2). Used when the tiers table has no effective `demo` row.
+ */
+export const demoPriceSek = 500
+
+/**
+ * The price of a `demo` order (wave 14): the effective `demo` tier row, whatever the spec's size
+ * class — the class is still computed and stored, it sizes the build budget, not the price.
+ * Falls back to `demoPriceSek`; the hard ceiling applies here too.
+ */
+export const demoPriceFromTiers = (tiers: PricingTierRow[], at = new Date()): number =>
+	Math.min(effectiveTierPrice(tiers, demoTierKey, at) ?? demoPriceSek, priceCeilingSek)
 
 const smallMaxFeatures = 3
 const smallMaxCriteria = 6
@@ -112,5 +138,8 @@ export type PriceEstimate = { sizeClass: SizeClass; priceSek: number }
  */
 export const estimatePrice = (spec: Spec | PartialSpec, prices: SizePrices = {}): PriceEstimate => {
 	const size = sizeClass(spec)
-	return { sizeClass: size, priceSek: Math.min(prices[size] ?? priceForSize[size], priceCeilingSek) }
+	return {
+		sizeClass: size,
+		priceSek: Math.min(prices[size] ?? priceForSize[size], priceCeilingSek),
+	}
 }

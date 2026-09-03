@@ -187,6 +187,26 @@ describe('Payment Service', () => {
 			})
 		})
 
+		it('Leaves a paid voucher demo in deposit_paid for an admin approval — no auto-start', async () => {
+			// A 500 kr demo: the whole price in one Checkout, then a human approves the build
+			const order = await app.orderService.create('Demo', user, 'demo')
+			const draft = (await app.db.orders.get(order.id))!
+			await app.db.orders.upsert({ ...draft, status: 'frozen', priceSek: 500 })
+			const { payment } = await app.paymentService.checkout(order.id, 'deposit', user)
+
+			const result = await app.paymentService.handleWebhook('{}', 'sig')
+
+			expect(result).toMatchObject({
+				outcome: 'applied',
+				payment: { id: payment.id, status: 'paid' },
+			})
+			expect(app.jobService.start).not.toHaveBeenCalled()
+			expect(app.accountService.provisionCustomerAccount).not.toHaveBeenCalled()
+			const paid = await app.orderService.get(order.id, user)
+			expect(paid).toMatchObject({ kind: 'demo', status: 'deposit_paid' })
+			expect(paid.buildApprovedAt).toBeUndefined()
+		})
+
 		it('Does not fail the webhook when AWS account provisioning rejects', async () => {
 			vi.mocked(app.accountService.provisionCustomerAccount).mockRejectedValueOnce(
 				new Error('CreateAccount failed')
@@ -695,7 +715,8 @@ describe('Payment Service', () => {
 		})
 
 		it("Keeps the identifier within the provider's limit for a long installation id", async () => {
-			const longId = 'customer-name-eu-north-1-prod-repo-owner-repo-name-resident-agent-installation-2026-primary'
+			const longId =
+				'customer-name-eu-north-1-prod-repo-owner-repo-name-resident-agent-installation-2026-primary'
 			await createBillingApp()
 			await app.residentService.recordUsage(record('2026-09-01', 6.75, longId))
 			await app.residentService.upsertInstallation(longId, { billingCustomerId: 'cus_long' })

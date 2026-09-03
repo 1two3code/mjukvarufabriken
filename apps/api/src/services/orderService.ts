@@ -13,6 +13,7 @@ import { EntityInvalid, EntityNotFound } from '#/lib/entityError.ts'
 import type { FastifyInstance, FastifyPluginAsync } from 'fastify'
 import type {
 	BackendSession,
+	DemoQueueResponse,
 	Job,
 	JobSummary,
 	Order,
@@ -61,7 +62,52 @@ declare module 'fastify' {
 			 * refund to do (warning in the log; admins refund in Stripe).
 			 */
 			cancel: (orderId: string, session: BackendSession) => Promise<Order>
+			/**
+			 * The one way a paid order's build starts: inserts and launches the job, moves the order
+			 * to `building` and kicks off the (idempotent, fire-and-forget) customer AWS account
+			 * provisioning. Shared by the deposit webhook and the demo approval so the two can never
+			 * drift. Throws when the job cannot be started (the caller decides what that means).
+			 */
+			startBuild: (orderId: string, session: BackendSession) => Promise<void>
+			/**
+			 * Admin approval of a voucher demo's build (wave 14): a `demo` order in `deposit_paid`
+			 * gets its `buildApprovedAt` stamped — while the rolling-week count of approvals is below
+			 * `secrets.demoWeeklyCap`, or with `force` — and its build started like the webhook does
+			 * for a real build. Throws `DemoNotApprovable` for the wrong kind/status and
+			 * `DemoWeeklyCapReached` when the cap is full. An order approved earlier whose start
+			 * failed is started again without a second approval instant.
+			 */
+			approveDemoBuild: (
+				orderId: string,
+				session: BackendSession,
+				options?: { force?: boolean }
+			) => Promise<Order>
+			/** Paid demo orders waiting for a build approval, oldest first, plus the weekly cap state */
+			demoQueue: () => Promise<DemoQueueResponse>
 		}
+	}
+}
+
+/** The rolling window the weekly voucher cap counts demo build approvals in */
+export const demoCapWindowMs = 7 * 24 * 60 * 60 * 1000
+
+/** Approve-build was called on an order that is not a paid demo waiting to start */
+export class DemoNotApprovable extends EntityInvalid {
+	constructor(orderId: string) {
+		super('order', orderId)
+		this.message = `order (${orderId}) is not a demo awaiting a build approval`
+	}
+}
+
+/** The rolling week already holds `cap` approved demo builds; `force` bypasses it */
+export class DemoWeeklyCapReached extends EntityInvalid {
+	readonly approved: number
+	readonly cap: number
+	constructor(orderId: string, approved: number, cap: number) {
+		super('order', orderId)
+		this.approved = approved
+		this.cap = cap
+		this.message = `demo weekly cap reached (${approved}/${cap}) — order (${orderId}) not approved`
 	}
 }
 
@@ -95,7 +141,7 @@ const toJobSummary = (job: Job): JobSummary => ({
 })
 
 const plugin: FastifyPluginAsync = async app => {
-	const { db, jobService, paymentProvider } = app
+	const { db, jobService, paymentProvider, accountService, secrets } = app
 
 	const scoped = (order: Order | undefined, session: BackendSession, id: string) => {
 		if (!order || (!isAdmin(session) && order.orgId !== session.orgId)) {
@@ -159,9 +205,79 @@ const plugin: FastifyPluginAsync = async app => {
 		return (await db.orders.transition(order.id, ['delivered'], 'paid')) ?? order
 	}
 
+	// MARK: Build start (deposit webhook + demo approval)
+
+	const startBuild: FastifyInstance['orderService']['startBuild'] = async (orderId, session) => {
+		const order = await get(orderId, session)
+		try {
+			await jobService.start(orderId, session)
+			await transition(orderId, 'building')
+		} finally {
+			// Fire-and-forget: real AWS account creation can take minutes (polled), so this must not
+			// hold up a webhook response. Deliberately triggered here rather than at delivery time —
+			// the build itself takes tens of minutes, plenty of lead time for the account to be ready
+			// before delivery needs it. Idempotent and safe to retry (no-ops once an account is
+			// recorded, or while PROVISION_CUSTOMER_ACCOUNTS is off); a failure here is an admin
+			// follow-up (retry via the same admin endpoint), not a reason to fail the build.
+			accountService.provisionCustomerAccount(order.orgId).catch(error => {
+				app.log.error(
+					{ err: error, orgId: order.orgId },
+					'Build started but the AWS account could not be provisioned'
+				)
+			})
+		}
+	}
+
+	/** Demo build approvals inside the rolling cap window, counted at `now` */
+	const approvedThisWeek = (now: Date) =>
+		db.orders.countDemoApprovalsSince(new Date(now.getTime() - demoCapWindowMs))
+
+	const approveDemoBuild: FastifyInstance['orderService']['approveDemoBuild'] = async (
+		orderId,
+		session,
+		{ force = false } = {}
+	) => {
+		const order = await get(orderId, session)
+		if (order.kind !== 'demo' || order.status !== 'deposit_paid') {
+			throw new DemoNotApprovable(orderId)
+		}
+		// A retry of an approved demo whose start failed keeps its first approval instant: it is
+		// already counted against the week, a second stamp would count the same voucher twice
+		if (!order.buildApprovedAt) {
+			const now = new Date()
+			const cap = secrets.demoWeeklyCap
+			// Count and stamp in one serialised repository step: two admins (or two tabs) approving
+			// different demos at once cannot both read "one short of the cap" and both get through
+			const { order: stamped, approved } = await db.orders.stampDemoApproval(orderId, now, {
+				since: new Date(now.getTime() - demoCapWindowMs),
+				cap: force ? undefined : cap,
+			})
+			if (stamped) {
+				app.log.info({ orderId, approved: approved + 1, cap, force }, 'Demo build approved')
+			} else if (!(await get(orderId, session)).buildApprovedAt) {
+				throw new DemoWeeklyCapReached(orderId, approved, cap)
+			}
+			// Otherwise a concurrent approval stamped first and wins the instant; this call still
+			// goes on to start the build (a job already running is JobAlreadyActive, not a loss)
+		}
+		await startBuild(orderId, session)
+		return get(orderId, session)
+	}
+
 	app.decorate('orderService', {
 		get,
 		transition,
+		startBuild,
+		approveDemoBuild,
+		demoQueue: async () => {
+			// A repository query, not a filter over the newest-200 `listOrders` window: the oldest
+			// waiting demo is exactly the row the queue exists to surface
+			const [orders, approved] = await Promise.all([
+				db.orders.listDemosAwaitingApproval(),
+				approvedThisWeek(new Date()),
+			])
+			return { orders, approvedThisWeek: approved, cap: secrets.demoWeeklyCap }
+		},
 		approve: async (orderId, session) => {
 			const order = await get(orderId, session)
 			if (order.status !== 'awaiting_approval') {
@@ -240,5 +356,11 @@ const plugin: FastifyPluginAsync = async app => {
 
 export default fp(plugin, {
 	name: '#internal/orderService',
-	dependencies: ['#internal/db', '#internal/jobService', '#internal/stripe'],
+	dependencies: [
+		'#internal/db',
+		'#internal/secrets',
+		'#internal/jobService',
+		'#internal/stripe',
+		'#internal/accountService',
+	],
 })

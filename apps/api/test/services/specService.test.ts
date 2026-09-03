@@ -393,6 +393,68 @@ describe('Spec Service', () => {
 			expect(frozen.priceSek).toBe(2_500)
 		})
 
+		it('Prices a voucher demo at the demo tier whatever its size class, on the turn and at freeze', async () => {
+			// Arrange: a demo order whose spec classifies as M (4 plain features) — the class is
+			// stored (it sizes the build budget) but the price is the demo tier's, never build_m
+			await app.db.orders.insert({ id: 'order-1', orgId: 'org-1', name: 'demo', kind: 'demo' })
+			await app.db.pricingTiers.insert({
+				tierKey: 'demo',
+				name: 'Demo',
+				price: 450,
+				currency: 'SEK',
+				description: '',
+				effectiveFrom: '2026-08-31T00:00:00.000Z',
+			})
+			const feature = (title: string) => ({
+				title,
+				description: '',
+				acceptanceCriteria: [`${title} works`],
+			})
+			const spec = createMockSpec({
+				features: [feature('Book'), feature('Cancel'), feature('Waitlist'), feature('Remind')],
+			})
+			await seed(createMockSpecDraft({ orderId: 'order-1', spec }))
+			vi.spyOn(app.anthropic.messages, 'create').mockResolvedValue(
+				createMockToolUseMessage(
+					createMockSpecToolOutput({
+						...spec,
+						nonGoalsAnswered: true,
+						stackConstraintsAnswered: true,
+						questions: [],
+						assistantMessage: 'Complete — please review and freeze.',
+					})
+				)
+			)
+
+			// Act
+			const ready = await app.specService.sendMessage('order-1', 'That is all', user)
+			const frozen = await app.specService.freeze('order-1', user)
+
+			// Assert
+			expect(ready.status).toBe('ready')
+			expect(ready.priceSek).toBe(450)
+			expect(frozen.spec.sizeClass).toBe('M')
+			expect(frozen.priceSek).toBe(450)
+			await expect(app.db.orders.getOrder('order-1')).resolves.toMatchObject({
+				kind: 'demo',
+				sizeClass: 'M',
+				priceSek: 450,
+			})
+		})
+
+		it('Falls back to 500 kr for a demo when the tiers table has no demo row', async () => {
+			// Arrange
+			await app.db.orders.insert({ id: 'order-1', orgId: 'org-1', name: 'demo', kind: 'demo' })
+			await seed(createMockSpecDraft({ status: 'ready', spec: createMockSpec() }))
+
+			// Act
+			const frozen = await app.specService.freeze('order-1', user)
+
+			// Assert
+			expect(frozen).toMatchObject({ status: 'frozen', priceSek: 500 })
+			expect(frozen.spec.sizeClass).toBe('S')
+		})
+
 		it('Is idempotent for an already frozen draft', async () => {
 			// Arrange
 			const frozen = await seed(

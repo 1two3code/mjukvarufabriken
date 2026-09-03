@@ -1,5 +1,11 @@
 .form {
 	display: flex;
+	flex-direction: column;
+	gap: var(--spacing-xs);
+}
+
+.row {
+	display: flex;
 	flex-wrap: wrap;
 	gap: var(--spacing-xs);
 	align-items: flex-end;
@@ -7,4 +13,56 @@
 
 .name {
 	min-width: 24rem;
+}
+
+/* MARK: Kind choice */
+.kinds {
+	display: flex;
+	flex-wrap: wrap;
+	gap: var(--spacing-xs);
+
+	margin: 0;
+	padding: 0;
+	border: 0;
+}
+
+.legend {
+	composes: composable-caption-font from global;
+	margin-bottom: var(--spacing-xxs);
+	color: var(--secondary-text-color);
+}
+
+.kind {
+	cursor: pointer;
+
+	display: grid;
+	grid-template-columns: auto 1fr;
+	gap: var(--spacing-xxs) var(--spacing-xs);
+	align-items: center;
+
+	min-width: 24rem;
+	padding: var(--spacing-xs) var(--spacing-s);
+	border: var(--border-width-xs) solid var(--divider-color);
+	border-radius: var(--border-radius-s);
+
+	background: var(--content-background);
+}
+
+.selected {
+	border-color: var(--brand-500);
+}
+
+.radio {
+	grid-row: span 2;
+	margin: 0;
+	accent-color: var(--brand-500);
+}
+
+.kindTitle {
+	font-weight: 600;
+}
+
+.kindHint {
+	composes: composable-caption-font from global;
+	color: var(--secondary-text-color);
 }

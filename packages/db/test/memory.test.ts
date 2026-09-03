@@ -396,6 +396,87 @@ describe('memory repositories', () => {
 			).resolves.toBe(0)
 		})
 
+		it('Lists the paid, unapproved demos oldest first regardless of the newest-200 window', async () => {
+			vi.useFakeTimers({ toFake: ['Date'], now: new Date('2026-09-01T00:00:00.000Z') })
+			try {
+				// The oldest waiting demo is created first, then pushed past the 200-row list window
+				await repos.orders.insert({ id: 'oldest', orgId: 'a', name: 'x', kind: 'demo' })
+				await repos.orders.transition('oldest', ['drafting'], 'ready')
+				await repos.orders.transition('oldest', ['ready'], 'frozen')
+				await repos.orders.transition('oldest', ['frozen'], 'deposit_paid')
+				for (let i = 0; i < 205; i++) {
+					vi.setSystemTime(new Date(Date.UTC(2026, 8, 1, 1, 0, i)))
+					await repos.orders.insert({ id: `filler-${i}`, orgId: 'a', name: 'x' })
+				}
+				vi.setSystemTime(new Date('2026-09-02T00:00:00.000Z'))
+				await repos.orders.insert({ id: 'newer', orgId: 'b', name: 'x', kind: 'demo' })
+				await repos.orders.transition('newer', ['drafting'], 'ready')
+				await repos.orders.transition('newer', ['ready'], 'frozen')
+				await repos.orders.transition('newer', ['frozen'], 'deposit_paid')
+				// Approved, still drafting, and a paid real build: none of them queue
+				await repos.orders.insert({ id: 'approved', orgId: 'a', name: 'x', kind: 'demo' })
+				await repos.orders.transition('approved', ['drafting'], 'ready')
+				await repos.orders.transition('approved', ['ready'], 'frozen')
+				await repos.orders.transition('approved', ['frozen'], 'deposit_paid')
+				await repos.orders.setBuildApprovedAt('approved', new Date())
+				await repos.orders.insert({ id: 'drafting', orgId: 'a', name: 'x', kind: 'demo' })
+				await repos.orders.insert({ id: 'build', orgId: 'a', name: 'x' })
+				await repos.orders.transition('build', ['drafting'], 'ready')
+				await repos.orders.transition('build', ['ready'], 'frozen')
+				await repos.orders.transition('build', ['frozen'], 'deposit_paid')
+
+				expect((await repos.orders.listOrders()).map(order => order.id)).not.toContain('oldest')
+				expect((await repos.orders.listDemosAwaitingApproval()).map(order => order.id)).toEqual([
+					'oldest',
+					'newer',
+				])
+			} finally {
+				vi.useRealTimers()
+			}
+		})
+
+		it('Stamps a demo approval only while the week is under the cap, in one step', async () => {
+			const since = new Date('2026-09-01T00:00:00.000Z')
+			const at = new Date('2026-09-02T12:00:00.000Z')
+			await repos.orders.insert({ id: 'd1', orgId: 'a', name: 'x', kind: 'demo' })
+			await repos.orders.insert({ id: 'd2', orgId: 'a', name: 'x', kind: 'demo' })
+			await repos.orders.insert({ id: 'd3', orgId: 'a', name: 'x', kind: 'demo' })
+			await repos.orders.insert({ id: 'd4', orgId: 'a', name: 'x', kind: 'demo' })
+
+			// `approved` reports the count BEFORE the stamp; the stamp itself is compare-and-set
+			await expect(repos.orders.stampDemoApproval('d1', at, { since, cap: 2 })).resolves.toEqual({
+				order: expect.objectContaining({ id: 'd1', buildApprovedAt: at.toISOString() }),
+				approved: 0,
+			})
+			await expect(repos.orders.stampDemoApproval('d1', at, { since, cap: 2 })).resolves.toEqual({
+				order: undefined,
+				approved: 1,
+			})
+			await expect(
+				repos.orders.stampDemoApproval('missing', at, { since, cap: 2 })
+			).resolves.toEqual({
+				order: undefined,
+				approved: 1,
+			})
+			await expect(
+				repos.orders.stampDemoApproval('d2', at, { since, cap: 2 })
+			).resolves.toMatchObject({ order: { id: 'd2' }, approved: 1 })
+			// The week is full: nothing stamped, the count says why
+			await expect(repos.orders.stampDemoApproval('d3', at, { since, cap: 2 })).resolves.toEqual({
+				order: undefined,
+				approved: 2,
+			})
+			expect((await repos.orders.getOrder('d3'))?.buildApprovedAt).toBeUndefined()
+			// No cap (an admin's force) stamps over the full week
+			await expect(repos.orders.stampDemoApproval('d3', at, { since })).resolves.toMatchObject({
+				order: { id: 'd3' },
+				approved: 2,
+			})
+			// Approvals before the window do not count towards it
+			await repos.orders.setBuildApprovedAt('d4', new Date('2026-08-01T00:00:00.000Z'))
+			await expect(repos.orders.countDemoApprovalsSince(since)).resolves.toBe(3)
+		})
+
 		it('Stores payments per session, marks paid once and dedupes webhook events', async () => {
 			await repos.orders.insert({ id: 'o1', orgId: 'a', name: 'x' })
 			const payment = await repos.orders.insertPayment({
@@ -541,7 +622,12 @@ describe('memory repositories', () => {
 			await repos.auth.insertMagicLink({ tokenHash: 'h3', email: 'b@x.se', expiresAt })
 			// One-shot provider login links never count against the emailed-link limit
 			await expect(
-				repos.auth.insertMagicLink({ tokenHash: 'h4', email: 'a@x.se', expiresAt, purpose: 'login' })
+				repos.auth.insertMagicLink({
+					tokenHash: 'h4',
+					email: 'a@x.se',
+					expiresAt,
+					purpose: 'login',
+				})
 			).resolves.toMatchObject({ purpose: 'login' })
 
 			await expect(
@@ -696,7 +782,9 @@ describe('memory repositories', () => {
 			})
 			expect(linked).toMatchObject({ awsAccountId: '123456789012', awsAccountSlug: 'acme' })
 			expect((await repos.users.getOrg(org.id))?.awsAccountId).toBe('123456789012')
-			expect(await repos.users.linkAwsAccount('missing', { accountId: '1', slug: 's' })).toBeUndefined()
+			expect(
+				await repos.users.linkAwsAccount('missing', { accountId: '1', slug: 's' })
+			).toBeUndefined()
 		})
 
 		it('Compare-and-sets the order lifecycle, guarding the from-state', async () => {

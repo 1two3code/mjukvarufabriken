@@ -21,7 +21,10 @@ const buildable = new Set<OrderStatus>(['deposit_paid', 'building'])
 
 /**
  * Manual (re)start of a build. The webhook starts the first build when the deposit lands;
- * this route is the customer's retry (after a failed build) and the admin's override.
+ * this route is the customer's retry (after a failed build) and the admin's override. A voucher
+ * demo (wave 14) is admin-approved before its first build: until `buildApprovedAt` is set nobody
+ * — admin included — can start it here; the approve-build admin route is the only way in (it
+ * stamps the approval the weekly cap counts). An approved demo restarts here like any paid order.
  */
 const route: FastifyPluginAsyncZod = async function (app) {
 	const { jobService, orderService } = app
@@ -33,6 +36,15 @@ const route: FastifyPluginAsyncZod = async function (app) {
 		if (orderError) return reply.error(orderError instanceof EntityNotFound ? 404 : 500, orderError)
 		if (session.role !== 'admin' && !buildable.has(order.status)) {
 			return reply.error(409, `order (${order.id}) is ${order.status}`, 'depositNotPaid')
+		}
+		// Admins too: a demo's FIRST start goes through approve-build, which stamps the approval
+		// the weekly cap counts and the demo queue keys on — starting it here would bypass both
+		if (order.kind === 'demo' && !order.buildApprovedAt) {
+			return reply.error(
+				409,
+				`order (${order.id}) is a demo awaiting approval`,
+				'demoAwaitingApproval'
+			)
 		}
 
 		const [error, job] = await tryCatch(jobService.start(params.orderId, session))

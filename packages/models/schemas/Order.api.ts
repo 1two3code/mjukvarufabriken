@@ -26,6 +26,11 @@ export const OrderMutationSchemas = {
 	LifecycleAction: z
 		.object({ action: z.enum(lifecycleActions), confirm: z.boolean().optional() })
 		.strict(),
+	/**
+	 * Admin approval of a demo order's build (wave 14): the paid demo starts building. `force`
+	 * bypasses the weekly voucher cap (a deliberate over-allocation, never the default).
+	 */
+	ApproveBuild: z.object({ force: z.boolean().optional() }).strict(),
 }
 
 export type OrderMutation = {
@@ -33,6 +38,7 @@ export type OrderMutation = {
 	CreateOrder: z.input<typeof OrderMutationSchemas.CreateOrder>
 	SetApprovalGate: z.infer<typeof OrderMutationSchemas.SetApprovalGate>
 	LifecycleAction: z.infer<typeof OrderMutationSchemas.LifecycleAction>
+	ApproveBuild: z.infer<typeof OrderMutationSchemas.ApproveBuild>
 }
 
 // MARK: Operations
@@ -80,6 +86,19 @@ export const CheckoutResponseSchema = z.object({
 	url: z.string(),
 })
 export type CheckoutResponse = z.infer<typeof CheckoutResponseSchema>
+
+/**
+ * The admin's demo queue (wave 14): paid demo orders waiting for a build approval, oldest first,
+ * with the weekly voucher cap and how much of it is used.
+ */
+export const DemoQueueResponseSchema = z.object({
+	orders: z.array(OrderSchema),
+	/** Demo builds approved in the last seven days (`Order.buildApprovedAt`) */
+	approvedThisWeek: z.number().int().nonnegative(),
+	/** `DEMO_WEEKLY_CAP`: approvals allowed per rolling week without `force` */
+	cap: z.number().int().nonnegative(),
+})
+export type DemoQueueResponse = z.infer<typeof DemoQueueResponseSchema>
 
 // MARK: Lifecycle / deprovisioning (wave 9)
 
