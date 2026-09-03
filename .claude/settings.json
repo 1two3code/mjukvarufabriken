@@ -1,4 +1,7 @@
 {
+  "env": {
+    "PLAYWRIGHT_MCP_HEADLESS": "true"
+  },
   "enabledPlugins": {
     "typescript-lsp@claude-plugins-official": true,
     "security-guidance@claude-plugins-official": true,

@@ -49,3 +49,6 @@ apps/portal/.env*local
 
 # Secrets — GitHub App private keys, certs (never commit)
 *.pem
+
+# Playwright MCP scratch output (page snapshots, traces)
+.playwright-mcp/
