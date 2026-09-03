@@ -25,6 +25,9 @@ agent behaviour.
 4. TOKENS.md keeps the cost ledger; this file keeps the defect ledger. Don't duplicate numbers
    here — link the run.
 
+Synthesis of the first nine dogfood runs (what the defects mean, not what they were):
+[RETRO-2026-09-03.md](RETRO-2026-09-03.md).
+
 Entry format:
 
 ```
