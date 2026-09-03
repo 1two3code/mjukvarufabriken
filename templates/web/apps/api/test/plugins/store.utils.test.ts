@@ -85,7 +85,9 @@ describe('Postgres store backend', () => {
 		const last = sent.at(-1)!
 		expect(last.text).toMatch(/INSERT INTO store/)
 		expect(last.text).toMatch(/ON CONFLICT \(collection, id\) DO UPDATE SET value = EXCLUDED.value/)
-		expect(last.params).toEqual(['items', '1', JSON.stringify({ id: '1', tags: ['a'] })])
+		// The VALUE, not JSON text: the driver serialises jsonb parameters itself (pre-stringifying
+		// double-encoded every record and broke the first live app's gallery, 2026-09-03)
+		expect(last.params).toEqual(['items', '1', { id: '1', tags: ['a'] }])
 	})
 
 	it('reports whether a delete removed anything', async () => {
@@ -128,5 +130,18 @@ describe('sslOptionOf', () => {
 			url: 'postgres://a:b@localhost:5432/db',
 			ssl: false,
 		})
+	})
+})
+
+describe('Postgres store backend — rows written before the double-encoding fix', () => {
+	it('heals a value that was stored as a JSON string', async () => {
+		// Arrange — what the driver returns for a row the old store wrote: a string, not an object
+		const legacy = JSON.stringify({ id: '1', objectKey: 'photos/1/original' })
+		const query: Query = async text => (text === ensureTableSql ? [] : [{ value: legacy }])
+		const store = createPostgresStore(query, async () => {})
+
+		// Act + Assert
+		await expect(store.get('photos', '1')).resolves.toEqual({ id: '1', objectKey: 'photos/1/original' })
+		await expect(store.list('photos')).resolves.toEqual([{ id: '1', objectKey: 'photos/1/original' }])
 	})
 })
