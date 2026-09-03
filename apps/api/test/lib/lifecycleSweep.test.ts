@@ -11,6 +11,8 @@ describe('Lifecycle grace-period sweep', () => {
 			skipMock: ['#/services/accountService.ts', '#/services/exportService.ts'],
 		})
 		app.secrets.orgLifecycle.graceDays = 30
+		// The sweep only tears down with the lifecycle flag on (a teardown is refused without it)
+		app.secrets.orgLifecycle.enabled = true
 		// No delivered job in the mocked jobs → the export holds nothing, which is a valid `done`
 		vi.spyOn(app.db.jobs, 'list').mockResolvedValue([])
 	})
@@ -32,7 +34,7 @@ describe('Lifecycle grace-period sweep', () => {
 
 		const result = await runLifecycleSweep(app)
 
-		expect(result).toEqual({ checked: 0, tornDown: 0, failed: 0 })
+		expect(result).toEqual({ checked: 0, tornDown: 0, failed: 0, skipped: 0 })
 		expect((await app.db.orders.getOrder(order.id))?.lifecycle).toBe('suspended')
 	})
 
@@ -45,7 +47,7 @@ describe('Lifecycle grace-period sweep', () => {
 
 		const result = await runLifecycleSweep(app)
 
-		expect(result).toEqual({ checked: 1, tornDown: 1, failed: 0 })
+		expect(result).toEqual({ checked: 1, tornDown: 1, failed: 0, skipped: 0 })
 		expect((await app.db.orders.getOrder(order.id))?.lifecycle).toBe('torn_down')
 		// A real (confirmed) teardown, fenced to the order's Customer=<slug>
 		expect(app.org.deprovision).toHaveBeenCalledWith(
@@ -63,7 +65,7 @@ describe('Lifecycle grace-period sweep', () => {
 		await runLifecycleSweep(app)
 		const second = await runLifecycleSweep(app)
 
-		expect(second).toEqual({ checked: 0, tornDown: 0, failed: 0 })
+		expect(second).toEqual({ checked: 0, tornDown: 0, failed: 0, skipped: 0 })
 	})
 
 	it('Leaves an order suspended when its teardown deprovision reports resource failures', async () => {
@@ -92,7 +94,7 @@ describe('Lifecycle grace-period sweep', () => {
 
 		const result = await runLifecycleSweep(app)
 
-		expect(result).toEqual({ checked: 1, tornDown: 0, failed: 1 })
+		expect(result).toEqual({ checked: 1, tornDown: 0, failed: 1, skipped: 0 })
 		// Still suspended, so the next hourly pass retries it.
 		expect((await app.db.orders.getOrder(order.id))?.lifecycle).toBe('suspended')
 	})
@@ -113,18 +115,32 @@ describe('Lifecycle grace-period sweep', () => {
 
 		const postponed = await runLifecycleSweep(app)
 
-		expect(postponed).toEqual({ checked: 1, tornDown: 0, failed: 1 })
+		expect(postponed).toEqual({ checked: 1, tornDown: 0, failed: 1, skipped: 0 })
 		expect(teardownSpy).not.toHaveBeenCalled()
 		expect((await app.db.orders.getOrder(order.id))?.lifecycle).toBe('suspended')
 
 		// Next pass: the real export succeeds and the teardown follows it
 		const retried = await runLifecycleSweep(app)
 
-		expect(retried).toEqual({ checked: 1, tornDown: 1, failed: 0 })
+		expect(retried).toEqual({ checked: 1, tornDown: 1, failed: 0, skipped: 0 })
 		expect(exportSpy.mock.invocationCallOrder.at(-1)).toBeLessThan(
 			teardownSpy.mock.invocationCallOrder[0]!
 		)
 		expect((await app.db.orders.getOrder(order.id))?.lifecycle).toBe('torn_down')
+	})
+
+	it('Skips every due order while ORG_LIFECYCLE_ENABLED is off — no export, no state change', async () => {
+		const order = await seedSuspended('order-dark')
+		app.secrets.orgLifecycle.enabled = false
+		vi.useFakeTimers()
+		vi.setSystemTime(Date.now() + 31 * 24 * 60 * 60 * 1000)
+		const exportSpy = vi.spyOn(app.exportService, 'finalExport')
+
+		const result = await runLifecycleSweep(app)
+
+		expect(result).toEqual({ checked: 1, tornDown: 0, failed: 0, skipped: 1 })
+		expect(exportSpy).not.toHaveBeenCalled()
+		expect((await app.db.orders.getOrder(order.id))?.lifecycle).toBe('suspended')
 	})
 
 	it('Continues past an order whose teardown throws (fault-tolerant)', async () => {

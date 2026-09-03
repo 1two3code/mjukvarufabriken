@@ -22,8 +22,9 @@ export const OrderMutationSchemas = {
 	/**
 	 * Admin deprovisioning action on an order's delivery (wave 9). `confirm` is the dry-run guard:
 	 * omitted / false previews the deprovision and leaves the lifecycle untouched, `true` performs
-	 * it and writes the new state. A confirmed `teardown` is refused until the order's final export
-	 * is `done` (wave 14) unless `skipExport` says the admin knows there is nothing to keep.
+	 * it and writes the new state. A confirmed `teardown` is refused while `ORG_LIFECYCLE_ENABLED`
+	 * is off, and until the order's final export is `done` and fresh (wave 14) unless `skipExport`
+	 * says the admin knows there is nothing to keep.
 	 */
 	LifecycleAction: z
 		.object({

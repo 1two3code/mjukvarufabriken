@@ -30,8 +30,9 @@ const toSummary = (result: DeprovisionResult): DeprovisionSummary => ({
 /**
  * Admin deprovisioning action on an order's delivery (wave 9, teardown-deprovisioning.md #2):
  * suspend / resume / teardown. DRY-RUN by default — pass `confirm: true` to actually deprovision
- * the tagged AWS resources and write the new lifecycle state. A confirmed teardown is 409 until
- * the order's final export is done (wave 14) unless `skipExport: true` is passed.
+ * the tagged AWS resources and write the new lifecycle state. A confirmed teardown is 409 while
+ * `ORG_LIFECYCLE_ENABLED` is off (nothing would be deleted), until the order's final export is
+ * done and fresh (wave 14) unless `skipExport: true` is passed, and while an export is pending.
  */
 const route: FastifyPluginAsyncZod = async function (app) {
 	const { accountService } = app

@@ -28,9 +28,13 @@ A small menu of preview resources on shared infra, provisioned per job, scoped p
   `accountService.runLifecycleAction('teardown')` after the fenced deprovision succeeds. A final
   export (`exportService.finalExport`: `repo.zip`, `database.json`, `storage/*` +
   `storage-manifest.json`, then `DELETION-CERTIFICATE.md` at completion) is taken first — a
-  confirmed teardown is refused until it is `done` unless an admin passes `skipExport`. The api's
-  own bucket grants are now prefix-fenced (`deliverables/*` Get/Put, `preview/*` Get/Delete).
-  Gated on `ORG_LIFECYCLE_ENABLED` like the deprovision (off → `skipped`, nothing deleted).
+  confirmed teardown is refused until it is `done` and at most an hour old (an older one is
+  retaken by the sweeps / `POST /bff/admin/orders/:id/export`) unless an admin passes
+  `skipExport`, and refused while an export run is pending. The api's own bucket grants are now
+  prefix-fenced (`deliverables/*` Get/Put, `preview/*` Get/Delete); a `DeleteObjects` that
+  leaves keys behind (per-key `Errors`) fails the teardown rather than certifying it. The whole
+  confirmed teardown is gated on `ORG_LIFECYCLE_ENABLED`: off → refused (409
+  `LifecycleDisabled`) and the sweeps skip due orders without exporting or mailing.
 
 ## Non-goals
 No per-preview CDK stacks (cost/speed/blast-radius — see the preview-vs-paid split rationale in

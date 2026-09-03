@@ -19,13 +19,22 @@ export const graceWindowMs = (graceDays: number) => graceDays * dayMs
  * Since wave 14 every teardown is preceded by the order's final export (`exportService`): the
  * teardown is refused until it is `done`, so the sweep takes it first and leaves an order whose
  * export failed `suspended` for the next pass (the hosting sweep does the same for `active`).
+ * While `ORG_LIFECYCLE_ENABLED` is off a teardown is refused outright (nothing would be
+ * deleted), so the pass only counts the due orders as `skipped` — no export, no state change.
  */
 export const runLifecycleSweep = async (
 	app: FastifyInstance
-): Promise<{ checked: number; tornDown: number; failed: number }> => {
+): Promise<{ checked: number; tornDown: number; failed: number; skipped: number }> => {
 	const changedBefore = new Date(Date.now() - graceWindowMs(app.secrets.orgLifecycle.graceDays))
 	const due = await app.db.orders.listSuspendedBefore(changedBefore)
-	if (!due.length) return { checked: 0, tornDown: 0, failed: 0 }
+	if (!due.length) return { checked: 0, tornDown: 0, failed: 0, skipped: 0 }
+	if (!app.secrets.orgLifecycle.enabled) {
+		app.log.info(
+			{ orderIds: due.map(order => order.id) },
+			'Grace-period sweep skipped due orders — ORG_LIFECYCLE_ENABLED is off'
+		)
+		return { checked: due.length, tornDown: 0, failed: 0, skipped: due.length }
+	}
 
 	let tornDown = 0
 	let failed = 0
@@ -62,7 +71,7 @@ export const runLifecycleSweep = async (
 		}
 	}
 
-	const result = { checked: due.length, tornDown, failed }
+	const result = { checked: due.length, tornDown, failed, skipped: 0 }
 	if (tornDown || failed) app.log.info(result, 'Grace-period sweep ran over suspended orders')
 	return result
 }

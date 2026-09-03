@@ -3,6 +3,7 @@ import { canTransitionLifecycle, lifecycleActionMode, lifecycleActionTarget } fr
 
 import { customerSlugForOrg } from '#/lib/customerSlug.ts'
 import { EntityInvalid, EntityNotFound } from '#/lib/entityError.ts'
+import { isExportFresh } from '#/services/exportService.ts'
 import { provisioningJobIdOf } from '#/services/jobService.utils.ts'
 
 import type { FastifyInstance, FastifyPluginAsync } from 'fastify'
@@ -61,6 +62,40 @@ export class ExportRequired extends EntityInvalid {
 	}
 }
 
+/**
+ * The order's export is `done` but older than `exportFreshnessMs`: everything the app wrote since
+ * would be destroyed uncertified. Retake it (`POST /bff/admin/orders/:id/export` — the sweeps do
+ * this themselves) and tear down within the window.
+ */
+export class ExportStale extends EntityInvalid {
+	constructor(orderId: string) {
+		super('stale export', orderId)
+	}
+}
+
+/**
+ * A confirmed teardown with `skipExport` while an export run is `pending`: the certificate this
+ * teardown would append is dropped when that run finishes (it replaces the file list), so wait
+ * for it — or, if it is a crashed run, let the next export call reclaim it first.
+ */
+export class ExportInFlight extends EntityInvalid {
+	constructor(orderId: string) {
+		super('export in flight', orderId)
+	}
+}
+
+/**
+ * A confirmed teardown while `ORG_LIFECYCLE_ENABLED` is off. With the flag off nothing is wired
+ * to AWS: the deprovision runs against an empty world and the preview database/storage teardown
+ * would be skipped, so the only thing a "teardown" could do is record `torn_down` — a terminal
+ * state — over resources that keep running, and certify a deletion that never happened. Refused.
+ */
+export class LifecycleDisabled extends EntityInvalid {
+	constructor(orderId: string) {
+		super('lifecycle (ORG_LIFECYCLE_ENABLED is off)', orderId)
+	}
+}
+
 declare module 'fastify' {
 	interface FastifyInstance {
 		/**
@@ -81,12 +116,13 @@ declare module 'fastify' {
 			 * dry-run previews the deprovision and leaves the lifecycle untouched; a confirmed run
 			 * deprovisions the tagged resources (fenced to the order's `Customer=<slug>`) and writes
 			 * the new lifecycle state. Refuses a transition the state machine disallows (e.g. resuming
-			 * a torn-down order). A confirmed `teardown` also refuses (`ExportRequired`) until the
-			 * order's final export is `done` unless `skipExport` is passed, and — after the fenced
-			 * deprovision succeeded and before the state flips — drops every provisioning job's
-			 * preview database + role and storage prefix + role (wave 14; gated on
-			 * `ORG_LIFECYCLE_ENABLED` like the deprovision itself), then writes the deletion
-			 * certificate into the export.
+			 * a torn-down order). A confirmed `teardown` is refused outright while
+			 * `ORG_LIFECYCLE_ENABLED` is off (`LifecycleDisabled`: nothing would actually be
+			 * deleted), refused (`ExportRequired` / `ExportStale`) until the order's final export is
+			 * `done` and fresh unless `skipExport` is passed (and `ExportInFlight` even then while an
+			 * export run is pending), and — after the fenced deprovision succeeded and before the
+			 * state flips — drops every provisioning job's preview database + role and storage
+			 * prefix + role (wave 14), then writes the deletion certificate into the export.
 			 */
 			runLifecycleAction: (
 				orderId: string,
@@ -178,11 +214,21 @@ const plugin: FastifyPluginAsync = async app => {
 		const dryRun = !(options?.confirm ?? false)
 		const label = options?.label ?? order.name
 
-		// The export is the customer's copy of everything the window held; a confirmed teardown
-		// without one is only ever an explicit admin choice (`skipExport`), never a default.
-		if (action === 'teardown' && !dryRun && !options?.skipExport) {
+		if (action === 'teardown' && !dryRun) {
+			// With the flag off nothing is wired to AWS: a "teardown" would record a terminal state
+			// over live resources and certify a deletion that never happened. Refuse it here, not
+			// deep in the preview-resource step, so no export is taken and no state is written.
+			if (!secrets.orgLifecycle.enabled) throw new LifecycleDisabled(orderId)
+
+			// The export is the customer's copy of everything the window held; a confirmed teardown
+			// without one is only ever an explicit admin choice (`skipExport`), never a default —
+			// and even then not over a pending run, whose finish would drop the certificate.
 			const exported = await db.orderExports.get(orderId)
-			if (exported?.status !== 'done') throw new ExportRequired(orderId)
+			if (exported?.status === 'pending') throw new ExportInFlight(orderId)
+			if (!options?.skipExport) {
+				if (exported?.status !== 'done') throw new ExportRequired(orderId)
+				if (!isExportFresh(exported)) throw new ExportStale(orderId)
+			}
 		}
 
 		// Every service this order ever delivered. A rebuild mints a new job-unique fence per build,
@@ -267,24 +313,13 @@ const plugin: FastifyPluginAsync = async app => {
 	/**
 	 * Drops the preview database + role and the storage prefix + role of EVERY provisioning job of
 	 * the order (a rebuilt order has several; a redelivery maps onto its source). Every step is
-	 * idempotent ("already gone" is success). Gated on the same `ORG_LIFECYCLE_ENABLED` flag as
-	 * the deprovision: while it is off the whole teardown is a DB-only state change everywhere,
-	 * and this half must not be the one part that actually deletes.
+	 * idempotent ("already gone" is success). Only reached with `ORG_LIFECYCLE_ENABLED` on — a
+	 * confirmed teardown is refused upstream while it is off, so this never runs as the one part
+	 * of an otherwise dry teardown that actually deletes.
 	 */
 	const teardownPreviewResources = async (orderId: string): Promise<PreviewTeardownReport[]> => {
 		const jobs = await db.jobs.list({ orderId })
 		const provisioningJobIds = [...new Set(jobs.map(provisioningJobIdOf))]
-		if (!secrets.orgLifecycle.enabled) {
-			return provisioningJobIds.map(jobId => ({
-				jobId,
-				database: 'skipped',
-				databaseRole: 'skipped',
-				storageObjects: 'skipped',
-				storageObjectCount: 0,
-				storageRole: 'skipped',
-				reason: 'ORG_LIFECYCLE_ENABLED is off',
-			}))
-		}
 		const reports: PreviewTeardownReport[] = []
 		for (const jobId of provisioningJobIds) {
 			const database = await previewDbService.teardown(jobId)

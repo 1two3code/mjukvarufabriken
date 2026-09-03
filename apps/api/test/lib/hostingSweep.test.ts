@@ -16,6 +16,8 @@ describe('Hosting-window sweep', () => {
 		})
 		// No delivered job in the mocked jobs → the export holds nothing, which is a valid `done`
 		vi.spyOn(app.db.jobs, 'list').mockResolvedValue([])
+		// The sweep only acts with the lifecycle flag on (a teardown is refused without it)
+		app.secrets.orgLifecycle.enabled = true
 	})
 
 	const seedOrder = async (id: string, hostingUntil: Date | undefined) => {
@@ -32,7 +34,7 @@ describe('Hosting-window sweep', () => {
 
 		const result = await runHostingSweep(app)
 
-		expect(result).toEqual({ checked: 0, exported: 0, tornDown: 0, failed: 0 })
+		expect(result).toEqual({ checked: 0, exported: 0, tornDown: 0, failed: 0, skipped: 0 })
 		expect(app.org.deprovision).not.toHaveBeenCalled()
 	})
 
@@ -43,7 +45,7 @@ describe('Hosting-window sweep', () => {
 
 		const result = await runHostingSweep(app)
 
-		expect(result).toEqual({ checked: 1, exported: 1, tornDown: 1, failed: 0 })
+		expect(result).toEqual({ checked: 1, exported: 1, tornDown: 1, failed: 0, skipped: 0 })
 		expect((await app.db.orders.getOrder(order.id))?.lifecycle).toBe('torn_down')
 		expect((await app.db.orderExports.get(order.id))?.status).toBe('done')
 		// Ordering: the export claim precedes the teardown call
@@ -71,7 +73,7 @@ describe('Hosting-window sweep', () => {
 
 		const result = await runHostingSweep(app)
 
-		expect(result).toEqual({ checked: 1, exported: 0, tornDown: 0, failed: 1 })
+		expect(result).toEqual({ checked: 1, exported: 0, tornDown: 0, failed: 1, skipped: 0 })
 		expect(teardownSpy).not.toHaveBeenCalled()
 		expect((await app.db.orders.getOrder(order.id))?.lifecycle).toBe('active')
 		expect(app.email.send).toHaveBeenCalledWith(
@@ -89,7 +91,23 @@ describe('Hosting-window sweep', () => {
 		await runHostingSweep(app)
 		const second = await runHostingSweep(app)
 
-		expect(second).toEqual({ checked: 0, exported: 0, tornDown: 0, failed: 0 })
+		expect(second).toEqual({ checked: 0, exported: 0, tornDown: 0, failed: 0, skipped: 0 })
+	})
+
+	it('Skips every ended order while ORG_LIFECYCLE_ENABLED is off — no export, no mail, no state', async () => {
+		const order = await seedOrder('order-dark', new Date(Date.now() - dayMs))
+		app.secrets.orgLifecycle.enabled = false
+		const exportSpy = vi.spyOn(app.exportService, 'finalExport')
+		const teardownSpy = vi.spyOn(app.accountService, 'runLifecycleAction')
+
+		const result = await runHostingSweep(app)
+
+		expect(result).toEqual({ checked: 1, exported: 0, tornDown: 0, failed: 0, skipped: 1 })
+		expect(exportSpy).not.toHaveBeenCalled()
+		expect(teardownSpy).not.toHaveBeenCalled()
+		expect(app.email.send).not.toHaveBeenCalled()
+		expect(await app.db.orderExports.get(order.id)).toBeUndefined()
+		expect((await app.db.orders.getOrder(order.id))?.lifecycle).toBe('active')
 	})
 
 	it('Continues past an order whose teardown throws (fault-tolerant)', async () => {

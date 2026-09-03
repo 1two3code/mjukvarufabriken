@@ -69,8 +69,13 @@ as @mf/db's `require` mode).
   `accountService.runLifecycleAction('teardown')`, after the fenced deprovision and before the
   lifecycle flips, for every provisioning job of the order (a redelivery maps onto its source).
   Preceded by `previewDbService.dump(jobId)` — every `public` table as `{table, columns, rows}`
-  in the order's final export (`deliverables/<jobId>/export/database.json`). Both are gated on
-  `ORG_LIFECYCLE_ENABLED` like the deprovision itself (off → reported `skipped`, nothing dropped).
+  in the order's final export (`deliverables/<jobId>/export/database.json`), read in a session
+  hardened to the app role's own privileges (`SET ROLE`, read-only, `row_security = off`,
+  `search_path = pg_catalog`, statement timeout) so nothing the tenant defined ever runs as the
+  admin. The whole confirmed teardown is gated on `ORG_LIFECYCLE_ENABLED`: while it is off a
+  confirmed teardown is refused (`LifecycleDisabled`, 409) and the hosting/grace sweeps count
+  the due orders as `skipped` — nothing is exported, mailed, dropped or recorded `torn_down`
+  over resources that keep running.
 - **Network reachability** (delivered ECS Express tasks → RDS security group, and the build
   job's boot smoke → RDS through the egress fence) is environment wiring, not code; until the
   SG rule lands, the live acceptance check fails closed on the 5xx it would cause, which is the
