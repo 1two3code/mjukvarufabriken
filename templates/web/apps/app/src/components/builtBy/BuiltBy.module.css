@@ -1,0 +1,14 @@
+.footer {
+	composes: composable-caption-font from global;
+	padding: var(--spacing-s);
+	color: var(--secondary-text-color);
+	text-align: center;
+}
+
+.link {
+	transition: color 200ms ease;
+
+	&:hover {
+		color: var(--primary-text-color);
+	}
+}

@@ -46,6 +46,14 @@ export type LiveAcceptanceResult = {
 	probes: LiveProbe[]
 	/** Characters rendered into #root by the headless render (0 = blank) */
 	renderedChars?: number
+	/**
+	 * INFORMATION only, never a verdict: whether the rendered page carries the delivery-standard
+	 * "Built by Mjukvaruhuset" footer (templates/web `components/builtBy`, a link to
+	 * mjukvaruhuset.se). Undefined when no render happened. A missing footer is logged, not
+	 * failed — a worker may have rewritten the shell, and that is a template/prompt concern, not
+	 * a broken app.
+	 */
+	builtByFooter?: boolean
 }
 
 // MARK: Injectable ports
@@ -145,6 +153,10 @@ export const extractAssetPaths = (html: string): string[] => [
 	),
 ]
 
+/** Whether rendered markup carries the "Built by Mjukvaruhuset" footer link (see builtByFooter) */
+export const hasBuiltByFooter = (rootHtml: string) =>
+	/<a\b[^>]*\bhref="https?:\/\/(?:www\.)?mjukvaruhuset\.se(?:[/?#][^"]*)?"/i.test(rootHtml)
+
 const successish = (status: number) => (status >= 200 && status < 400) || status === 400
 
 // MARK: The check
@@ -231,6 +243,7 @@ export const createLiveAcceptanceCheck = ({
 
 		// 3. Headless render — the browser's verdict: something in #root, no fatal console errors
 		let renderedChars: number | undefined
+		let builtByFooter: boolean | undefined
 		if (landingHtml) {
 			const page = await render(`${origin}/`, signal)
 			renderedChars = page.rootHtml.trim().length
@@ -240,6 +253,8 @@ export const createLiveAcceptanceCheck = ({
 			} else if (!renderedChars) {
 				failures.push('blank page: the headless render put nothing into #root')
 			}
+			// Informational: did the delivery-standard footer survive the build? Never a failure.
+			if (!page.reason) builtByFooter = hasBuiltByFooter(page.rootHtml)
 		}
 
 		// 4. The API surface, fail-closed: a probe set we cannot discover is a failure, not a pass —
@@ -287,8 +302,8 @@ export const createLiveAcceptanceCheck = ({
 		}
 
 		return failures.length
-			? { ok: false, reason: failures.join('\n'), probes, renderedChars }
-			: { ok: true, probes, renderedChars }
+			? { ok: false, reason: failures.join('\n'), probes, renderedChars, builtByFooter }
+			: { ok: true, probes, renderedChars, builtByFooter }
 	},
 })
 

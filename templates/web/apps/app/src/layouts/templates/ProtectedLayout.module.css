@@ -13,9 +13,15 @@
 }
 
 /* MARK: Loading area */
+
+/* Spans both #root grid rows (`auto 1fr`, global.css) so it fills the viewport MINUS the
+   document-flow footer mounted after the router (components/builtBy). A fixed 100dvh here pushed
+   that footer below the fold and scrolled the page while the session loads or fails to load. */
 .loadingArea {
 	display: flex;
+	grid-row: 1 / -1;
 	align-items: center;
 	justify-content: center;
-	height: 100dvh;
+
+	height: 100%;
 }

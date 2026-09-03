@@ -10,7 +10,7 @@ A React 19 + Fastify 5 monorepo template with shared Zod models, RBAC, and AWS C
 - `.github/workflows`: `ci.yml` (lint, test, build, synth on PRs and main) and `deploy.yml` (OIDC deploy to dev, then live with environment approval).
 - **apps**
 	- [`@template/api`](apps/api/README.md): Fastify BFF.
-	- `@template/app`: React SPA (Vite).
+	- `@template/app`: React SPA (Vite). Ships the "Built by Mjukvaruhuset" caption footer (`src/components/builtBy`); set `VITE_BUILT_BY_URL=` (empty) in `apps/app/.env` to hide it.
 - **packages** — shared between the app and the api.
 	- [`@template/models`](packages/models/README.md): entity models as Zod schemas with inferred types.
 	- [`@template/utils`](packages/utils/README.md): pure utility functions, subpath exports.

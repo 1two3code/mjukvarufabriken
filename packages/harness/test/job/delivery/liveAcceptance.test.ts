@@ -11,6 +11,7 @@ import {
 	createFakeLiveCheck,
 	createLiveAcceptanceCheck,
 	extractAssetPaths,
+	hasBuiltByFooter,
 	renderPageInChild,
 } from '#job/delivery/liveAcceptance.ts'
 
@@ -267,6 +268,88 @@ describe('createLiveAcceptanceCheck', () => {
 		})
 		const result = await check.check({ url: LIVE, repoDir: root })
 		expect(result.ok).toBe(true)
+	})
+})
+
+// MARK: the "Built by Mjukvaruhuset" footer — information on the result, never a verdict (F5)
+
+describe('hasBuiltByFooter', () => {
+	it('recognises the template footer link in rendered markup, with or without a path', () => {
+		expect(
+			hasBuiltByFooter(
+				'<footer><a class="x" href="https://mjukvaruhuset.se" target="_blank">Byggd av Mjukvaruhuset</a></footer>'
+			)
+		).toBe(true)
+		expect(hasBuiltByFooter('<a href="https://www.mjukvaruhuset.se/?ref=app">Built by</a>')).toBe(true)
+		expect(hasBuiltByFooter('<a href="http://mjukvaruhuset.se/demo">Built by</a>')).toBe(true)
+	})
+
+	it('does not count a bare mention, a foreign host or a look-alike domain', () => {
+		expect(hasBuiltByFooter('<p>Built by Mjukvaruhuset</p>')).toBe(false)
+		expect(hasBuiltByFooter('<a href="https://example.com">mjukvaruhuset.se</a>')).toBe(false)
+		expect(hasBuiltByFooter('<a href="https://mjukvaruhuset.se.evil.com/">x</a>')).toBe(false)
+		expect(hasBuiltByFooter('')).toBe(false)
+	})
+})
+
+describe('createLiveAcceptanceCheck — builtByFooter', () => {
+	let root: string
+	beforeEach(async () => {
+		root = await mkdtemp(join(tmpdir(), 'mf-live-footer-'))
+		await seedRepo(root, { publicUrls: ['/bff/guestbook'] })
+	})
+	afterEach(() => rm(root, { recursive: true, force: true }))
+
+	const routes = { 'GET /': 200, 'GET /assets/index-abc.js': 200, 'GET /bff/guestbook': 200 }
+
+	it('records true when the rendered page carries the footer link', async () => {
+		const result = await createLiveAcceptanceCheck({
+			fetchFn: fakeFetch(routes),
+			render: async () => ({
+				rootHtml:
+					'<main>Hello</main><footer><a href="https://mjukvaruhuset.se" target="_blank" rel="noopener noreferrer">Byggd av Mjukvaruhuset — beställ din egen</a></footer>',
+				errors: [],
+			}),
+		}).check({ url: LIVE, repoDir: root })
+		expect(result.ok).toBe(true)
+		expect(result.builtByFooter).toBe(true)
+	})
+
+	it('records false when the footer is gone — and still passes: information, not a verdict', async () => {
+		const result = await createLiveAcceptanceCheck({
+			fetchFn: fakeFetch(routes),
+			render: renderOk,
+		}).check({ url: LIVE, repoDir: root })
+		expect(result.ok).toBe(true)
+		expect(result.reason).toBeUndefined()
+		expect(result.builtByFooter).toBe(false)
+	})
+
+	it('leaves the flag undefined when the render itself did not happen or failed', async () => {
+		const noPage = await createLiveAcceptanceCheck({
+			fetchFn: fakeFetch({ 'GET /bff/guestbook': 200 }),
+			render: renderOk,
+		}).check({ url: LIVE, repoDir: root })
+		expect(noPage.builtByFooter).toBeUndefined()
+
+		const crashed = await createLiveAcceptanceCheck({
+			fetchFn: fakeFetch(routes),
+			render: async () => ({ rootHtml: '', errors: [], reason: 'render process timed out' }),
+		}).check({ url: LIVE, repoDir: root })
+		expect(crashed.ok).toBe(false)
+		expect(crashed.builtByFooter).toBeUndefined()
+	})
+
+	it('is also reported on a failing check (a broken app can still carry the footer)', async () => {
+		const result = await createLiveAcceptanceCheck({
+			fetchFn: fakeFetch({ ...routes, 'GET /bff/guestbook': 500 }),
+			render: async () => ({
+				rootHtml: '<footer><a href="https://mjukvaruhuset.se">Built by Mjukvaruhuset</a></footer>',
+				errors: [],
+			}),
+		}).check({ url: LIVE, repoDir: root })
+		expect(result.ok).toBe(false)
+		expect(result.builtByFooter).toBe(true)
 	})
 })
 

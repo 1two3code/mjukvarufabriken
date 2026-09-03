@@ -2,6 +2,7 @@
   "api.error.failedToCreateItem": "Unable to create the item. Please try again later.",
   "api.error.failedToUpdateItem": "Unable to update the item. Please try again later.",
   "api.error.refreshNotConfigured": "Your session could not be refreshed. Please sign in again.",
+  "builtBy.caption": "Built by Mjukvaruhuset — order your own",
   "common.action.cancel": "Cancel",
   "common.action.close": "Close",
   "common.action.save": "Save",

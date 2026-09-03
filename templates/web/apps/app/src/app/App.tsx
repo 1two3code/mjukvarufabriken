@@ -6,6 +6,8 @@ import { useEffectOnce } from '#/hooks/useEffectOnce.ts'
 import { loadTheme } from '#/features/theme/themeSlice.ts'
 import { ToastList } from '#/features/toasts/ToastList.tsx'
 
+import { BuiltBy } from '#/components/builtBy/BuiltBy.tsx'
+
 export function App() {
 	const dispatch = useAppDispatch()
 
@@ -17,6 +19,8 @@ export function App() {
 	return (
 		<>
 			<RouterProvider router={router} />
+			{/* Delivery standard — outside the router so layout/route rewrites keep it (see BuiltBy) */}
+			<BuiltBy />
 			<ToastList />
 		</>
 	)
