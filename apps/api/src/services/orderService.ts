@@ -36,7 +36,8 @@ declare module 'fastify' {
 			create: (name: string, session: BackendSession, kind?: OrderKind) => Promise<Order>
 			/**
 			 * The org's orders, newest first; admins see every org. Unclaimed anonymous quotes
-			 * (`anon:*`, wave 14) are never listed — for anyone.
+			 * (`anon:*`, wave 14) are never listed — for anyone — and the repository excludes them
+			 * inside its 200 cap so they cannot crowd real orders out.
 			 */
 			list: (session: BackendSession) => Promise<Order[]>
 			/**
@@ -352,10 +353,9 @@ const plugin: FastifyPluginAsync = async app => {
 				kind,
 				createdBy: session.userId,
 			}),
-		list: async session => {
-			const orders = await db.orders.listOrders(isAdmin(session) ? {} : { orgId: session.orgId })
-			return orders.filter(order => !isAnonymousOrgId(order.orgId))
-		},
+		// The repository itself never lists `anon:*` rows (inside its 200 cap), so the admin's
+		// `GET /bff/admin/orders` — which reads the repository directly — is shut the same way
+		list: async session => db.orders.listOrders(isAdmin(session) ? {} : { orgId: session.orgId }),
 		claim: async (orderId, token, session) => {
 			await countClaim(session)
 			const claimed = await db.orders.claimQuote(orderId, hashQuoteToken(token), {

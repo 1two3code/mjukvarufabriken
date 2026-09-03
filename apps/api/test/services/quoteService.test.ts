@@ -196,6 +196,19 @@ describe('Quote Service (anonymous spec chat, wave 14 F1)', () => {
 			})
 		})
 
+		it('Resumes after a turn: the token still opens the draft and a second turn follows', async () => {
+			const { quote, token } = await app.quoteService.create(ip)
+			await app.quoteService.sendMessage(quote.orderId, token, 'I want a booking app', ip)
+
+			// The site's refresh path: read the stored handle back, then keep chatting
+			const resumed = await app.quoteService.get(quote.orderId, token, ip)
+			expect(resumed.messages.map(m => m.role)).toEqual(['user', 'assistant'])
+
+			const second = await app.quoteService.sendMessage(quote.orderId, token, 'For a gym', ip)
+			expect(second.messages.map(m => m.role)).toEqual(['user', 'assistant', 'user', 'assistant'])
+			expect(app.anthropic.messages.create).toHaveBeenCalledTimes(2)
+		})
+
 		it('Counts every anonymous turn against the ip window on top of order/org/global', async () => {
 			const { quote, token } = await app.quoteService.create(ip)
 			vi.spyOn(app.db.rateLimits, 'record')
