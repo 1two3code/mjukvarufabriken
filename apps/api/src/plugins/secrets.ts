@@ -315,7 +315,7 @@ const plugin: FastifyPluginAsync = async app => {
 			databaseSecretArn: process.env.DATABASE_SECRET_ARN,
 			jobApiUrl: process.env.JOB_API_URL || authIssuer,
 			jobNoProxy: process.env.JOB_NO_PROXY || undefined,
-			artifactsBucket: process.env.ARTIFACTS_BUCKET,
+			artifactsBucket: process.env.ARTIFACTS_BUCKET?.trim() || undefined,
 			previewBucket: process.env.PREVIEW_BUCKET?.trim() || undefined,
 			jobsClusterArn: process.env.JOBS_CLUSTER_ARN,
 			jobTaskDefinitionArn: process.env.JOB_TASK_DEFINITION_ARN,

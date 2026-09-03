@@ -39,7 +39,11 @@ declare module 'fastify' {
 			putArtifact: (key: string, body: string, contentType: string) => Promise<{ size: number }>
 			/** Every object under `prefix` in `bucket` (paginated to the end) */
 			listObjects: (bucket: string, prefix: string) => Promise<ListedObject[]>
-			/** Deletes every object under `prefix` in `bucket`; resolves to how many were deleted */
+			/**
+			 * Deletes every object under `prefix` in `bucket`; resolves to how many were deleted.
+			 * Rejects when S3 reports a per-key error (`DeleteObjects` answers 200 with an `Errors`
+			 * list for keys it could not delete), so a partial deletion is never reported as complete.
+			 */
 			deletePrefix: (bucket: string, prefix: string) => Promise<number>
 		}
 	}
@@ -95,7 +99,7 @@ const plugin: FastifyPluginAsync = async app => {
 		return objects
 	}
 
-	const requireArtifacts = () => artifactsBucket ?? unconfigured()
+	const requireArtifacts = () => artifactsBucket || unconfigured()
 
 	app.decorate('s3', {
 		configured: Boolean(artifactsBucket),
@@ -132,7 +136,7 @@ const plugin: FastifyPluginAsync = async app => {
 		deletePrefix: async (bucket, prefix) => {
 			const objects = await listObjects(bucket, prefix)
 			for (let start = 0; start < objects.length; start += deleteBatchSize) {
-				await client.send(
+				const result = await client.send(
 					new DeleteObjectsCommand({
 						Bucket: bucket,
 						Delete: {
@@ -143,6 +147,14 @@ const plugin: FastifyPluginAsync = async app => {
 						},
 					})
 				)
+				// Quiet mode suppresses the per-key successes, never the errors: a key the caller may
+				// not delete (retention lock, denied by policy) comes back here with a 200 around it.
+				if (result.Errors?.length) {
+					const failed = result.Errors.map(error => `${error.Key} (${error.Code})`)
+					throw new Error(
+						`DeleteObjects left ${failed.length} object(s) under ${bucket}/${prefix}: ${failed.slice(0, 5).join(', ')}`
+					)
+				}
 			}
 			return objects.length
 		},
