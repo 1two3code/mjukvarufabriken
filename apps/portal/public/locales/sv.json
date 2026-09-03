@@ -212,6 +212,7 @@
   "order.next.building": "Bygget pågår — följ loggen live på byggsidan.",
   "order.next.cancelled": "Beställningen är avbruten.",
   "order.next.demoApproval": "Betalning mottagen — tack! Det här är en demo, så någon av oss tittar på specen innan bygget startar. Vi godkänner en handfull i veckan; bygget dyker upp här så snart din är godkänd.",
+  "order.next.demoDeposit": "Specen är godkänd. Betala 500 kr i förskott — det här är en demo, så någon av oss godkänner bygget innan det startar (en handfull i veckan).",
   "order.next.deposit": "Specen är godkänd. Betala handpenningen så startar bygget automatiskt.",
   "order.next.done": "Klart — beställningen är betald och levererad. Tack!",
   "order.next.freeze": "Specen är komplett. Frys den för att fastställa priset och gå vidare till handpenningen.",

@@ -93,6 +93,9 @@ describe('Next step on the order page', () => {
 		expect(nextStep(detail({ status: 'drafting' }, true))).toBe('freeze')
 		expect(nextStep(detail({ status: 'ready' }))).toBe('freeze')
 		expect(nextStep(detail({ status: 'frozen' }))).toBe('deposit')
+		// A frozen demo pays upfront and waits for approval — no "starts automatically" promise
+		expect(nextStep(detail({ status: 'frozen', kind: 'demo' }))).toBe('demoDeposit')
+		expect(nextStep(detail({ status: 'frozen', kind: 'build' }))).toBe('deposit')
 		expect(nextStep(detail({ status: 'paid' }))).toBe('done')
 	})
 })

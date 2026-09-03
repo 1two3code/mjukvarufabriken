@@ -5,6 +5,7 @@ export type NextStep =
 	| 'spec'
 	| 'freeze'
 	| 'deposit'
+	| 'demoDeposit'
 	| 'starting'
 	| 'demoApproval'
 	| 'building'
@@ -14,9 +15,10 @@ export type NextStep =
 	| 'cancelled'
 
 /**
- * What the customer should do next, per status. A paid voucher demo (wave 14) waits for an admin
- * to approve its build — the stepper stays on the build step, only the copy differs — until the
- * approval is stamped, after which it is starting like any paid order.
+ * What the customer should do next, per status. A voucher demo (wave 14) pays its 500 kr upfront
+ * and then waits for an admin to approve its build — the stepper stays on the deposit/build steps,
+ * only the copy differs — until the approval is stamped, after which it is starting like any paid
+ * order.
  */
 export const nextStep = (detail: OrderDetail): NextStep => {
 	const { order, spec } = detail
@@ -26,7 +28,9 @@ export const nextStep = (detail: OrderDetail): NextStep => {
 		case 'ready':
 			return 'freeze'
 		case 'frozen':
-			return 'deposit'
+			// A demo's 500 kr is paid upfront and its build waits for an approval — the ordinary
+			// deposit copy ("the build starts automatically") would promise the opposite
+			return order.kind === 'demo' ? 'demoDeposit' : 'deposit'
 		case 'deposit_paid':
 			return order.kind === 'demo' && !order.buildApprovedAt ? 'demoApproval' : 'starting'
 		case 'building':

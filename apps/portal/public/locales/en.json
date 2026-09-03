@@ -212,6 +212,7 @@
   "order.next.building": "The build is running — follow the live log on the build page.",
   "order.next.cancelled": "This order is cancelled.",
   "order.next.demoApproval": "Payment received — thank you! This is a demo, so one of us looks at the spec before the build starts. We approve a handful each week; the build shows up here as soon as yours is approved.",
+  "order.next.demoDeposit": "The spec is signed off. Pay the 500 SEK upfront — this is a demo, so one of us approves the build before it starts (a handful each week).",
   "order.next.deposit": "The spec is signed off. Pay the deposit and the build starts automatically.",
   "order.next.done": "All done — the order is paid and delivered. Thank you!",
   "order.next.freeze": "The spec is complete. Freeze it to fix the price and move on to the deposit.",
