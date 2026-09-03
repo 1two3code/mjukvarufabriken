@@ -245,16 +245,20 @@ const plugin: FastifyPluginAsync = async app => {
 		// already counted against the week, a second stamp would count the same voucher twice
 		if (!order.buildApprovedAt) {
 			const now = new Date()
-			const approved = await approvedThisWeek(now)
-			if (!force && approved >= secrets.demoWeeklyCap) {
-				throw new DemoWeeklyCapReached(orderId, approved, secrets.demoWeeklyCap)
+			const cap = secrets.demoWeeklyCap
+			// Count and stamp in one serialised repository step: two admins (or two tabs) approving
+			// different demos at once cannot both read "one short of the cap" and both get through
+			const { order: stamped, approved } = await db.orders.stampDemoApproval(orderId, now, {
+				since: new Date(now.getTime() - demoCapWindowMs),
+				cap: force ? undefined : cap,
+			})
+			if (stamped) {
+				app.log.info({ orderId, approved: approved + 1, cap, force }, 'Demo build approved')
+			} else if (!(await get(orderId, session)).buildApprovedAt) {
+				throw new DemoWeeklyCapReached(orderId, approved, cap)
 			}
-			// Compare-and-set: a concurrent approval that stamped first simply wins the instant
-			await db.orders.setBuildApprovedAt(orderId, now)
-			app.log.info(
-				{ orderId, approved: approved + 1, cap: secrets.demoWeeklyCap, force },
-				'Demo build approved'
-			)
+			// Otherwise a concurrent approval stamped first and wins the instant; this call still
+			// goes on to start the build (a job already running is JobAlreadyActive, not a loss)
 		}
 		await startBuild(orderId, session)
 		return get(orderId, session)
@@ -266,20 +270,13 @@ const plugin: FastifyPluginAsync = async app => {
 		startBuild,
 		approveDemoBuild,
 		demoQueue: async () => {
+			// A repository query, not a filter over the newest-200 `listOrders` window: the oldest
+			// waiting demo is exactly the row the queue exists to surface
 			const [orders, approved] = await Promise.all([
-				db.orders.listOrders(),
+				db.orders.listDemosAwaitingApproval(),
 				approvedThisWeek(new Date()),
 			])
-			return {
-				orders: orders
-					.filter(
-						order =>
-							order.kind === 'demo' && order.status === 'deposit_paid' && !order.buildApprovedAt
-					)
-					.toSorted((a, b) => a.createdAt.localeCompare(b.createdAt)),
-				approvedThisWeek: approved,
-				cap: secrets.demoWeeklyCap,
-			}
+			return { orders, approvedThisWeek: approved, cap: secrets.demoWeeklyCap }
 		},
 		approve: async (orderId, session) => {
 			const order = await get(orderId, session)

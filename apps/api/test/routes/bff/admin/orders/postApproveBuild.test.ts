@@ -1,6 +1,11 @@
 import { EntityNotFound } from '#/lib/entityError.ts'
 import postApproveBuild from '#/routes/bff/admin/orders/postApproveBuild.ts'
-import { DemoNotApprovable, DemoWeeklyCapReached } from '#/services/orderService.ts'
+import { JobAlreadyActive } from '#/services/jobService.ts'
+import {
+	DemoNotApprovable,
+	DemoWeeklyCapReached,
+	InvalidOrderTransition,
+} from '#/services/orderService.ts'
 
 import type { FastifyInstance } from 'fastify'
 
@@ -75,6 +80,22 @@ describe('POST /bff/admin/orders/:orderId/approve-build route', () => {
 
 		expect(response.statusCode).toBe(409)
 		expect(response.json().error.code).toBe('demoNotApprovable')
+	})
+
+	it('Responds 409 when a concurrent approval or restart already started the build', async () => {
+		vi.spyOn(app.orderService, 'approveDemoBuild').mockRejectedValueOnce(
+			new JobAlreadyActive('order-1')
+		)
+		const active = await app.inject({ method: 'POST', url, payload: {} })
+		expect(active.statusCode).toBe(409)
+		expect(active.json().error.code).toBe('jobAlreadyActive')
+
+		vi.spyOn(app.orderService, 'approveDemoBuild').mockRejectedValueOnce(
+			new InvalidOrderTransition('order-1', 'building', 'building')
+		)
+		const moved = await app.inject({ method: 'POST', url, payload: {} })
+		expect(moved.statusCode).toBe(409)
+		expect(moved.json().error.code).toBe('orderTransitionInvalid')
 	})
 
 	it('Handles an unknown order with 404 and other failures with 500', async () => {

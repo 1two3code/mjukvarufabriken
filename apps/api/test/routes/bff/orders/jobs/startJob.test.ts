@@ -116,6 +116,27 @@ describe('POST /bff/orders/:orderId/jobs route', () => {
 		expect(app.orderService.transition).toHaveBeenCalledWith('order-1', 'building')
 	})
 
+	it('Refuses an admin too: an unapproved demo starts only via approve-build', async () => {
+		// Arrange: an admin session on a paid demo nobody has approved
+		app = await createTestApp()
+		app.addHook('onRequest', async request => {
+			request.session = { ...request.session, role: 'admin' }
+		})
+		app.register(startJob)
+		vi.spyOn(app.orderService, 'get').mockResolvedValue(
+			createMockOrder({ id: 'order-1', kind: 'demo', status: 'deposit_paid' })
+		)
+
+		// Act
+		const response = await app.inject({ method: 'POST', url })
+
+		// Assert: no job, no transition — the weekly cap and the queue stay consistent
+		expect(response.statusCode).toBe(409)
+		expect(response.json().error.code).toBe('demoAwaitingApproval')
+		expect(app.jobService.start).not.toHaveBeenCalled()
+		expect(app.orderService.transition).not.toHaveBeenCalled()
+	})
+
 	it('Responds 404 for an unknown order', async () => {
 		vi.spyOn(app.orderService, 'get').mockRejectedValue(new EntityNotFound('order', 'order-1'))
 		expect((await app.inject({ method: 'POST', url })).statusCode).toBe(404)

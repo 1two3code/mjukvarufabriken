@@ -3,7 +3,12 @@ import { OrderMutationSchemas, OrderResponseSchema } from '@mf/models'
 import { tryCatch } from '@mf/utils/function'
 
 import { EntityNotFound } from '#/lib/entityError.ts'
-import { DemoNotApprovable, DemoWeeklyCapReached } from '#/services/orderService.ts'
+import { JobAlreadyActive } from '#/services/jobService.ts'
+import {
+	DemoNotApprovable,
+	DemoWeeklyCapReached,
+	InvalidOrderTransition,
+} from '#/services/orderService.ts'
 
 import type { FastifyContextConfig } from 'fastify'
 import type { FastifyPluginAsyncZod } from 'fastify-type-provider-zod'
@@ -20,7 +25,9 @@ const config = { permissions: ['job:admin'] } satisfies FastifyContextConfig
  * Admin approval of a paid voucher demo's build (wave 14): stamps `buildApprovedAt` and starts
  * the build exactly like the deposit webhook does for a real build. Refused with
  * `demoWeeklyCapReached` once the rolling week holds `DEMO_WEEKLY_CAP` approvals unless the body
- * says `force: true`; `demoNotApprovable` for anything but a `demo` in `deposit_paid`.
+ * says `force: true`; `demoNotApprovable` for anything but a `demo` in `deposit_paid`;
+ * `jobAlreadyActive` / `orderTransitionInvalid` (409) when a concurrent approval or restart got
+ * there first.
  */
 const route: FastifyPluginAsyncZod = async function (app) {
 	const { orderService } = app
@@ -42,6 +49,12 @@ const route: FastifyPluginAsyncZod = async function (app) {
 				})
 			}
 			if (error instanceof DemoNotApprovable) return reply.error(409, error, 'demoNotApprovable')
+			// Benign races, not server faults: another admin's approval already started the build
+			// (or the customer restarted an approved one), or the order moved on meanwhile
+			if (error instanceof JobAlreadyActive) return reply.error(409, error, 'jobAlreadyActive')
+			if (error instanceof InvalidOrderTransition) {
+				return reply.error(409, error, 'orderTransitionInvalid')
+			}
 			if (error) return reply.error(500, error)
 			return reply.send(order)
 		}

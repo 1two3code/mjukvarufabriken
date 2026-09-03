@@ -511,6 +511,39 @@ describe('Order Service', () => {
 			})
 		})
 
+		it('Holds the cap under concurrent approvals: count and stamp are one repository step', async () => {
+			app.secrets.demoWeeklyCap = 1
+			const first = await paidDemo()
+			const second = await paidDemo()
+
+			// Both approvals read the same "0 of 1" week; only one may stamp and start
+			const results = await Promise.allSettled([
+				app.orderService.approveDemoBuild(first.id, admin),
+				app.orderService.approveDemoBuild(second.id, admin),
+			])
+
+			expect(results.map(result => result.status)).toEqual(['fulfilled', 'rejected'])
+			expect((results[1] as PromiseRejectedResult).reason).toBeInstanceOf(DemoWeeklyCapReached)
+			expect(app.jobService.start).toHaveBeenCalledTimes(1)
+			await expect(app.db.orders.countDemoApprovalsSince(new Date(0))).resolves.toBe(1)
+		})
+
+		it('Starts the build for the loser of a concurrent approval of the SAME demo', async () => {
+			const { id } = await paidDemo()
+			// The other admin's approval landed between this call's read and its stamp
+			vi.spyOn(app.db.orders, 'stampDemoApproval').mockImplementationOnce(
+				async (orderId, approvedAt, window) => {
+					await app.db.orders.setBuildApprovedAt(orderId, new Date(approvedAt.getTime() - 1))
+					return { order: undefined, approved: window.cap ?? 0 }
+				}
+			)
+
+			await expect(app.orderService.approveDemoBuild(id, admin)).resolves.toMatchObject({
+				status: 'building',
+			})
+			expect(app.jobService.start).toHaveBeenCalledTimes(1)
+		})
+
 		it('Restarts an approved demo whose build failed to start without a second approval', async () => {
 			const { id } = await paidDemo()
 			vi.mocked(app.jobService.start).mockRejectedValueOnce(new Error('ECS down'))
@@ -546,6 +579,17 @@ describe('Order Service', () => {
 
 				expect(queue.orders.map(order => order.id)).toEqual([older.id, newer.id])
 				expect(queue).toMatchObject({ approvedThisWeek: 1, cap: 5 })
+				// The queue is its own query: the oldest waiting demo stays listed once the order
+				// table has outgrown the newest-200 window `list` reads
+				for (let i = 0; i < 205; i++) {
+					vi.setSystemTime(new Date(Date.UTC(2026, 8, 2, 13, 0, i)))
+					await app.orderService.create(`filler ${i}`, user)
+				}
+				expect((await app.orderService.list(admin)).map(order => order.id)).not.toContain(older.id)
+				expect((await app.orderService.demoQueue()).orders.map(order => order.id)).toEqual([
+					older.id,
+					newer.id,
+				])
 			} finally {
 				vi.useRealTimers()
 			}
