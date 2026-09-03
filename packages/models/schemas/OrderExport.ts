@@ -52,20 +52,7 @@ export const OrderExportSchema = z.object({
 })
 export type OrderExport = z.infer<typeof OrderExportSchema>
 
-// MARK: Custom responses
-/** An export file with a presigned download link */
-export const OrderExportDownloadSchema = OrderExportFileSchema.extend({
-	url: z.string(),
-	expiresAt: z.iso.datetime(),
-})
-export type OrderExportDownload = z.infer<typeof OrderExportDownloadSchema>
-
-/** `GET /bff/orders/:orderId/export` — the export with 15-minute download links */
-export const OrderExportResponseSchema = OrderExportSchema.extend({
-	files: z.array(OrderExportDownloadSchema),
-})
-export type OrderExportResponse = z.infer<typeof OrderExportResponseSchema>
-
+// MARK: Teardown
 /**
  * Outcome of tearing down one job's preview resources (database + role, storage prefix + IAM
  * role) at order teardown. Every step is idempotent: `already-gone` is as good as `deleted`.
