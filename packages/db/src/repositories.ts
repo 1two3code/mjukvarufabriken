@@ -470,8 +470,9 @@ export type ShowcaseUpsert = Pick<
 
 /**
  * One row per order marked for the public demo gallery (migration 0023). The row follows its
- * order: `listPublished` JOINs orders and drops torn-down ones, so a teardown hides the demo
- * without a hook of its own.
+ * order: `listPublished` JOINs orders and keeps only `active` ones, so a suspend (which deletes
+ * the compute too) or a teardown hides the demo without a hook of its own, and a resume brings
+ * it back.
  */
 export type ShowcasesRepository = {
 	/** Inserts or replaces the order's row (`createdAt` is kept on update) */

@@ -240,7 +240,7 @@
   "page.adminResident.installationsTitle": "Installations",
   "page.adminResident.intro": "Every resident installation reporting to the factory, its metered token usage per month and what has been billed.",
   "page.adminResident.title": "Resident usage",
-  "page.adminShowcase.intro": "Delivered orders that can be shown as demo apps on the public site. Publish a row to list it in the gallery; a torn-down order disappears from the gallery by itself.",
+  "page.adminShowcase.intro": "Delivered orders that can be shown as demo apps on the public site. Publish a row to list it in the gallery; a suspended or torn-down order disappears from the gallery by itself and a resumed one comes back.",
   "page.adminShowcase.title": "Demo gallery",
   "page.authCallback.action.backToLogin": "Request a new sign-in link",
   "page.authCallback.error.failed": "Something went wrong while signing you in. Please try again.",

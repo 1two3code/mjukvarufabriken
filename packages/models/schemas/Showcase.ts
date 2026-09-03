@@ -13,7 +13,10 @@ import { orderStatus } from './Order.ts'
  */
 export const ShowcaseSchema = z.object({
 	orderId: z.string(),
-	/** Visible in the public gallery. Even when true, a torn-down order's row is not listed. */
+	/**
+	 * Visible in the public gallery. Even when true, the row is listed only while the order's
+	 * lifecycle is `active` — a suspended or torn-down app has no compute to link to.
+	 */
 	published: z.boolean(),
 	title: z.string(),
 	blurbSv: z.string(),

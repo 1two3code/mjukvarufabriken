@@ -133,5 +133,18 @@ describe('showcases repository', () => {
 				sort: 1,
 			})
 		})
+
+		it('Lists a suspended order again once it is resumed, with no showcase write', async () => {
+			const repos = await seed()
+			await repos.showcases.upsert(upsert({ orderId: 'o1', sort: 0 }))
+			await repos.orders.setLifecycle('o1', ['active'], 'suspended')
+			await expect(repos.showcases.listPublished()).resolves.toEqual([])
+
+			await repos.orders.setLifecycle('o1', ['suspended'], 'active')
+
+			const items = await repos.showcases.listPublished()
+
+			expect(items.map(item => item.orderId)).toEqual(['o1'])
+		})
 	})
 })

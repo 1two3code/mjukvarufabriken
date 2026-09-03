@@ -240,7 +240,7 @@
   "page.adminResident.installationsTitle": "Installationer",
   "page.adminResident.intro": "Alla residentinstallationer som rapporterar till fabriken, deras uppmätta tokenanvändning per månad och vad som har fakturerats.",
   "page.adminResident.title": "Residentanvändning",
-  "page.adminShowcase.intro": "Levererade beställningar som kan visas som demoappar på den publika sajten. Publicera en rad för att lista den i galleriet; en nedmonterad beställning försvinner ur galleriet av sig själv.",
+  "page.adminShowcase.intro": "Levererade beställningar som kan visas som demoappar på den publika sajten. Publicera en rad för att lista den i galleriet; en pausad eller nedmonterad beställning försvinner ur galleriet av sig själv och kommer tillbaka när den återupptas.",
   "page.adminShowcase.title": "Demogalleri",
   "page.authCallback.action.backToLogin": "Begär en ny inloggningslänk",
   "page.authCallback.error.failed": "Något gick fel vid inloggningen. Försök igen.",
