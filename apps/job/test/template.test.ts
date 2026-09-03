@@ -46,6 +46,14 @@ describe('golden template — "Built by Mjukvaruhuset" footer (F5)', () => {
 		await expect(read('src', 'env.d.ts')).resolves.toContain('readonly VITE_BUILT_BY_URL: string')
 	})
 
+	it('Keeps the protected layout loading state inside the viewport, above the footer', async () => {
+		// #root is a 100dvh `auto 1fr` grid: a 100dvh loading area (the session fetch, and its
+		// resting error state) pushed the footer below the fold and scrolled the page
+		const css = await read('src', 'layouts', 'templates', 'ProtectedLayout.module.css')
+		expect(css).not.toMatch(/height: 100dvh/)
+		expect(css).toMatch(/\.loadingArea\s*\{[^}]*grid-row: 1 \/ -1;/)
+	})
+
 	it('Carries the caption in both locales', async () => {
 		const en = JSON.parse(await read('public', 'locales', 'en.json')) as Record<string, string>
 		const sv = JSON.parse(await read('public', 'locales', 'sv.json')) as Record<string, string>
