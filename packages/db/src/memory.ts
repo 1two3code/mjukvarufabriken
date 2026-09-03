@@ -778,12 +778,16 @@ export const createMemoryRepositories = (): MemoryRepositories => {
 
 		orderExports: {
 			get: async orderId => clone(orderExports.get(orderId)),
-			claim: async (claim, staleBefore) => {
+			claim: async (claim, staleBefore, doneBefore) => {
 				const existing = orderExports.get(claim.orderId)
 				const reclaimable =
 					existing !== undefined &&
 					(existing.status === 'failed' ||
-						(existing.status === 'pending' && new Date(existing.createdAt) < staleBefore))
+						(existing.status === 'pending' && new Date(existing.createdAt) < staleBefore) ||
+						(existing.status === 'done' &&
+							doneBefore !== undefined &&
+							existing.finishedAt !== undefined &&
+							new Date(existing.finishedAt) < doneBefore))
 				if (existing && !reclaimable) return { export: clone(existing), claimed: false }
 				const created: OrderExport = {
 					orderId: claim.orderId,

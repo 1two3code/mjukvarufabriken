@@ -470,13 +470,16 @@ export type ExportFinish = {
 export type OrderExportsRepository = {
 	get: (orderId: string) => Promise<OrderExport | undefined>
 	/**
-	 * Insert-or-reclaim compare-and-set: inserts a `pending` row, or re-claims a `failed` one or a
-	 * `pending` one created before `staleBefore` (a crashed run). `claimed: false` with the
-	 * existing row when it is `done` (final) or freshly `pending` (another run in flight).
+	 * Insert-or-reclaim compare-and-set: inserts a `pending` row, or re-claims a `failed` one, a
+	 * `pending` one created before `staleBefore` (a crashed run) or — only when `doneBefore` is
+	 * given — a `done` one finished before it (a stale export, retaken so a teardown never
+	 * certifies data older than the freshness window). `claimed: false` with the existing row
+	 * when it is `done` and fresh (final) or freshly `pending` (another run in flight).
 	 */
 	claim: (
 		claim: ExportClaim,
-		staleBefore: Date
+		staleBefore: Date,
+		doneBefore?: Date
 	) => Promise<{ export: OrderExport; claimed: boolean }>
 	/** Finishes the pending claim (`done` / `failed`); `undefined` when the row is not pending */
 	finish: (orderId: string, finish: ExportFinish) => Promise<OrderExport | undefined>

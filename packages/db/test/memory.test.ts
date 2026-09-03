@@ -59,6 +59,18 @@ describe('memory repositories', () => {
 			expect(stale.claimed).toBe(true)
 		})
 
+		it('Re-claims a done row only when asked to and only when it finished before the instant', async () => {
+			await repos.orderExports.claim(claim, fresh())
+			await repos.orderExports.finish('o1', { status: 'done', files: [] })
+
+			// Final by default, and still final when it finished after the instant
+			expect((await repos.orderExports.claim(claim, fresh(), fresh())).claimed).toBe(false)
+			// Stale (finished before the instant): retaken, reset to pending
+			const retaken = await repos.orderExports.claim(claim, fresh(), new Date(Date.now() + 1000))
+			expect(retaken.claimed).toBe(true)
+			expect(retaken.export).toMatchObject({ status: 'pending', files: [] })
+		})
+
 		it('Finishes only a pending row, appends files to any row', async () => {
 			expect(await repos.orderExports.finish('o1', { status: 'done', files: [] })).toBeUndefined()
 			await repos.orderExports.claim(claim, fresh())

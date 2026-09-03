@@ -38,14 +38,16 @@ export const getOrderExport = async (db: Db, orderId: string): Promise<OrderExpo
 
 /**
  * Insert-or-reclaim compare-and-set. The upsert's `where` is the whole lock: a fresh row is
- * inserted `pending`; an existing `failed` row or a `pending` one older than `staleBefore` is
- * re-claimed (reset to `pending`, files cleared); a `done` row or a fresh `pending` one matches
- * nothing, so `returning` is empty and the caller reads the row it lost to.
+ * inserted `pending`; an existing `failed` row, a `pending` one older than `staleBefore` or (only
+ * when `doneBefore` is given) a `done` one finished before it is re-claimed (reset to `pending`,
+ * files cleared); anything else matches nothing, so `returning` is empty and the caller reads the
+ * row it lost to. `finished_at < null` is null, i.e. false — a `done` row is final by default.
  */
 export const claimOrderExport = async (
 	db: Db,
 	claim: ExportClaim,
-	staleBefore: Date
+	staleBefore: Date,
+	doneBefore?: Date
 ): Promise<{ export: OrderExport; claimed: boolean }> => {
 	const { sql } = db
 	const jobId = claim.jobId && isUuid(claim.jobId) ? claim.jobId : null
@@ -62,6 +64,7 @@ export const claimOrderExport = async (
 			finished_at = null
 		where order_exports.status = 'failed'
 			or (order_exports.status = 'pending' and order_exports.created_at < ${staleBefore})
+			or (order_exports.status = 'done' and order_exports.finished_at < ${doneBefore ?? null})
 		returning *`
 	if (row) return { export: toOrderExport(row), claimed: true }
 	const existing = await getOrderExport(db, claim.orderId)
@@ -104,7 +107,7 @@ export const appendOrderExportFiles = async (
 
 export const createOrderExportsRepository = (db: Db): OrderExportsRepository => ({
 	get: orderId => getOrderExport(db, orderId),
-	claim: (claim, staleBefore) => claimOrderExport(db, claim, staleBefore),
+	claim: (claim, staleBefore, doneBefore) => claimOrderExport(db, claim, staleBefore, doneBefore),
 	finish: (orderId, finish) => finishOrderExport(db, orderId, finish),
 	appendFiles: (orderId, files) => appendOrderExportFiles(db, orderId, files),
 })

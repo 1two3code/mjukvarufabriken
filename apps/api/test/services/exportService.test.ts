@@ -2,9 +2,13 @@ import { EntityNotFound } from '#/lib/entityError.ts'
 import { createMockJob, createMockJobEvent } from '#/plugins/__mocks__/db.ts'
 import { createMockListedObjects } from '#/plugins/__mocks__/s3.ts'
 import { createMockDeliverable } from '#/services/__mocks__/jobService.ts'
+import { createMockDatabaseDump } from '#/services/__mocks__/previewDbService.ts'
 import {
 	deletionCertificate,
+	exportFreshnessMs,
+	exportJson,
 	exportKeyFor,
+	isExportFresh,
 	pickExportJob,
 	storageExportName,
 } from '#/services/exportService.ts'
@@ -23,6 +27,8 @@ describe('Export Service', () => {
 		// services stay mocked (no AWS, no Postgres in the loop).
 		app = await createTestApp({ skipMock: '#/services/exportService.ts' })
 	})
+
+	afterEach(() => vi.useRealTimers())
 
 	const seedOrder = async (id = 'order-1', orgId = 'org-1') =>
 		app.db.orders.insert({ id, orgId, name: 'Acme gym' })
@@ -92,7 +98,7 @@ describe('Export Service', () => {
 			expect(await app.db.orderExports.get('order-1')).toMatchObject({ status: 'done' })
 		})
 
-		it('Is idempotent — a done export is returned, nothing is copied again', async () => {
+		it('Is idempotent — a fresh done export is returned, nothing is copied again', async () => {
 			await seedOrder()
 			seedDeliveredJob()
 			const first = await app.exportService.finalExport('order-1')
@@ -104,6 +110,65 @@ describe('Export Service', () => {
 			expect(second).toEqual(first)
 			expect(app.s3.copyToArtifacts).not.toHaveBeenCalled()
 			expect(app.s3.putArtifact).not.toHaveBeenCalled()
+		})
+
+		it('Retakes a done export older than the freshness window, so a teardown never certifies stale data', async () => {
+			await seedOrder()
+			seedDeliveredJob()
+			const first = await app.exportService.finalExport('order-1')
+			expect(isExportFresh(first)).toBe(true)
+			vi.mocked(app.s3.copyToArtifacts).mockClear()
+			vi.useFakeTimers()
+			vi.setSystemTime(Date.now() + exportFreshnessMs + 60_000)
+			expect(isExportFresh(first)).toBe(false)
+
+			const retaken = await app.exportService.finalExport('order-1')
+
+			expect(retaken.status).toBe('done')
+			expect(isExportFresh(retaken)).toBe(true)
+			expect(retaken.finishedAt).not.toBe(first.finishedAt)
+			expect(app.s3.copyToArtifacts).toHaveBeenCalled()
+		})
+
+		it('Never retakes the export of a torn-down order — there is nothing left, and it holds the certificate', async () => {
+			await seedOrder()
+			seedDeliveredJob()
+			const first = await app.exportService.finalExport('order-1')
+			await app.db.orders.setLifecycle('order-1', ['active'], 'torn_down')
+			vi.mocked(app.s3.copyToArtifacts).mockClear()
+			vi.useFakeTimers()
+			vi.setSystemTime(Date.now() + exportFreshnessMs + 60_000)
+
+			const again = await app.exportService.finalExport('order-1')
+
+			expect(again).toEqual(first)
+			expect(app.s3.copyToArtifacts).not.toHaveBeenCalled()
+		})
+
+		it('Serialises BigInt columns (int8 / bigserial) instead of failing the whole export', async () => {
+			await seedOrder()
+			seedDeliveredJob()
+			vi.mocked(app.previewDbService.dump).mockResolvedValue(
+				createMockDatabaseDump({
+					tables: [
+						{
+							table: 'bookings',
+							columns: ['id', 'member'],
+							rows: [{ id: 9007199254740993n, member: 'anna' }],
+							truncated: false,
+						},
+					],
+				})
+			)
+
+			const result = await app.exportService.finalExport('order-1')
+
+			expect(result.status).toBe('done')
+			const [, databaseBody] = vi.mocked(app.s3.putArtifact).mock.calls[0]!
+			expect(JSON.parse(databaseBody).tables[0].rows[0]).toEqual({
+				id: '9007199254740993',
+				member: 'anna',
+			})
 		})
 
 		it('Skips the database and the storage cleanly when the order never had them', async () => {
@@ -244,6 +309,12 @@ describe('Export Service', () => {
 	// MARK: Pure helpers
 
 	describe('helpers', () => {
+		it('Writes BigInt as a decimal string and leaves everything else to JSON', () => {
+			expect(exportJson({ id: 42n, when: new Date('2026-09-02T00:00:00.000Z'), n: 1 })).toBe(
+				'{\n  "id": "42",\n  "when": "2026-09-02T00:00:00.000Z",\n  "n": 1\n}'
+			)
+		})
+
 		it('Keeps the object path relative to the app prefix under storage/', () => {
 			expect(storageExportName('preview/job1/albums/a.jpg', 'preview/job1/')).toBe(
 				'storage/albums/a.jpg'

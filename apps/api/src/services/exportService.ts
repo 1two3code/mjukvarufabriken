@@ -9,8 +9,11 @@
  *
  * Idempotent through the `order_exports` row: `finalExport` claims it with a compare-and-set
  * (`db.orderExports.claim`) and does the work only when it won the claim. A `done` export is
- * final; a `failed` one (or a claim that went stale — a crashed run) is retried by the next
- * caller, which is the hourly hosting sweep.
+ * final for `exportFreshnessMs` — the teardown gate (`accountService`) only accepts an export
+ * that fresh, so an older `done` one is retaken rather than certifying stale data; a `failed`
+ * one (or a claim that went stale — a crashed run) is retried by the next caller, which is the
+ * hourly hosting sweep. A torn-down order's export is final for good: there is nothing left to
+ * retake, and the row holds the deletion certificate.
  */
 import fp from 'fastify-plugin'
 import { orderExportFileName } from '@mf/models'
@@ -53,7 +56,9 @@ declare module 'fastify' {
 			 * Takes (or returns the already-taken) final export of the order. Resolves to the export
 			 * row in every case — inspect `status`: `done` means every file is in place, `failed`
 			 * means a step threw (the row keeps the reason and the next call retries), `pending`
-			 * means another run is in flight right now. Throws `EntityNotFound` for an unknown order.
+			 * means another run is in flight right now. A `done` export older than
+			 * `exportFreshnessMs` is retaken (unless the order is already torn down), so a teardown
+			 * that follows never certifies stale data. Throws `EntityNotFound` for an unknown order.
 			 */
 			finalExport: (orderId: string) => Promise<OrderExport>
 			/** The order's export with presigned links; org-scoped (`EntityNotFound` for other orgs / none) */
@@ -73,6 +78,32 @@ declare module 'fastify' {
 
 /** A `pending` claim older than this is a crashed run and may be re-claimed */
 export const exportClaimStaleMs = 60 * 60 * 1000
+
+/**
+ * How long a `done` export stays good enough to tear down on. Everything the app writes after the
+ * export is lost at teardown, so the gate demands one this fresh — and `finalExport` retakes an
+ * older one instead of returning it, which is what keeps the sweeps (export, then teardown in
+ * the same pass) and the admin flow (`POST …/export`, then the lifecycle action) inside it.
+ */
+export const exportFreshnessMs = 60 * 60 * 1000
+
+/** True when the export is `done` and finished within the freshness window (the teardown gate) */
+export const isExportFresh = (exported: OrderExport | undefined, now = Date.now()): boolean =>
+	exported?.status === 'done' &&
+	exported.finishedAt !== undefined &&
+	now - new Date(exported.finishedAt).getTime() <= exportFreshnessMs
+
+/**
+ * `JSON.stringify` for the export files. The app's database comes back through postgres.js with
+ * `int8`/`bigserial` columns as BigInt (which `JSON.stringify` refuses outright), so those are
+ * written as decimal strings; everything else is what JSON makes of it (Buffers via `toJSON`).
+ */
+export const exportJson = (value: unknown): string =>
+	JSON.stringify(
+		value,
+		(_key, item: unknown) => (typeof item === 'bigint' ? item.toString() : item),
+		2
+	)
 
 /** Where an order's export lives: next to the delivered bundle, under its own sub-prefix */
 export const exportKeyFor = (jobId: string) => `deliverables/${jobId}/export/`
@@ -123,7 +154,7 @@ export const deletionCertificate = (
 		report.repositoryUrl
 			? `- Your repository at ${report.repositoryUrl} is yours and was not touched.`
 			: '- Your repository (transferred to you at delivery) was not touched.',
-		`- This export (\`${exported.key}\`), downloadable from your order page:`,
+		`- This export (\`${exported.key}\`), taken ${exported.finishedAt ?? report.completedAt.toISOString()}, downloadable from your order page:`,
 		...exported.files.map(file => `  - \`${file.name}\` (${file.size} bytes)`),
 		'',
 		'Every deletion above is permanent; the platform holds no further copy of the data.',
@@ -173,11 +204,7 @@ const plugin: FastifyPluginAsync = async app => {
 		const dump = await previewDbService.dump(provisioningJobId)
 		if (dump) {
 			const target = `${key}${orderExportFileName.database}`
-			const { size } = await s3.putArtifact(
-				target,
-				JSON.stringify(dump, null, 2),
-				'application/json'
-			)
+			const { size } = await s3.putArtifact(target, exportJson(dump), 'application/json')
 			files.push({ name: orderExportFileName.database, key: target, size })
 		}
 
@@ -202,11 +229,7 @@ const plugin: FastifyPluginAsync = async app => {
 					exportedAt: new Date().toISOString(),
 				}
 				const target = `${key}${orderExportFileName.storageManifest}`
-				const { size } = await s3.putArtifact(
-					target,
-					JSON.stringify(manifest, null, 2),
-					'application/json'
-				)
+				const { size } = await s3.putArtifact(target, exportJson(manifest), 'application/json')
 				files.push({ name: orderExportFileName.storageManifest, key: target, size })
 			}
 		}
@@ -221,9 +244,14 @@ const plugin: FastifyPluginAsync = async app => {
 			db.jobs.listEvents(jobId)
 		)
 		const key = exportKeyFor(picked?.job.id ?? orderId)
+		// A torn-down order's export is final (nothing is left to retake, and the row carries the
+		// certificate); otherwise a `done` export older than the freshness window is retaken.
+		const doneBefore =
+			order.lifecycle === 'torn_down' ? undefined : new Date(Date.now() - exportFreshnessMs)
 		const { export: claimed, claimed: won } = await db.orderExports.claim(
 			{ orderId, jobId: picked?.job.id, key },
-			new Date(Date.now() - exportClaimStaleMs)
+			new Date(Date.now() - exportClaimStaleMs),
+			doneBefore
 		)
 		if (!won) {
 			app.log.info({ orderId, status: claimed.status }, 'Final export already taken / in flight')
