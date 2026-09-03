@@ -91,6 +91,27 @@ repair-session staging. **Graduated to:** sandbox/orchestrator fixes in
 
 <!-- New entries above the seed section, newest first. -->
 
+## 2026-09-03 — job 86fe268f (Ögonblick, M) — run 9: green in one pass, gallery verified
+5.9 M budget-tokens (~USD 15). The first build to go green **in a single pass**: five gates
+(review: 0 findings), docs → secret scan → repo → deploy → browser live check → bundle, URL handed
+over: `https://mf-2dcaba2ded584bcb8f647c0d07d6afbf.ecs.eu-north-1.on.aws`. Then the probe the
+live check does not yet do, by hand: `POST /bff/photos` 201, `GET /bff/photos` 200 with the
+photo, its thumbnail served through the presigned URL as `image/jpeg` (sharp-generated, stored
+under the app's S3 prefix). Both of the morning's fixes (#127 update-on-redeliver, #129 store
+double encoding) confirmed on a fresh app.
+
+**Nine builds of one order, 2026-09-01 → 09-03, in one line each:** proxy header (1), unregistered
+service (2), template mocks (3), route prefix (4), repair discarded work (5), in-memory store (6),
+IAM TagRole (7), jsdom renderer (8), green (9) — plus nine redeliveries that walked the deploy
+half. Every one of those is now a fence, a test, or a template default. The factory's next order
+starts from here, not from run 1.
+
+**Still OPEN:** `delivered` without `deployUrl` (status word); a write-then-read probe in the live
+check; a store test against a real Postgres; preview teardown for the earlier services of this
+order (runs 7 and 8 still run in dev — #123 built the teardown machinery, it has not been pointed
+at them); the pre-delivery repository link.
+
+
 ## 2026-09-03 — live app, second defect of the morning: store rows double-encoded
 After #127 rolled the fresh password (redelivery fb5e676f, green, URL kept): `GET /bff/photos`
 200 `[]`, `POST /bff/photos` 201 with the object under the app's S3 prefix and a presigned URL
