@@ -7,6 +7,16 @@ it when you want the subscription-side number too.
 After any harness job run (dogfood or customer, success or failure): append every defect it
 surfaced to docs/LEARNINGS.md and sweep that file's OPEN entries before starting the next paid run.
 
+## Checking a deployed app in a browser
+
+The Playwright MCP plugin drives real deployments (dev, a preview URL, a delivered app) — clicking
+through a build and reading its console is the fastest acceptance check we have. It must run
+**headless**: this WSL has no display, so a headed launch hangs ~125 s and then dies with "Target
+page, context or browser has been closed". `.claude/settings.json` sets
+`PLAYWRIGHT_MCP_HEADLESS=true` for that reason — keep it. Screenshots still work headless; send them
+with SendUserFile. For scripted flows (upload a file, assert a response status) drive
+`node_modules/playwright-core` directly with `chromium.launch({ headless: true })`.
+
 ## Git workflow
 
 `main` is branch-protected on GitHub (`enforce_admins: true`, no force-push, no deletion, PR
