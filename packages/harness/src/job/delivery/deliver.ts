@@ -57,11 +57,16 @@ export const acceptanceFailedNotification = (
 	text: `Job ${jobId}'s preview deployed to ${deployUrl}, but probing it like a customer found it broken — the URL was withheld from the deliverable:\n\n${reason}\n\nThe service is still up for inspection (and recorded for teardown). Fix and re-deliver, or tear it down.`,
 })
 
-/** The informational log line for the "Built by Mjukvaruhuset" footer check (never a failure) */
-export const builtByFooterLogLine = (present: boolean, deployUrl: string) =>
+/**
+ * The informational log line for the "Built by Mjukvaruhuset" footer check (never a failure).
+ * Deliberately carries NO url: `log` events reach the customer's event stream unredacted, and a
+ * render can happen on a check that then FAILS acceptance — whose url is withheld from the customer.
+ * The `acceptance` step event already carries the url for the admins.
+ */
+export const builtByFooterLogLine = (present: boolean) =>
 	present
-		? `built-by footer: present in the rendered page at ${deployUrl}`
-		: `built-by footer: MISSING from the rendered page at ${deployUrl} — the delivered app does not link to mjukvaruhuset.se (informational; the template's components/builtBy was dropped or VITE_BUILT_BY_URL emptied)`
+		? 'built-by footer: present in the rendered page'
+		: "built-by footer: MISSING from the rendered page — the delivered app does not link to mjukvaruhuset.se (informational; the template's components/builtBy was dropped or VITE_BUILT_BY_URL emptied)"
 
 /**
  * Delivery after green gates, in five steps that each emit a `delivery` event:
@@ -394,11 +399,12 @@ export const deliver = async (
 			)
 		await step({ step: 'acceptance', ok: live.ok, url: deployUrl, reason: live.reason })
 		// The delivery-standard "Built by Mjukvaruhuset" footer (F5): recorded as information on
-		// the live check's result and logged here — a missing footer never fails a delivery
+		// the live check's result and logged here — a missing footer never fails a delivery. The
+		// line names no url: a customer reads `log` events, and this url may be withheld below.
 		if (live.builtByFooter !== undefined) {
 			await emit({
 				type: 'log',
-				payload: { message: builtByFooterLogLine(live.builtByFooter, deployUrl) },
+				payload: { message: builtByFooterLogLine(live.builtByFooter) },
 			}).catch(() => {})
 		}
 		if (!live.ok) {

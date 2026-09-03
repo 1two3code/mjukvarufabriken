@@ -624,7 +624,6 @@ describe('deliver', () => {
 				.filter(message => message.startsWith('built-by footer'))
 		const logs = footerLogsOf(input.events)
 		expect(logs).toEqual([expect.stringContaining('built-by footer: MISSING')])
-		expect(logs[0]).toContain(outcome.deliverable!.deployUrl!)
 		expect(input.events.map(event => event.type)).not.toContain('notify')
 
 		// A present footer logs the positive line; a check without a render logs nothing
@@ -638,6 +637,32 @@ describe('deliver', () => {
 		const unknownCheck = createFakeLiveCheck({ ok: true, probes: [] })
 		await deliver(unknown, createClients({ liveCheck: unknownCheck }).clients)
 		expect(footerLogsOf(unknown.events)).toEqual([])
+	})
+
+	it('Keeps a withheld URL out of the built-by footer log line (customers read log events)', async () => {
+		// Arrange — the page rendered (so the footer verdict exists) but the app failed acceptance:
+		// its URL is withheld from the deliverable and redacted from the customer's delivery events,
+		// while `log` events reach the customer as they are
+		const liveCheck = createFakeLiveCheck({
+			ok: false,
+			reason: 'GET /bff/guestbook: 401 for an anonymous visitor and not in publicUrls',
+			probes: [{ method: 'GET', path: '/guestbook', status: 401, ok: false }],
+			builtByFooter: true,
+		})
+		const { clients } = createClients({ liveCheck })
+		const input = createInput(repoDir)
+
+		// Act
+		const outcome = await deliver(input, clients)
+
+		// Assert — the verdict is still logged, but no log line names the withheld URL
+		const withheldUrl = liveCheck.calls[0]!.url
+		expect(outcome.deliverable?.deployUrl).toBeNull()
+		const logs = input.events
+			.filter(event => event.type === 'log')
+			.map(event => (event.payload as { message: string }).message)
+		expect(logs).toContainEqual(expect.stringContaining('built-by footer: present'))
+		expect(logs.some(message => message.includes(withheldUrl))).toBe(false)
 	})
 
 	it('Withholds the URL but keeps the service recorded when the live acceptance check fails', async () => {
