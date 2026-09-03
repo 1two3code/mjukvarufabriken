@@ -181,6 +181,32 @@ const assertPreviewDbName = (name: string) => {
 /** `"name"` with embedded quotes doubled — the delivered app chose its own table names */
 const quoteIdentifier = (name: string) => `"${name.replace(/"/g, '""')}"`
 
+/** Per-statement ceiling for the dump: a courtesy copy of a demo app, not a place to hang the sweep */
+export const dumpStatementTimeoutMs = 60_000
+
+/**
+ * The session every dump statement runs in — set up BEFORE the first read. The connection is the
+ * platform admin's (absent `PREVIEW_DB_ADMIN_URL`, the RDS master), but the database is the
+ * delivered app's: the app role owns every object in it, including any function a row-security
+ * policy, a view or a default could make the reader execute — as the reader. A tenant that wanted
+ * to could therefore have the export sweep run its SQL as the master user. So the dump runs as
+ * the app role instead (`SET ROLE` — the admin is a member of it since provisioning), with:
+ * - `default_transaction_read_only`: nothing the app made us run may write;
+ * - `row_security = off`: no policy is evaluated at all — a `FORCE ROW LEVEL SECURITY` table makes
+ *   the read fail loudly (the export fails and retries) rather than run the policy's function;
+ * - `search_path = pg_catalog`: no tenant object shadows a catalogue name (the dump qualifies
+ *   every table with its schema anyway);
+ * - a `statement_timeout`, so a pathological table cannot hold the hourly sweep.
+ * The connection is single-use and single-slot (`max: 1`), so the settings stay for its lifetime.
+ */
+export const dumpSessionStatements = (name: string): string[] => [
+	`SET ROLE ${assertPreviewDbName(name)}`,
+	'SET default_transaction_read_only = on',
+	'SET row_security = off',
+	'SET search_path = pg_catalog',
+	`SET statement_timeout = ${dumpStatementTimeoutMs}`,
+]
+
 const databaseExists = async (db: AdminDb, name: string) =>
 	(await db.query('SELECT 1 FROM pg_database WHERE datname = $1', [name])).length > 0
 
@@ -190,7 +216,8 @@ const roleExists = async (db: AdminDb, name: string) =>
 /**
  * Reads every `public` base table of the app's database through a connection to THAT database
  * (`connect` receives the database name — the admin user reaches it through its membership of
- * the owning role, granted at provisioning). Column order comes from the catalogue so an empty
+ * the owning role, granted at provisioning), in a session hardened to the app role's own
+ * privileges first (`dumpSessionStatements`). Column order comes from the catalogue so an empty
  * table still exports its shape.
  */
 export const dumpPreviewDatabase = async (
@@ -198,6 +225,7 @@ export const dumpPreviewDatabase = async (
 	name: string
 ): Promise<Omit<PreviewDatabaseDump, 'exportedAt'>> => {
 	assertPreviewDbName(name)
+	for (const statement of dumpSessionStatements(name)) await appDb.query(statement)
 	const tables = await appDb.query<{ table_name: string }>(
 		`SELECT table_name FROM information_schema.tables
 		 WHERE table_schema = 'public' AND table_type = 'BASE TABLE'
@@ -212,7 +240,7 @@ export const dumpPreviewDatabase = async (
 			[table]
 		)
 		const rows = await appDb.query(
-			`SELECT * FROM ${quoteIdentifier(table)} LIMIT ${maxDumpRowsPerTable + 1}`
+			`SELECT * FROM "public".${quoteIdentifier(table)} LIMIT ${maxDumpRowsPerTable + 1}`
 		)
 		dumped.push({
 			table,

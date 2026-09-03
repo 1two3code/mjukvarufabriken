@@ -1,6 +1,7 @@
 import {
 	adminUrlForDatabase,
 	dumpPreviewDatabase,
+	dumpSessionStatements,
 	previewDatabaseUrl,
 	previewDbName,
 	provisionPreviewDatabase,
@@ -123,12 +124,34 @@ describe('dumpPreviewDatabase (wave 14)', () => {
 				truncated: false,
 			},
 		])
-		// Table names come from the delivered app: always quoted, embedded quotes doubled
-		expect(statements.map(s => s.text)).toContain('SELECT * FROM "bookings" LIMIT 100001')
-		expect(statements.map(s => s.text)).toContain('SELECT * FROM "odd""name" LIMIT 100001')
+		// Table names come from the delivered app: always schema-qualified (the session's
+		// search_path is pg_catalog only), always quoted, embedded quotes doubled
+		expect(statements.map(s => s.text)).toContain('SELECT * FROM "public"."bookings" LIMIT 100001')
+		expect(statements.map(s => s.text)).toContain('SELECT * FROM "public"."odd""name" LIMIT 100001')
 		expect(statements.find(s => s.text.includes('information_schema.columns'))?.params).toEqual([
 			'bookings',
 		])
+	})
+
+	it('Hardens the session to the app role BEFORE the first read — never runs tenant SQL as the admin', async () => {
+		// The app role owns its database, so a policy/view/default function of the tenant's making
+		// would otherwise run with the reader's (RDS master) privileges during the export sweep.
+		const { db, statements } = fakeAdminDb()
+
+		await dumpPreviewDatabase(db, 'mf_app_job1234abcd')
+
+		const setup = dumpSessionStatements('mf_app_job1234abcd')
+		expect(setup).toEqual([
+			'SET ROLE mf_app_job1234abcd',
+			'SET default_transaction_read_only = on',
+			'SET row_security = off',
+			'SET search_path = pg_catalog',
+			'SET statement_timeout = 60000',
+		])
+		expect(statements.slice(0, setup.length)).toEqual(setup)
+		expect(statements.findIndex(text => text.startsWith('SELECT'))).toBe(setup.length)
+		// The role name is the fenced identifier, restated where it is interpolated
+		expect(() => dumpSessionStatements('postgres')).toThrow(/not a preview database/)
 	})
 
 	it('Refuses to dump anything but a preview database name', async () => {
