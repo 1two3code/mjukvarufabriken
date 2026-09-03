@@ -4,7 +4,7 @@ import { tryCatch } from '@mf/utils/function'
 
 import { EntityInvalid, EntityNotFound } from '#/lib/entityError.ts'
 import { AnthropicNotConfigured } from '#/plugins/anthropic.ts'
-import { clientIp } from '#/routes/bff/contact/postContact.ts'
+import { clientIp } from '#/routes/bff/contact/contact.utils.ts'
 import { quoteTokenOf } from '#/routes/bff/quote/quote.utils.ts'
 import { SpecRateLimited, SpecTurnLimitReached } from '#/services/specService.ts'
 

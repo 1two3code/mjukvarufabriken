@@ -1,7 +1,7 @@
 import { CreateQuoteResponseSchema, QuoteMutationSchemas } from '@mf/models'
 import { tryCatch } from '@mf/utils/function'
 
-import { clientIp } from '#/routes/bff/contact/postContact.ts'
+import { clientIp } from '#/routes/bff/contact/contact.utils.ts'
 import { QuoteRateLimited } from '#/services/quoteService.ts'
 
 import type { FastifyPluginAsyncZod } from 'fastify-type-provider-zod'

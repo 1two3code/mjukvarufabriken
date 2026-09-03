@@ -3,7 +3,7 @@ import { QuoteResponseSchema } from '@mf/models'
 import { tryCatch } from '@mf/utils/function'
 
 import { EntityNotFound } from '#/lib/entityError.ts'
-import { clientIp } from '#/routes/bff/contact/postContact.ts'
+import { clientIp } from '#/routes/bff/contact/contact.utils.ts'
 import { quoteTokenOf } from '#/routes/bff/quote/quote.utils.ts'
 import { QuoteRateLimited } from '#/services/quoteService.ts'
 
