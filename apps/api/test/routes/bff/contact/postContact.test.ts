@@ -1,4 +1,5 @@
-import postContact, { clientIp } from '#/routes/bff/contact/postContact.ts'
+import { clientIp } from '#/routes/bff/contact/contact.utils.ts'
+import postContact from '#/routes/bff/contact/postContact.ts'
 import { createMockContactMessage } from '#/services/__mocks__/contactService.ts'
 
 import type { FastifyInstance } from 'fastify'

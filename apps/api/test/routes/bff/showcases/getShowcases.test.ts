@@ -50,6 +50,7 @@ describe('GET /bff/showcases route', () => {
 
 		// Assert
 		expect(response.statusCode).toBe(429)
+		expect(response.json().error.code).toBe('showcasesRateLimited')
 	})
 
 	it('Handles server error with 500 response', async () => {

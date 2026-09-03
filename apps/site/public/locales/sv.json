@@ -1,6 +1,7 @@
 {
   "api.error.contactRateLimited": "För många meddelanden från din uppkoppling. Vänta tio minuter och försök igen.",
   "api.error.refreshNotConfigured": "Din session kunde inte förnyas. Logga in igen.",
+  "api.error.showcasesRateLimited": "För många anrop till galleriet från din uppkoppling. Vänta en minut och försök igen.",
   "common.action.close": "Stäng",
   "contact.action.send": "Skicka meddelande",
   "contact.action.sending": "Skickar…",

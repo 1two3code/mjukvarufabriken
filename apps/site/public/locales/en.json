@@ -1,6 +1,7 @@
 {
   "api.error.contactRateLimited": "Too many messages from your connection. Please wait ten minutes and try again.",
   "api.error.refreshNotConfigured": "Your session could not be refreshed. Please sign in again.",
+  "api.error.showcasesRateLimited": "Too many gallery requests from your connection. Please wait a minute and try again.",
   "common.action.close": "Close",
   "contact.action.send": "Send message",
   "contact.action.sending": "Sending…",
