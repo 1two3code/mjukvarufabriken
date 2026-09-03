@@ -243,20 +243,25 @@ const withheldDeployUrls = (events: JobEvent[]): Set<string> => {
  * admin-only. Customers get the gate's name, verdict, timing, tokens and one-line summary.
  * Delivery events lose their `url` when the live acceptance check withheld that URL as broken
  * ({@link withheldDeployUrls}) — the deliverable already nulls `deployUrl`; this closes the same
- * promise on the customer-readable event stream.
+ * promise on the customer-readable event stream — and when it is an artifacts-bucket object
+ * (the `bundle` step, a failed `deploy`): those are served presigned by the deliverables route.
  */
 export const redactEventsForCustomer = (events: JobEvent[]): JobEvent[] => {
 	const withheld = withheldDeployUrls(events)
 	return events
 		.filter(event => event.type !== 'notify')
 		.map(event => {
-			if (
-				event.type === 'delivery' &&
-				typeof event.payload.url === 'string' &&
-				withheld.has(event.payload.url)
-			) {
-				const { url: _url, ...payload } = event.payload
-				return { ...event, payload }
+			if (event.type === 'delivery' && typeof event.payload.url === 'string') {
+				const { step, ok, url } = event.payload
+				// Artifacts-bucket objects (the bundle; the static-site fallback a failed deploy
+				// points at) are BLOCK_ALL and reached only through the presigned links of
+				// GET /jobs/:id/deliverables — the bucket name, region and key layout stay internal.
+				// (A failed `acceptance` carries the LIVE url; {@link withheldDeployUrls} judges it.)
+				const bucketObject = step === 'bundle' || (step === 'deploy' && ok !== true)
+				if (bucketObject || withheld.has(url)) {
+					const { url: _url, ...payload } = event.payload
+					return { ...event, payload }
+				}
 			}
 			if (event.type !== 'gate') return event
 			const { details: _details, ...payload } = event.payload
