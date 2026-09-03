@@ -81,6 +81,23 @@ describe('runRedelivery', () => {
 		})
 	})
 
+	it('drops the deploy notes when the redelivered preview is live', async () => {
+		const events: NewJobEvent[] = []
+		const outcome = await runRedelivery(baseJob, {
+			ports: {
+				deliver: async input => ({
+					...okDelivery(input),
+					reason: 'MAPBOX_TOKEN: set by the operator before real use',
+				}),
+			},
+			hooks: { emit: async event => void events.push(event) },
+		})
+		expect(outcome.status).toBe('delivered')
+		expect(outcome.reason).toBeUndefined()
+		expect(events.at(-1)?.payload).toMatchObject({ deployUrl: 'https://preview.on.aws' })
+		expect((events.at(-1)?.payload as { reason?: string }).reason).toBeUndefined()
+	})
+
 	it('fails when the delivery fails, with the delivery reason', async () => {
 		const outcome = await runRedelivery(baseJob, {
 			ports: {

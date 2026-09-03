@@ -226,7 +226,11 @@ export type DeliveryOutcome = {
 	ok: boolean
 	tokens: number
 	deliverable?: Deliverable
-	/** Why `ok` is false, or why `deployUrl` is null */
+	/**
+	 * Why `ok` is false, or what the deploy step flagged: why `deployUrl` is null — or, with a
+	 * live URL, its operator notes (env-manifest placeholders, a blocked site upload). Callers
+	 * that put a reason on the JOB must gate on `deliverable.deployUrl` (the orchestrator does).
+	 */
 	reason?: string
 	/** One payload per step that ran, in order */
 	steps: DeliveryEventPayload[]

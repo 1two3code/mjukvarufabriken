@@ -531,6 +531,10 @@ describe('deliver', () => {
 		)
 		expect(log).toBeTruthy()
 		expect(outcome.steps[3]).toMatchObject({ step: 'deploy', ok: true })
+		// …and the outcome carries BOTH a live URL and the placeholder note as `reason` — the shape
+		// the orchestrator must gate on before putting a reason on the job (orchestrator.test)
+		expect(outcome.deliverable?.deployUrl).toEqual(expect.any(String))
+		expect(outcome.reason).toContain('MAPBOX_TOKEN')
 	})
 
 	it('Fails closed on a seeded credential leak — nothing is pushed, deployed or uploaded (A2)', async () => {

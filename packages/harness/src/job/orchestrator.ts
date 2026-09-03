@@ -334,7 +334,10 @@ export const runJob = async (
 			return finish({ status: 'failed', plan, reason: `delivery failed: ${delivery.reason}` })
 		}
 		deliverable = delivery.deliverable
-		deliveryReason = delivery.reason
+		// Only when the URL really was withheld: `delivery.reason` also carries the deploy step's
+		// notes on a LIVE preview (env-manifest placeholders, a blocked site upload), and those
+		// must not turn a live job into "delivered without a preview" (review, wave 14)
+		deliveryReason = deliverable?.deployUrl ? undefined : delivery.reason
 	}
 
 	// The repo + bundle contract is honoured, so the job is `delivered` — but a withheld preview
