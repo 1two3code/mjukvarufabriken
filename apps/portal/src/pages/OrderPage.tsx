@@ -11,7 +11,7 @@ import { useCancelOrderMutation, useGetOrderQuery } from '#/features/orders/orde
 import { Deliverables } from '#/features/jobs/Deliverables.tsx'
 import { GateReports } from '#/features/jobs/GateReports.tsx'
 import { ApprovalPanel } from '#/features/orders/ApprovalPanel.tsx'
-import { HostingPanel } from '#/features/orders/HostingPanel.tsx'
+import { DeliveryOutcomePanel } from '#/features/orders/DeliveryOutcomePanel.tsx'
 import { OrderStatusBadge } from '#/features/orders/OrderStatusBadge.tsx'
 import { OrderStepper } from '#/features/orders/OrderStepper.tsx'
 import { PaymentPanel } from '#/features/orders/PaymentPanel.tsx'
@@ -159,7 +159,7 @@ export function OrderPage() {
 
 				<aside className={styles.side}>
 					<ApprovalPanel orderId={order.id} status={order.status} job={job} />
-					<HostingPanel detail={detail} />
+					<DeliveryOutcomePanel detail={detail} />
 					<PaymentPanel detail={detail} />
 					{job && (
 						<>
