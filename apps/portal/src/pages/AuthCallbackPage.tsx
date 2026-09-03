@@ -6,17 +6,15 @@ import { isApiError } from '#/app/api.ts'
 import { useAppDispatch } from '#/app/hooks.ts'
 import { useEffectOnce } from '#/hooks/useEffectOnce.ts'
 import { useVerifyMagicLinkMutation } from '#/features/auth/authApiSlice.ts'
+import { safeRedirect, takePostLoginRedirect } from '#/features/auth/postLoginRedirect.ts'
 import { setTokens } from '#/features/session/sessionSlice.ts'
 
 import { Spinner } from '#/components/Spinner.tsx'
 
-/** Only same-origin paths are honoured as post-login redirects */
-const safeRedirect = (value: string | null) =>
-	value && value.startsWith('/') && !value.startsWith('//') ? value : '/'
-
 /**
  * Landing page of the magic link (`/auth/callback?token=…`): exchanges the single-use token
- * for a token pair, stores it and redirects into the portal.
+ * for a token pair, stores it and redirects into the portal — to `?redirect=` when the link
+ * carries one, else to the path the login page remembered (the site's quote claim), else `/`.
  */
 export function AuthCallbackPage() {
 	const { t } = useTranslation()
@@ -28,7 +26,7 @@ export function AuthCallbackPage() {
 	const started = useRef(false)
 
 	const token = searchParams.get('token')
-	const redirect = safeRedirect(searchParams.get('redirect'))
+	const [redirect, setRedirect] = useState('/')
 
 	useEffectOnce(() => {
 		if (!token || started.current) return
@@ -36,6 +34,8 @@ export function AuthCallbackPage() {
 		verifyMagicLink({ token }).then(result => {
 			if (result.error) return
 			dispatch(setTokens(result.data))
+			// Read (and clear) the remembered path only once the sign-in has actually succeeded
+			setRedirect(safeRedirect(searchParams.get('redirect') ?? takePostLoginRedirect()))
 			setDone(true)
 		})
 	})

@@ -1,9 +1,11 @@
 import { useState } from 'react'
 import { useTranslation } from 'react-i18next'
-import { Navigate } from 'react-router-dom'
+import { Navigate, useSearchParams } from 'react-router-dom'
 
 import { useAppSelector } from '#/app/hooks.ts'
+import { useEffectOnce } from '#/hooks/useEffectOnce.ts'
 import { useRequestMagicLinkMutation } from '#/features/auth/authApiSlice.ts'
+import { rememberPostLoginRedirect, safeRedirect } from '#/features/auth/postLoginRedirect.ts'
 import { selectToken } from '#/features/session/sessionSlice.ts'
 
 import { Button } from '#/components/Button.tsx'
@@ -19,11 +21,20 @@ const githubSignInUrl = `${import.meta.env.VITE_API_URL}/auth/github`
 export function LoginPage() {
 	const { t } = useTranslation()
 	const token = useAppSelector(selectToken)
+	const [searchParams] = useSearchParams()
 	const [email, setEmail] = useState('')
 	const [sentTo, setSentTo] = useState<string | null>(null)
 	const [requestMagicLink, { isLoading, isError }] = useRequestMagicLinkMutation()
 
-	if (token) return <Navigate to="/" replace />
+	// `/login?redirect=/claim?…` (the site's quote hand-off): the magic link comes back without
+	// it, so remember where to go once the link has been verified. Already signed in, the
+	// redirect is taken right now and must not be stored for some later sign-in to replay
+	const redirect = searchParams.get('redirect')
+	useEffectOnce(() => {
+		if (!token) rememberPostLoginRedirect(redirect)
+	})
+
+	if (token) return <Navigate to={safeRedirect(redirect)} replace />
 
 	const trimmed = email.trim()
 

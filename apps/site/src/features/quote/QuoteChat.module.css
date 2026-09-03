@@ -1,0 +1,128 @@
+/* MARK: Layout */
+.chat {
+	display: flex;
+	flex-direction: column;
+	gap: var(--spacing-s);
+	min-height: 0;
+}
+
+.title {
+	margin: 0;
+}
+
+.messages {
+	overflow-y: auto;
+	display: flex;
+	flex-direction: column;
+	gap: var(--spacing-xs);
+
+	max-height: 48rem;
+	margin: 0;
+	padding: var(--spacing-s);
+	border: var(--border-width-xs) solid var(--divider-color);
+	border-radius: var(--border-radius-base);
+
+	list-style: none;
+
+	background: var(--content-background);
+}
+
+.empty {
+	font-style: italic;
+	color: var(--secondary-text-color);
+}
+
+/* MARK: Messages */
+.message {
+	display: flex;
+	flex-direction: column;
+	gap: var(--spacing-xxs);
+
+	max-width: 85%;
+	padding: var(--spacing-xs) var(--spacing-s);
+	border-radius: var(--border-radius-s);
+}
+
+.user {
+	align-self: flex-end;
+	color: var(--primary-button-text-color);
+	background: var(--primary-button-color);
+}
+
+.assistant {
+	align-self: flex-start;
+	background: var(--secondary-button-color);
+}
+
+.role {
+	composes: composable-caption-font from global;
+	opacity: 0.8;
+}
+
+.content {
+	margin: 0;
+	white-space: pre-wrap;
+}
+
+/* MARK: Open questions */
+.questions {
+	display: flex;
+	flex-wrap: wrap;
+	gap: var(--spacing-xs);
+	align-items: center;
+}
+
+.questionsLabel {
+	composes: composable-subheader-font from global;
+	color: var(--secondary-text-color);
+}
+
+.chip {
+	cursor: pointer;
+
+	padding: var(--spacing-xxs) var(--spacing-xs);
+	border: var(--border-width-xs) solid var(--brand-500);
+	border-radius: var(--border-radius-base);
+
+	font-size: var(--font-size-s);
+	color: var(--primary-text-color);
+	text-align: left;
+
+	background: transparent;
+
+	&:hover {
+		background: var(--secondary-button-hover-color);
+	}
+}
+
+/* MARK: Composer */
+.composer {
+	display: flex;
+	gap: var(--spacing-xs);
+	align-items: flex-end;
+}
+
+.textarea {
+	resize: vertical;
+
+	flex: 1;
+
+	padding: var(--spacing-xs) var(--spacing-s);
+	border: var(--border-width-xs) solid var(--input-border-color);
+	border-radius: var(--border-radius-s);
+
+	font-family: inherit;
+	font-size: var(--font-size-base);
+	color: var(--primary-text-color);
+
+	background: var(--input-color);
+	outline: none;
+
+	&:focus-visible {
+		border-color: var(--brand-500);
+	}
+
+	&:disabled {
+		opacity: 0.5;
+	}
+}

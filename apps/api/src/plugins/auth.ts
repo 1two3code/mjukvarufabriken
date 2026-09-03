@@ -45,6 +45,11 @@ export const publicUrls = new Set([
 	'/bff/contact',
 	// The public demo gallery (wave 14, F3): read-only, per-ip rate-limited in its service
 	'/bff/showcases',
+	// The site's no-login spec chat (wave 14, F1): each route checks the quote token itself and
+	// is ip-rate-limited; the token is the visitor's only credential
+	'/bff/quote',
+	'/bff/quote/:orderId',
+	'/bff/quote/:orderId/message',
 	// Stripe calls the webhook with its own signature (the fake provider's checkout is a normal
 	// authenticated POST, so it is not listed here)
 	'/bff/stripe/webhook',

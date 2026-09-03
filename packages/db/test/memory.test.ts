@@ -378,6 +378,121 @@ describe('memory repositories', () => {
 			})
 		})
 
+		it('Finds an anonymous quote only by id + token hash and never exposes the hash (0025)', async () => {
+			const order = await repos.orders.insert({
+				id: 'q1',
+				orgId: 'anon:0123',
+				name: 'Offert',
+				quoteTokenHash: 'hash-1',
+			})
+
+			expect(order).not.toHaveProperty('quoteTokenHash')
+			await expect(repos.orders.getOrderByQuoteToken('q1', 'hash-1')).resolves.toEqual(order)
+			await expect(repos.orders.getOrderByQuoteToken('q1', 'hash-2')).resolves.toBeUndefined()
+			await expect(repos.orders.getOrderByQuoteToken('nope', 'hash-1')).resolves.toBeUndefined()
+			// An ordinary order carries no hash, so no token ever matches it
+			await repos.orders.insert({ id: 'o1', orgId: 'a', name: 'x' })
+			await expect(repos.orders.getOrderByQuoteToken('o1', 'hash-1')).resolves.toBeUndefined()
+		})
+
+		it('Claims a quote once: the owner takes the row, the hash dies, a replay is undefined', async () => {
+			await repos.orders.insert({
+				id: 'q1',
+				orgId: 'anon:0123',
+				name: 'Offert',
+				quoteTokenHash: 'h',
+			})
+			const owner = { orgId: 'org-1', userId: 'user-1' }
+
+			await expect(repos.orders.claimQuote('q1', 'wrong', owner)).resolves.toBeUndefined()
+			const claimed = await repos.orders.claimQuote('q1', 'h', owner)
+
+			expect(claimed).toMatchObject({ id: 'q1', orgId: 'org-1', createdBy: 'user-1' })
+			await expect(repos.orders.get('q1')).resolves.toMatchObject({ orgId: 'org-1' })
+			await expect(repos.orders.claimQuote('q1', 'h', owner)).resolves.toBeUndefined()
+			await expect(repos.orders.getOrderByQuoteToken('q1', 'h')).resolves.toBeUndefined()
+		})
+
+		it('Never lists unclaimed anonymous quotes, and filters them inside the 200 cap', async () => {
+			vi.useFakeTimers({ toFake: ['Date'] })
+			vi.setSystemTime(new Date(2026, 0, 1))
+			await repos.orders.insert({ id: 'real', orgId: 'org-1', name: 'Mine' })
+			// 201 newer anonymous quotes: a post-hoc filter on the newest 200 would lose `real`
+			for (let index = 0; index < 201; index++) {
+				vi.setSystemTime(new Date(2026, 0, 2, 0, 0, index))
+				await repos.orders.insert({
+					id: `anon-${index}`,
+					orgId: `anon:${index}`,
+					name: 'Offert',
+					quoteTokenHash: `h${index}`,
+				})
+			}
+			vi.useRealTimers()
+
+			expect((await repos.orders.listOrders()).map(order => order.id)).toEqual(['real'])
+			expect((await repos.orders.listOrders({ orgId: 'org-1' })).map(o => o.id)).toEqual(['real'])
+			expect((await repos.orders.listOrders({ orgId: 'anon:0' })).map(o => o.id)).toEqual([])
+			expect((await repos.orders.list()).map(draft => draft.orderId)).toEqual(['real'])
+			// Claimed, the quote is an ordinary order and lists like one
+			await repos.orders.claimQuote('anon-0', 'h0', { orgId: 'org-1', userId: 'user-1' })
+			expect((await repos.orders.listOrders({ orgId: 'org-1' })).map(o => o.id)).toEqual([
+				'anon-0',
+				'real',
+			])
+		})
+
+		it('Keeps the token match and the claimed owner across a draft update (turn vs claim)', async () => {
+			await repos.orders.insert({
+				id: 'q1',
+				orgId: 'anon:0123',
+				name: 'Offert',
+				quoteTokenHash: 'h',
+			})
+			const turn = {
+				orderId: 'q1',
+				orgId: 'anon:0123',
+				status: 'drafting' as const,
+				spec: {},
+				messages: [
+					{ role: 'user' as const, content: 'hi', createdAt: '2026-09-01T00:00:00.000Z' },
+				],
+				openQuestions: [],
+			}
+
+			// A turn's write leaves the hash alone, so the site can resume after it
+			await repos.orders.updateUnlessFrozen(turn)
+			await expect(repos.orders.getOrderByQuoteToken('q1', 'h')).resolves.toMatchObject({
+				id: 'q1',
+			})
+
+			// A claim that lands while the engine is thinking wins over the org the turn captured
+			// before it started: the SQL update never writes `org_id`
+			await repos.orders.claimQuote('q1', 'h', { orgId: 'org-1', userId: 'user-1' })
+			await repos.orders.updateUnlessFrozen({ ...turn, openQuestions: ['Which features?'] })
+			await expect(repos.orders.get('q1')).resolves.toMatchObject({
+				orgId: 'org-1',
+				openQuestions: ['Which features?'],
+			})
+			await expect(repos.orders.getOrder('q1')).resolves.toMatchObject({ orgId: 'org-1' })
+		})
+
+		it('Deletes only anonymous orders created before the cut-off', async () => {
+			vi.useFakeTimers()
+			vi.setSystemTime(new Date('2026-08-01T00:00:00.000Z'))
+			await repos.orders.insert({ id: 'old-anon', orgId: 'anon:1', name: 'x', quoteTokenHash: 'a' })
+			await repos.orders.insert({ id: 'old-real', orgId: 'org-1', name: 'x' })
+			vi.setSystemTime(new Date('2026-09-01T00:00:00.000Z'))
+			await repos.orders.insert({ id: 'new-anon', orgId: 'anon:2', name: 'x', quoteTokenHash: 'b' })
+			vi.useRealTimers()
+
+			const deleted = await repos.orders.deleteAnonymousBefore(new Date('2026-08-15T00:00:00.000Z'))
+
+			expect(deleted).toBe(1)
+			await expect(repos.orders.getOrder('old-anon')).resolves.toBeUndefined()
+			await expect(repos.orders.getOrder('old-real')).resolves.toBeDefined()
+			await expect(repos.orders.getOrder('new-anon')).resolves.toBeDefined()
+		})
+
 		it('Transitions with compare-and-set and keeps the draft frozen past the spec phase', async () => {
 			await repos.orders.insert({ id: 'o1', orgId: 'a', name: 'x' })
 			await expect(

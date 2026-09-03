@@ -8,6 +8,7 @@ import type {
 	OrderMutation,
 	Payment,
 	PaymentKind,
+	QuoteMutation,
 } from '@mf/models'
 
 export const ordersApiSlice = appApi.enhanceEndpoints({ addTagTypes: ['order'] }).injectEndpoints({
@@ -34,6 +35,11 @@ export const ordersApiSlice = appApi.enhanceEndpoints({ addTagTypes: ['order'] }
 		}),
 		createOrder: build.mutation<Order, OrderMutation['CreateOrder']>({
 			query: body => ({ url: '/orders', method: 'POST', body }),
+			invalidatesTags: [{ type: 'order', id: 'list' }],
+		}),
+		/** Claims an anonymous quote from the site for the session's org (wave 14, F1) */
+		claimOrder: build.mutation<Order, QuoteMutation['ClaimQuote']>({
+			query: body => ({ url: '/orders/claim', method: 'POST', body }),
 			invalidatesTags: [{ type: 'order', id: 'list' }],
 		}),
 		cancelOrder: build.mutation<Order, string>({
@@ -84,6 +90,7 @@ export const {
 	useGetOrderQuery,
 	useGetOrderExportQuery,
 	useCreateOrderMutation,
+	useClaimOrderMutation,
 	useCancelOrderMutation,
 	useApproveOrderMutation,
 	useSetApprovalGateMutation,

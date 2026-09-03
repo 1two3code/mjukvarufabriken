@@ -1,4 +1,4 @@
-import { toSpecStatus } from '@mf/models'
+import { anonymousOrgPrefix, toSpecStatus } from '@mf/models'
 
 import { isUuid } from './jobs.ts'
 
@@ -13,7 +13,13 @@ import type {
 	SpecDraft,
 } from '@mf/models'
 import type { Db } from './index.ts'
-import type { NewOrder, NewPayment, OrdersRepository, PaymentPaid } from './repositories.ts'
+import type {
+	NewOrder,
+	NewPayment,
+	OrderOwner,
+	OrdersRepository,
+	PaymentPaid,
+} from './repositories.ts'
 
 // MARK: Row mapping
 
@@ -36,6 +42,8 @@ type OrderRow = {
 	customer_slug: string | null
 	hosting_until: Date | null
 	build_approved_at: Date | null
+	/** sha256 of the anonymous quote token; never mapped onto the model (0025) */
+	quote_token_hash: string | null
 	created_at: Date
 	updated_at: Date
 }
@@ -108,15 +116,27 @@ export const toPayment = (row: PaymentRow): Payment => ({
 // MARK: Spec draft
 
 export const getOrder = async (db: Db, orderId: string): Promise<SpecDraft | undefined> => {
+	if (!isUuid(orderId)) return undefined
 	const [row] = await db.sql<OrderRow[]>`select * from orders where id = ${orderId}`
 	return row && toSpecDraft(row)
 }
 
-export const listOrders = async (db: Db, filter: { orgId?: string } = {}): Promise<SpecDraft[]> => {
+/**
+ * The list predicate shared by both list reads: an optional org, and never an unclaimed
+ * anonymous quote (`anon:*`, wave 14) — filtered here, inside the `limit 200`, so a pile of
+ * unclaimed quotes cannot crowd real orders out of the admin's (or an org's) page.
+ */
+const listWhere = (db: Db, filter: { orgId?: string }) => {
 	const { sql } = db
-	const rows = await sql<OrderRow[]>`
+	return sql`
+		where org_id not like ${`${anonymousOrgPrefix}%`}
+		${filter.orgId === undefined ? sql`` : sql`and org_id = ${filter.orgId}`}`
+}
+
+export const listOrders = async (db: Db, filter: { orgId?: string } = {}): Promise<SpecDraft[]> => {
+	const rows = await db.sql<OrderRow[]>`
 		select * from orders
-		where true ${filter.orgId === undefined ? sql`` : sql`and org_id = ${filter.orgId}`}
+		${listWhere(db, filter)}
 		order by created_at desc
 		limit 200`
 	return rows.map(toSpecDraft)
@@ -185,16 +205,17 @@ export const updateOrderUnlessFrozen = async (
 
 export const insertOrder = async (db: Db, order: NewOrder): Promise<Order> => {
 	const [row] = await db.sql<OrderRow[]>`
-		insert into orders (id, org_id, created_by, name, kind)
+		insert into orders (id, org_id, created_by, name, kind, quote_token_hash)
 		values (
 			${order.id}, ${order.orgId}, ${order.createdBy ?? null}, ${order.name},
-			${order.kind ?? 'build'}
+			${order.kind ?? 'build'}, ${order.quoteTokenHash ?? null}
 		)
 		returning *`
 	return toOrder(row!)
 }
 
 export const getOrderRecord = async (db: Db, orderId: string): Promise<Order | undefined> => {
+	if (!isUuid(orderId)) return undefined
 	const [row] = await db.sql<OrderRow[]>`select * from orders where id = ${orderId}`
 	return row && toOrder(row)
 }
@@ -203,10 +224,9 @@ export const listOrderRecords = async (
 	db: Db,
 	filter: { orgId?: string } = {}
 ): Promise<Order[]> => {
-	const { sql } = db
-	const rows = await sql<OrderRow[]>`
+	const rows = await db.sql<OrderRow[]>`
 		select * from orders
-		where true ${filter.orgId === undefined ? sql`` : sql`and org_id = ${filter.orgId}`}
+		${listWhere(db, filter)}
 		order by created_at desc
 		limit 200`
 	return rows.map(toOrder)
@@ -409,6 +429,54 @@ export const stampDemoApproval = async (
 	})
 }
 
+// MARK: Anonymous quotes (wave 14, F1 — migration 0025)
+
+/**
+ * The order when it still carries exactly this quote token hash (`undefined` otherwise). The
+ * public quote routes take the id straight from the URL, so a non-uuid is "not found" here
+ * rather than a Postgres 22P02 (and a 500 in Sentry) — same guard as the payment lookups.
+ */
+export const getOrderByQuoteToken = async (
+	db: Db,
+	orderId: string,
+	tokenHash: string
+): Promise<Order | undefined> => {
+	if (!isUuid(orderId)) return undefined
+	const [row] = await db.sql<OrderRow[]>`
+		select * from orders where id = ${orderId} and quote_token_hash = ${tokenHash}`
+	return row && toOrder(row)
+}
+
+/**
+ * Compare-and-set on the hash: the owner takes the row and the hash is cleared in one statement,
+ * so two concurrent claims (or a replayed link) cannot both succeed.
+ */
+export const claimQuote = async (
+	db: Db,
+	orderId: string,
+	tokenHash: string,
+	owner: OrderOwner
+): Promise<Order | undefined> => {
+	if (!isUuid(orderId)) return undefined
+	const [row] = await db.sql<OrderRow[]>`
+		update orders set
+			org_id = ${owner.orgId},
+			created_by = ${owner.userId},
+			quote_token_hash = null,
+			updated_at = now()
+		where id = ${orderId} and quote_token_hash = ${tokenHash}
+		returning *`
+	return row && toOrder(row)
+}
+
+/** Drops still-anonymous orders older than the instant (served by `orders_anonymous_created_idx`) */
+export const deleteAnonymousBefore = async (db: Db, createdBefore: Date): Promise<number> => {
+	const deleted = await db.sql`
+		delete from orders
+		where org_id like ${`${anonymousOrgPrefix}%`} and created_at < ${createdBefore}`
+	return deleted.count
+}
+
 // MARK: Payments (M6)
 
 export const insertPayment = async (db: Db, payment: NewPayment): Promise<Payment> => {
@@ -518,6 +586,9 @@ export const createOrdersRepository = (db: Db): OrdersRepository => ({
 	stampDemoApproval: (orderId, approvedAt, window) =>
 		stampDemoApproval(db, orderId, approvedAt, window),
 	initHostingUntil: (orderId, hostingUntil) => initHostingUntil(db, orderId, hostingUntil),
+	getOrderByQuoteToken: (orderId, tokenHash) => getOrderByQuoteToken(db, orderId, tokenHash),
+	claimQuote: (orderId, tokenHash, owner) => claimQuote(db, orderId, tokenHash, owner),
+	deleteAnonymousBefore: createdBefore => deleteAnonymousBefore(db, createdBefore),
 	insertPayment: payment => insertPayment(db, payment),
 	getPayment: id => getPayment(db, id),
 	findPaymentBySession: sessionId => findPaymentBySession(db, sessionId),

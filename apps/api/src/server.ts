@@ -17,6 +17,7 @@ import lifecycleSweeperPlugin from '#/plugins/lifecycleSweeper.ts'
 import metricsPlugin from '#/plugins/metrics.ts'
 import orgPlugin from '#/plugins/org.ts'
 import prunerPlugin from '#/plugins/pruner.ts'
+import quoteSweeperPlugin from '#/plugins/quoteSweeper.ts'
 import s3Plugin from '#/plugins/s3.ts'
 import secretsPlugin from '#/plugins/secrets.ts'
 import sentryPlugin from '#/plugins/sentry.ts'
@@ -32,6 +33,7 @@ import orderService from '#/services/orderService.ts'
 import paymentService from '#/services/paymentService.ts'
 import previewDbService from '#/services/previewDbService.ts'
 import previewStorageService from '#/services/previewStorageService.ts'
+import quoteService from '#/services/quoteService.ts'
 import residentService from '#/services/residentService.ts'
 import showcaseService from '#/services/showcaseService.ts'
 import specService from '#/services/specService.ts'
@@ -82,6 +84,7 @@ export async function createServer({ logLevel }: Options = {}): Promise<FastifyI
 
 		// Services
 		.register(specService)
+		.register(quoteService)
 		.register(jobService)
 		.register(previewDbService)
 		.register(previewStorageService)
@@ -101,6 +104,7 @@ export async function createServer({ logLevel }: Options = {}): Promise<FastifyI
 		// Background schedulers depending on services
 		.register(lifecycleSweeperPlugin)
 		.register(hostingSweeperPlugin)
+		.register(quoteSweeperPlugin)
 
 		// Request plugins
 		.register(errorHandlingPlugin)

@@ -1,0 +1,24 @@
+/* MARK: Layout */
+.layout {
+	display: grid;
+	grid-template-columns: minmax(0, 3fr) minmax(0, 2fr);
+	gap: var(--spacing-base);
+	align-items: start;
+
+	@media (width <= 64rem) {
+		grid-template-columns: 1fr;
+	}
+}
+
+.side {
+	display: flex;
+	flex-direction: column;
+	gap: var(--spacing-s);
+}
+
+/* MARK: Resume */
+.stale {
+	margin: 0;
+	line-height: 1.5;
+	color: var(--secondary-text-color);
+}

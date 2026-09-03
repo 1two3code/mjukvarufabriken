@@ -277,6 +277,18 @@ const bff = {
 		payments,
 	},
 	[`/bff/orders/${orderId}/spec`]: specDraft,
+	// The site's quote page fetches nothing on mount (no stored draft in a fresh browser); the
+	// fixture is what a resumed draft would see, for anyone smoking that state by hand
+	[`/bff/quote/${orderId}`]: {
+		orderId,
+		status: 'ready',
+		spec,
+		messages: specDraft.messages,
+		openQuestions: [],
+		complete: true,
+		priceSek: 4_500,
+		sizeClass: 'M',
+	},
 	[`/bff/orders/${orderId}/jobs`]: [job],
 	[`/bff/jobs/${jobId}`]: job,
 	[`/bff/jobs/${jobId}/events`]: jobEvents,

@@ -45,6 +45,7 @@ const mockPlugin: FastifyPluginAsync = async app => {
 	const mock: FastifyInstance['specService'] = {
 		get: vi.fn((orderId: string) => Promise.resolve(createMockSpecDraft({ orderId }))),
 		sendMessage: vi.fn(),
+		runTurn: vi.fn(),
 		freeze: vi.fn(),
 	}
 

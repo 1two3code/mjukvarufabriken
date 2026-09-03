@@ -24,7 +24,7 @@ export function HomePage() {
 				<h1 className={styles.title}>{t('home.hero.title')}</h1>
 				<p className={styles.lead}>{t('home.hero.lead')}</p>
 				<div className={styles.actions}>
-					<ButtonLink href={import.meta.env.VITE_PORTAL_URL}>{t('home.hero.cta')}</ButtonLink>
+					<ButtonLink to={pathTo('quote')}>{t('home.hero.cta')}</ButtonLink>
 					<ButtonLink to={pathTo('howItWorks')} color="secondary">
 						{t('home.hero.secondary')}
 					</ButtonLink>
@@ -90,7 +90,7 @@ export function HomePage() {
 				<h2>{t('home.cta.title')}</h2>
 				<p className={styles.lead}>{t('home.cta.body')}</p>
 				<div className={styles.actions}>
-					<ButtonLink href={import.meta.env.VITE_PORTAL_URL}>{t('home.hero.cta')}</ButtonLink>
+					<ButtonLink to={pathTo('quote')}>{t('home.hero.cta')}</ButtonLink>
 					<ButtonLink to={pathTo('contact')} color="secondary">
 						{t('home.cta.contact')}
 					</ButtonLink>

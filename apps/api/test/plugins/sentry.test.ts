@@ -7,6 +7,8 @@ vi.mock('@sentry/node', () => ({
 	close: closeMock,
 }))
 
+import { scrubSensitiveHeaders } from '#/plugins/sentry.utils.ts'
+
 describe('Sentry plugin (sentry)', () => {
 	beforeEach(() => {
 		initMock.mockClear()
@@ -28,6 +30,7 @@ describe('Sentry plugin (sentry)', () => {
 		expect(initMock).toHaveBeenCalledWith({
 			dsn: app.secrets.sentryDsn,
 			environment: app.secrets.env,
+			beforeSend: scrubSensitiveHeaders,
 		})
 		expect(captureExceptionMock).toHaveBeenCalledWith(new Error('boom'))
 	})

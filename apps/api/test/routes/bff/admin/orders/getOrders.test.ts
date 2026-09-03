@@ -30,6 +30,24 @@ describe('GET /bff/admin/orders route', () => {
 		).toEqual(['o1', 'o2'])
 	})
 
+	it('Never lists an unclaimed anonymous quote, even to an admin (wave 14 doors shut)', async () => {
+		// Arrange
+		await app.db.orders.insert({ id: 'o1', orgId: 'org-1', name: 'one' })
+		await app.db.orders.insert({
+			id: 'q1',
+			orgId: 'anon:0123456789abcdef0123456789abcdef',
+			name: 'Offert',
+			quoteTokenHash: 'hash',
+		})
+
+		// Act
+		const response = await app.inject({ url })
+
+		// Assert
+		expect(response.statusCode).toBe(200)
+		expect(response.json().map((order: { id: string }) => order.id)).toEqual(['o1'])
+	})
+
 	it('Handles server error with 500 response', async () => {
 		// Arrange
 		vi.spyOn(app.db.orders, 'listOrders').mockRejectedValue(new Error('Fail'))

@@ -1,6 +1,8 @@
 import fp from 'fastify-plugin'
 import * as Sentry from '@sentry/node'
 
+import { scrubSensitiveHeaders } from '#/plugins/sentry.utils.ts'
+
 import type { FastifyInstance, FastifyPluginAsync } from 'fastify'
 
 declare module 'fastify' {
@@ -27,7 +29,7 @@ const plugin: FastifyPluginAsync = async app => {
 		return
 	}
 
-	Sentry.init({ dsn: sentryDsn, environment: env })
+	Sentry.init({ dsn: sentryDsn, environment: env, beforeSend: scrubSensitiveHeaders })
 	app.decorate('sentry', { captureException: error => Sentry.captureException(error) })
 
 	app.addHook('onClose', () => Sentry.close(2000))

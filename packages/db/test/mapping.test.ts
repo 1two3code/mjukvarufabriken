@@ -35,6 +35,7 @@ describe('row mapping', () => {
 				customer_slug: null,
 				hosting_until: null,
 				build_approved_at: null,
+				quote_token_hash: null,
 				created_at: at,
 				updated_at: at,
 			})
@@ -68,6 +69,7 @@ describe('row mapping', () => {
 				customer_slug: 'gym-booking-11111111',
 				hosting_until: at,
 				build_approved_at: at,
+				quote_token_hash: 'hash',
 				created_at: at,
 				updated_at: at,
 			})
@@ -94,6 +96,7 @@ describe('row mapping', () => {
 			customer_slug: null,
 			hosting_until: null,
 			build_approved_at: null,
+			quote_token_hash: null,
 			created_at: at,
 			updated_at: at,
 		}
