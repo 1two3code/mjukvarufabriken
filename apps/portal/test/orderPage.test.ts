@@ -69,6 +69,8 @@ describe('Next step on the order page', () => {
 			...order,
 		},
 		spec: { status: 'drafting', complete, openQuestions: 0 },
+		jobs: [],
+		hosting: { status: 'none', deployUrl: null, reason: null },
 		payments: [],
 	})
 
