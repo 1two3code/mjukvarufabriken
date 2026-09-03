@@ -91,6 +91,27 @@ repair-session staging. **Graduated to:** sandbox/orchestrator fixes in
 
 <!-- New entries above the seed section, newest first. -->
 
+## 2026-09-03 — the first green delivery died overnight: stale database password
+Hasse, next morning: `GET /bff/photos → 500` on the live URL; POST too. CloudWatch (`/mf/dev/express`,
+req-2s3): `PostgresError 28P01 password authentication failed for user "mf_app_9bfd0c56…"`.
+
+- **Root cause:** the OPEN item from yesterday, worse than described. Every redelivery re-keys the
+  app's database role (fresh password — the platform stores none). The green redelivery
+  (41895aa7) found run 8's Express service already running and only *described* it, so the
+  container kept the OLD `DATABASE_URL`. Pooled connections stayed authenticated — the live check
+  and the curls passed — and when the pool recycled, every new connection failed.
+- **Why it slipped:** two correct-in-isolation behaviours composed wrongly: "re-key on every
+  provision" (safe, the password is never stored) and "already exists → it is live" (right for an
+  SDK retry). Nothing exercised them together until a delivery ran twice against one service.
+- **Graduated to:** a redelivery **updates** the existing service (`UpdateExpressGatewayService`
+  with this delivery's image, env, roles, network) and waits until no active configuration is a
+  previous revision before handing out the URL. Job role gains `ecs:UpdateExpressGatewayService`
+  under the same `Service=mf-delivery` resource-tag fence. Unit test pins Create → Describe →
+  Update → rollout wait, with the fresh `DATABASE_URL` in the update.
+- **Follow-up worth doing:** the live check passed on pooled connections. A probe that opens a
+  *fresh* connection (or the app's `/health` checking the database) would have caught it.
+
+
 ## 2026-09-02 — job 41895aa7 (Ögonblick, redeliver of run 8) — FIRST FULLY GREEN DELIVERY
 33 010 tokens (~USD 0.10). `docs → secret-scan → repo → deploy → acceptance → bundle` all green,
 `status: delivered` **with** `deployUrl`:

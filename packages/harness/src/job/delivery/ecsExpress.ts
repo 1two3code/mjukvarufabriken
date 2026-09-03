@@ -4,6 +4,7 @@ import {
 	CreateExpressGatewayServiceCommand,
 	DescribeExpressGatewayServiceCommand,
 	ECSClient,
+	UpdateExpressGatewayServiceCommand,
 } from '@aws-sdk/client-ecs'
 
 /** The api's auth env (the same `previewAuth` the App Runner client wrote into `apprunner.yaml`) */
@@ -241,8 +242,66 @@ export const createEcsExpressDeployClient = ({
 		} catch (error) {
 			if (!isAlreadyCreated(error)) throw error
 			const existing = await describe(serviceArnOf(name)).catch(() => undefined)
-			if (existing?.serviceArn) return existing
-			throw error
+			if (!existing?.serviceArn) throw error
+			return updateExisting(existing, createInput)
+		}
+	}
+
+	/**
+	 * A service that already exists is UPDATED with this delivery's image, environment, roles and
+	 * network, and the call waits until the previous revision has drained. Describing it and
+	 * handing out the old URL — what this did until 2026-09-03 — is right for an SDK retry and
+	 * wrong for a redelivery: the first green delivery (41895aa7) re-keyed the app's database
+	 * role, never pushed the new password to the running container, and the app died the moment
+	 * its connection pool recycled (`28P01 password authentication failed`).
+	 */
+	const updateExisting = async (
+		existing: ECSExpressGatewayService,
+		createInput: ConstructorParameters<typeof CreateExpressGatewayServiceCommand>[0]
+	) => {
+		const serviceArn = existing.serviceArn!
+		const previousRevisions = new Set(
+			(existing.activeConfigurations ?? []).map(configuration => configuration.serviceRevisionArn)
+		)
+		const {
+			executionRoleArn,
+			taskRoleArn,
+			networkConfiguration,
+			healthCheckPath,
+			cpu,
+			memory,
+			primaryContainer,
+		} = createInput
+		await client.send(
+			new UpdateExpressGatewayServiceCommand({
+				serviceArn,
+				...(executionRoleArn && { executionRoleArn }),
+				...(taskRoleArn && { taskRoleArn }),
+				...(networkConfiguration && { networkConfiguration }),
+				...(healthCheckPath && { healthCheckPath }),
+				...(cpu && { cpu }),
+				...(memory && { memory }),
+				...(primaryContainer && { primaryContainer }),
+			})
+		)
+		// Rolled out = no active configuration is one of the previous revisions any more
+		const deadline = now() + timeoutMs
+		for (;;) {
+			const current = await describe(serviceArn)
+			const active = current?.activeConfigurations ?? []
+			const rolled =
+				active.length > 0 &&
+				active.every(configuration => !previousRevisions.has(configuration.serviceRevisionArn))
+			if (rolled) return current
+			const status = current?.status?.statusCode
+			if (status && status !== 'ACTIVE')
+				{throw new Error(`ECS Express service ${serviceArn} is ${status}`)}
+			if (now() >= deadline) {
+				throw new Error(
+					`ECS Express service ${serviceArn} did not roll out the redelivered revision in time`
+				)
+			}
+			await sleep(pollIntervalMs)
 		}
 	}
 
@@ -361,7 +420,10 @@ const fakeServiceReport = (
 			primaryContainer: {
 				image: `000000000000.dkr.ecr.eu-north-1.amazonaws.com/mf-deliverables:${name}`,
 				containerPort: 80,
-				environment: Object.entries(env ?? {}).map(([envName, value]) => ({ name: envName, value })),
+				environment: Object.entries(env ?? {}).map(([envName, value]) => ({
+					name: envName,
+					value,
+				})),
 			},
 		},
 	}

@@ -785,7 +785,9 @@ export class ResourcesStack extends Stack {
 		this.jobTaskDefinition.taskRole.addToPrincipalPolicy(
 			new PolicyStatement({
 				sid: 'EcsExpressDescribePreviewServices',
-				actions: ['ecs:DescribeExpressGatewayService'],
+				// Update: a redelivery rolls the existing service to this delivery's image/env
+				// (2026-09-03: without it the re-keyed database password never reached the container)
+				actions: ['ecs:DescribeExpressGatewayService', 'ecs:UpdateExpressGatewayService'],
 				resources: ['*'],
 				conditions: { StringEquals: { 'aws:ResourceTag/Service': 'mf-delivery' } },
 			})
