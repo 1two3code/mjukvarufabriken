@@ -116,15 +116,27 @@ export const toPayment = (row: PaymentRow): Payment => ({
 // MARK: Spec draft
 
 export const getOrder = async (db: Db, orderId: string): Promise<SpecDraft | undefined> => {
+	if (!isUuid(orderId)) return undefined
 	const [row] = await db.sql<OrderRow[]>`select * from orders where id = ${orderId}`
 	return row && toSpecDraft(row)
 }
 
-export const listOrders = async (db: Db, filter: { orgId?: string } = {}): Promise<SpecDraft[]> => {
+/**
+ * The list predicate shared by both list reads: an optional org, and never an unclaimed
+ * anonymous quote (`anon:*`, wave 14) — filtered here, inside the `limit 200`, so a pile of
+ * unclaimed quotes cannot crowd real orders out of the admin's (or an org's) page.
+ */
+const listWhere = (db: Db, filter: { orgId?: string }) => {
 	const { sql } = db
-	const rows = await sql<OrderRow[]>`
+	return sql`
+		where org_id not like ${`${anonymousOrgPrefix}%`}
+		${filter.orgId === undefined ? sql`` : sql`and org_id = ${filter.orgId}`}`
+}
+
+export const listOrders = async (db: Db, filter: { orgId?: string } = {}): Promise<SpecDraft[]> => {
+	const rows = await db.sql<OrderRow[]>`
 		select * from orders
-		where true ${filter.orgId === undefined ? sql`` : sql`and org_id = ${filter.orgId}`}
+		${listWhere(db, filter)}
 		order by created_at desc
 		limit 200`
 	return rows.map(toSpecDraft)
@@ -203,6 +215,7 @@ export const insertOrder = async (db: Db, order: NewOrder): Promise<Order> => {
 }
 
 export const getOrderRecord = async (db: Db, orderId: string): Promise<Order | undefined> => {
+	if (!isUuid(orderId)) return undefined
 	const [row] = await db.sql<OrderRow[]>`select * from orders where id = ${orderId}`
 	return row && toOrder(row)
 }
@@ -211,10 +224,9 @@ export const listOrderRecords = async (
 	db: Db,
 	filter: { orgId?: string } = {}
 ): Promise<Order[]> => {
-	const { sql } = db
-	const rows = await sql<OrderRow[]>`
+	const rows = await db.sql<OrderRow[]>`
 		select * from orders
-		where true ${filter.orgId === undefined ? sql`` : sql`and org_id = ${filter.orgId}`}
+		${listWhere(db, filter)}
 		order by created_at desc
 		limit 200`
 	return rows.map(toOrder)
@@ -419,12 +431,17 @@ export const stampDemoApproval = async (
 
 // MARK: Anonymous quotes (wave 14, F1 — migration 0025)
 
-/** The order when it still carries exactly this quote token hash (`undefined` otherwise) */
+/**
+ * The order when it still carries exactly this quote token hash (`undefined` otherwise). The
+ * public quote routes take the id straight from the URL, so a non-uuid is "not found" here
+ * rather than a Postgres 22P02 (and a 500 in Sentry) — same guard as the payment lookups.
+ */
 export const getOrderByQuoteToken = async (
 	db: Db,
 	orderId: string,
 	tokenHash: string
 ): Promise<Order | undefined> => {
+	if (!isUuid(orderId)) return undefined
 	const [row] = await db.sql<OrderRow[]>`
 		select * from orders where id = ${orderId} and quote_token_hash = ${tokenHash}`
 	return row && toOrder(row)
@@ -440,6 +457,7 @@ export const claimQuote = async (
 	tokenHash: string,
 	owner: OrderOwner
 ): Promise<Order | undefined> => {
+	if (!isUuid(orderId)) return undefined
 	const [row] = await db.sql<OrderRow[]>`
 		update orders set
 			org_id = ${owner.orgId},

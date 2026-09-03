@@ -168,8 +168,11 @@ export const createMemoryRepositories = (): MemoryRepositories => {
 				new Date(order.buildApprovedAt) >= since
 		).length
 
+	// Unclaimed anonymous quotes are never listed (the SQL `listWhere`), and the filter runs
+	// before the 200 cap like the SQL predicate does
 	const listEntries = (filter: { orgId?: string }) =>
 		[...orders.values()]
+			.filter(entry => !isAnonymousOrgId(entry.order.orgId))
 			.filter(entry => filter.orgId === undefined || entry.order.orgId === filter.orgId)
 			.sort((a, b) => b.order.createdAt.localeCompare(a.order.createdAt))
 
@@ -540,7 +543,9 @@ export const createMemoryRepositories = (): MemoryRepositories => {
 				const { status, ...fields } = draft
 				existing.order = { ...existing.order, status, updatedAt: now() }
 				applyDraftFields(existing.order, fields)
-				existing.draft = clone(fields)
+				// The SQL update never writes `org_id`: a claim that landed while the engine was
+				// thinking keeps the new owner, whatever org the turn captured before it started
+				existing.draft = { ...clone(fields), orgId: existing.draft.orgId }
 				return clone(toDraft(existing))
 			},
 

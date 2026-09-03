@@ -101,6 +101,7 @@ export type PaymentPaid = Pick<Payment, 'eventId' | 'hostedInvoiceUrl' | 'receip
  */
 export type OrdersRepository = {
 	get: (orderId: string) => Promise<SpecDraft | undefined>
+	/** Newest 200 drafts, optionally one org's; unclaimed anonymous quotes (`anon:*`) never */
 	list: (filter?: { orgId?: string }) => Promise<SpecDraft[]>
 	/**
 	 * Inserts or replaces the whole draft; `createdBy` is only written on insert and the order
@@ -117,6 +118,11 @@ export type OrdersRepository = {
 	/** Creates a `drafting` order with an api-minted id */
 	insert: (order: NewOrder) => Promise<Order>
 	getOrder: (orderId: string) => Promise<Order | undefined>
+	/**
+	 * Newest 200 orders, optionally one org's. Unclaimed anonymous quotes (`anon:*`, wave 14) are
+	 * excluded inside the cap — listed for nobody, admins included — so they cannot crowd real
+	 * orders out of the page.
+	 */
 	listOrders: (filter?: { orgId?: string }) => Promise<Order[]>
 	/** Atomic compare-and-set on the status; `undefined` when missing or not in `from` */
 	transition: (
