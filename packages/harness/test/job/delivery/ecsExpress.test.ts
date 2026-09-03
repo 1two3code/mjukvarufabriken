@@ -1,6 +1,7 @@
 import {
 	CreateExpressGatewayServiceCommand,
 	DescribeExpressGatewayServiceCommand,
+	UpdateExpressGatewayServiceCommand,
 } from '@aws-sdk/client-ecs'
 
 import { previewServiceName } from '#job/delivery/deliver.ts'
@@ -350,37 +351,69 @@ describe('ECS Express deploy client', () => {
 		expect(container.awsLogsConfiguration?.logGroup).toBe('/mf/local/express')
 	})
 
-	it('Returns the already-live service on a non-idempotent create error (describe fallback)', async () => {
-		// Arrange — Create throws the SDK-retry idempotency error; Describe finds the live service
+	it('Updates an already-existing service with this delivery and waits for the old revision to drain', async () => {
+		// Arrange — Create says it exists; Describe shows revision 1 until the Update landed, then
+		// revision 2 (the rollout). The first green delivery re-keyed the database and never pushed
+		// the new password to the running container: this is the path that fixes that.
 		const sent: Sent[] = []
+		let updated = false
+		let describesAfterUpdate = 0
+		const revision = (arn: string, endpoint = 'svc.eu-north-1.on.aws') => ({
+			serviceArn: 'arn:svc',
+			status: { statusCode: 'ACTIVE' },
+			activeConfigurations: [
+				{ serviceRevisionArn: arn, ingressPaths: [{ accessType: 'PUBLIC', endpoint }] },
+			],
+		})
 		const send = async (command: { constructor: unknown; input: Record<string, unknown> }) => {
 			sent.push({ name: (command.constructor as { name: string }).name, input: command.input })
 			if (command instanceof CreateExpressGatewayServiceCommand) {
 				throw new Error('Creation of service was not idempotent')
 			}
+			if (command instanceof UpdateExpressGatewayServiceCommand) {
+				updated = true
+				return {}
+			}
 			if (command instanceof DescribeExpressGatewayServiceCommand) {
-				return { service: service('svc.eu-north-1.on.aws') }
+				if (!updated) return { service: revision('rev-1') }
+				describesAfterUpdate += 1
+				// One describe still on the old revision, then the rollout is through
+				return { service: revision(describesAfterUpdate > 1 ? 'rev-2' : 'rev-1') }
 			}
 			throw new Error('unexpected command')
 		}
-		const deploy = deployClient({ send } as unknown as EcsClientLike)
+		const deploy = deployClient({ send } as unknown as EcsClientLike, {
+			sleep: async () => {},
+			pollIntervalMs: 0,
+		})
 
-		// Act — must not throw: the service is live, delivery just has to hand out its URL
+		// Act
 		const { url } = await deploy.deployFromRepo({
 			serviceName: 'mf-11111111-gym',
 			repositoryUrl: 'https://github.com/x/new',
 			branch: 'main',
 			source: { bucket: 'mf-artifacts-test', key: 'deliverables/11111111/source.zip' },
+			env: { DATABASE_URL: 'postgres://app:fresh-password@db/app' },
 		})
 
-		// Assert — Create failed, Describe (by the constructed service ARN) recovered the URL
+		// Assert — Create failed, Describe found it, Update carried THIS delivery's env, and the
+		// URL was handed out only after no active configuration was the previous revision
 		expect(url).toBe('https://svc.eu-north-1.on.aws')
 		expect(names(sent)).toEqual([
 			'CreateExpressGatewayServiceCommand',
 			'DescribeExpressGatewayServiceCommand',
+			'UpdateExpressGatewayServiceCommand',
+			'DescribeExpressGatewayServiceCommand',
+			'DescribeExpressGatewayServiceCommand',
 		])
-		expect(sent[1]!.input).toMatchObject({
-			serviceArn: expect.stringContaining('service/default/mf-11111111-gym'),
+		const update = sent[2]!.input as {
+			serviceArn: string
+			primaryContainer: { environment: { name: string; value: string }[] }
+		}
+		expect(update.serviceArn).toBe('arn:svc')
+		expect(update.primaryContainer.environment).toContainEqual({
+			name: 'DATABASE_URL',
+			value: 'postgres://app:fresh-password@db/app',
 		})
 	})
 
@@ -453,7 +486,13 @@ describe('ECS Express deploy client', () => {
 
 	it('customerTagValue ALWAYS yields a fenceable slug — even for degenerate names', () => {
 		// The delivery must never mint an un-teardownable Customer tag (the mf-familyhub orphan).
-		for (const name of ['mf-11111111-', 'mf-11111111-!!!', '!!!', 'mf-abcdef12-My_App!!', 'mf-11111111-a']) {
+		for (const name of [
+			'mf-11111111-',
+			'mf-11111111-!!!',
+			'!!!',
+			'mf-abcdef12-My_App!!',
+			'mf-11111111-a',
+		]) {
 			expect(isFenceableSlug(customerTagValue(name))).toBe(true)
 		}
 	})

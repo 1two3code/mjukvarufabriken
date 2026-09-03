@@ -100,6 +100,7 @@ describe('security baseline', () => {
 						'ecs:CreateExpressGatewayService',
 						'ecs:TagResource',
 						'ecs:DescribeExpressGatewayService',
+						'ecs:UpdateExpressGatewayService',
 						'ecs:RegisterTaskDefinition',
 						'iam:PassRole',
 					])
