@@ -3,8 +3,9 @@
 -- apps ("the factory is the marketing department", docs/backlog/strategy-2026-08-31.md).
 --
 -- One row per order, keyed by the order so the row follows the order's lifecycle: the public list
--- JOINs orders and drops `lifecycle = 'torn_down'`, so a torn-down app disappears from the gallery
--- without a hook in the teardown path. `url` is the live URL shown to visitors — it defaults to the
+-- JOINs orders and keeps only `lifecycle = 'active'` (a suspend deletes the compute just like a
+-- teardown), so a suspended or torn-down app disappears from the gallery without a hook in either
+-- path. `url` is the live URL shown to visitors — it defaults to the
 -- order's latest delivered deployUrl when the admin leaves it out, but is stored explicitly so the
 -- gallery never has to parse job events, and an admin can point it elsewhere (a custom domain).
 -- Null only on an unpublished draft: publishing requires a URL (the api refuses otherwise).

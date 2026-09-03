@@ -480,8 +480,8 @@ export type ShowcasesRepository = {
 	/** Every row with its order's name/status/lifecycle, gallery order first (admin view) */
 	list: () => Promise<ShowcaseAdminRow[]>
 	/**
-	 * The public gallery: published rows with a URL whose order is not `torn_down`, `sort`
-	 * ascending then newest change first
+	 * The public gallery: published rows with a URL whose order's lifecycle is `active` (a
+	 * suspended app is as offline as a torn-down one), `sort` ascending then newest change first
 	 */
 	listPublished: () => Promise<ShowcaseItem[]>
 }

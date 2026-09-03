@@ -102,15 +102,16 @@ export const listShowcases = async (db: Db): Promise<ShowcaseAdminRow[]> => {
 }
 
 /**
- * The public gallery: published rows with a URL whose order is not torn down — so a teardown
- * hides the demo with no hook of its own. Gallery order (`sort` ascending, then newest change).
+ * The public gallery: published rows with a URL whose order is `active` — a suspend tears the
+ * compute down too (a reversible cost-stop), so both it and a teardown hide the demo with no hook
+ * of their own. Gallery order (`sort` ascending, then newest change).
  */
 export const listPublishedShowcases = async (db: Db): Promise<ShowcaseItem[]> => {
 	const rows = await db.sql<(ShowcaseRow & { url: string })[]>`
 		select s.*
 		from showcases s
 		join orders o on o.id = s.order_id
-		where s.published and s.url is not null and o.lifecycle <> 'torn_down'
+		where s.published and s.url is not null and o.lifecycle = 'active'
 		order by s.sort asc, s.updated_at desc
 		limit 200`
 	return rows.map(row => toShowcaseItem({ ...toShowcase(row), url: row.url }))

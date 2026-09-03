@@ -725,7 +725,7 @@ export const createMemoryRepositories = (): MemoryRepositories => {
 					.flatMap(showcase => {
 						const order = orders.get(showcase.orderId)?.order
 						if (!showcase.published || showcase.url === undefined || !order) return []
-						if (order.lifecycle === 'torn_down') return []
+						if (order.lifecycle !== 'active') return []
 						return [toShowcaseItem({ ...showcase, url: showcase.url })]
 					})
 					.slice(0, 200),

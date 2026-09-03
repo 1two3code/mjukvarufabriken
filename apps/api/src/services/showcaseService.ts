@@ -41,8 +41,9 @@ declare module 'fastify' {
 	interface FastifyInstance {
 		showcaseService: {
 			/**
-			 * The public demo gallery (`GET /bff/showcases`): published rows whose order is not torn
-			 * down, in gallery order. Throws `ShowcaseRateLimited` when `ip` exceeds the window's cap.
+			 * The public demo gallery (`GET /bff/showcases`): published rows whose order is still
+			 * `active` (neither suspended nor torn down), in gallery order. Throws
+			 * `ShowcaseRateLimited` when `ip` exceeds the window's cap.
 			 */
 			listPublished: (ip: string) => Promise<ShowcaseItem[]>
 			/** Every showcase row with its order's name/status/lifecycle (admin view) */

@@ -106,7 +106,7 @@ describe('showcases repository', () => {
 			expect(rows[1]).toMatchObject({ orderName: 'Bakery', published: false })
 		})
 
-		it('Publishes only published rows with a url whose order is not torn down, in gallery order', async () => {
+		it('Publishes only published rows with a url whose order is active, in gallery order', async () => {
 			const repos = await seed()
 			await repos.showcases.upsert(upsert({ orderId: 'o1', sort: 5 }))
 			await repos.showcases.upsert(upsert({ orderId: 'o2', sort: 1 }))
@@ -115,8 +115,12 @@ describe('showcases repository', () => {
 			await repos.showcases.upsert(upsert({ orderId: 'o4', published: false }))
 			await repos.orders.insert({ id: 'o5', orgId: 'org', name: 'No url' })
 			await repos.showcases.upsert(upsert({ orderId: 'o5', published: false, url: null }))
-			// o3 is torn down after being published — it must vanish without any showcase write
+			await repos.orders.insert({ id: 'o6', orgId: 'org', name: 'Suspended' })
+			await repos.showcases.upsert(upsert({ orderId: 'o6', sort: 0 }))
+			// o3 is torn down and o6 suspended after being published — a suspend deletes the compute
+			// too, so both must vanish without any showcase write
 			await repos.orders.setLifecycle('o3', ['active'], 'torn_down')
+			await repos.orders.setLifecycle('o6', ['active'], 'suspended')
 
 			const items = await repos.showcases.listPublished()
 

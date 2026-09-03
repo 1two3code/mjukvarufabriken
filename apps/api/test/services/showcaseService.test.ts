@@ -148,6 +148,24 @@ describe('Showcase Service', () => {
 			).resolves.toBe(1)
 		})
 
+		it('Hides a published showcase once its order is suspended or torn down', async () => {
+			// Arrange: a suspend deletes the compute (accountService), so the link would be dead
+			await app.db.orders.insert({ id: 'order-2', orgId: 'org-1', name: 'Bakery' })
+			await app.showcaseService.upsert('order-1', input({ url: liveUrl }))
+			await app.showcaseService.upsert('order-2', input({ url: 'https://bakery.example' }))
+			await app.db.orders.setLifecycle('order-1', ['active'], 'suspended')
+			await app.db.orders.setLifecycle('order-2', ['active'], 'torn_down')
+
+			// Act
+			const items = await app.showcaseService.listPublished(ip)
+
+			// Assert: no showcase write was needed for either to vanish
+			expect(items).toEqual([])
+			await expect(app.db.showcases.getByOrder('order-1')).resolves.toMatchObject({
+				published: true,
+			})
+		})
+
 		it('Rate-limits an ip within the window and resumes after it', async () => {
 			// Arrange
 			vi.useFakeTimers({ toFake: ['Date'] })
