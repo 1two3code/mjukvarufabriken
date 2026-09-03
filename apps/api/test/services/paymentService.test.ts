@@ -1,9 +1,11 @@
 import { EntityNotFound } from '#/lib/entityError.ts'
-import { createMockJob } from '#/plugins/__mocks__/db.ts'
+import { createMockJob, createMockJobEvent } from '#/plugins/__mocks__/db.ts'
 import { createMockPaymentEvent, mockSessionId } from '#/plugins/__mocks__/stripe.ts'
+import { createMockDeliverable } from '#/services/__mocks__/jobService.ts'
 import { createMockResidentUsageRecord } from '#/services/__mocks__/residentService.ts'
 import { InvalidOrderTransition } from '#/services/orderService.ts'
 import {
+	BalanceAwaitsPreview,
 	FakeProviderInactive,
 	maxUsageIdentifierLength,
 	PaymentNotDue,
@@ -33,6 +35,28 @@ describe('Payment Service', () => {
 			await app.orderService.transition(order.id, step)
 		}
 		return app.orderService.get(order.id, user)
+	}
+
+	/**
+	 * The order's build delivered — with a live preview URL in its final `bundle` event, or
+	 * without one (`unhosted`: repo + bundle honoured, the URL withheld)
+	 */
+	const deliveredJob = (orderId: string, deployUrl: string | null) => {
+		vi.spyOn(app.db.jobs, 'list').mockResolvedValue([
+			createMockJob({ id: 'job-1', orderId, status: 'delivered' }),
+		])
+		vi.spyOn(app.db.jobs, 'listEvents').mockResolvedValue([
+			createMockJobEvent({
+				id: 9,
+				jobId: 'job-1',
+				type: 'delivery',
+				payload: {
+					step: 'bundle',
+					ok: true,
+					deliverable: createMockDeliverable({ jobId: 'job-1', deployUrl }),
+				},
+			}),
+		])
 	}
 
 	beforeEach(async () => {
@@ -130,13 +154,40 @@ describe('Payment Service', () => {
 
 		it('Sees a delivered build before gating the balance, without a prior order page read', async () => {
 			const order = await createOrder('building')
-			vi.spyOn(app.db.jobs, 'list').mockResolvedValue([
-				createMockJob({ orderId: order.id, status: 'delivered' }),
-			])
+			deliveredJob(order.id, 'https://mf-x.on.aws')
 
 			await expect(app.paymentService.checkout(order.id, 'balance', user)).resolves.toMatchObject({
 				payment: { kind: 'balance' },
 			})
+			await expect(app.orderService.get(order.id, user)).resolves.toMatchObject({
+				status: 'delivered',
+			})
+		})
+
+		it('Takes the balance of a delivered order whose preview is live', async () => {
+			const order = await createOrder('delivered')
+			deliveredJob(order.id, 'https://mf-x.on.aws')
+
+			await expect(app.paymentService.checkout(order.id, 'balance', user)).resolves.toMatchObject({
+				payment: { kind: 'balance', status: 'pending' },
+			})
+			expect(app.paymentProvider.createCheckoutSession).toHaveBeenCalledWith(
+				expect.objectContaining({ kind: 'balance', share: 0.5 })
+			)
+		})
+
+		it('Refuses the balance while the delivered preview is down — nothing is due until it works', async () => {
+			// Hasse, 2026-09-03: the customer bought a hosted app. Repo + bundle are delivered, the
+			// preview URL was withheld: "Deliver again" first, the balance after.
+			const order = await createOrder('delivered')
+			deliveredJob(order.id, null)
+
+			await expect(app.paymentService.checkout(order.id, 'balance', user)).rejects.toBeInstanceOf(
+				BalanceAwaitsPreview
+			)
+			expect(app.paymentProvider.createCheckoutSession).not.toHaveBeenCalled()
+			await expect(app.db.orders.listPayments(order.id)).resolves.toHaveLength(0)
+			// The order itself stays delivered: the gate is on the payment, not on the delivery
 			await expect(app.orderService.get(order.id, user)).resolves.toMatchObject({
 				status: 'delivered',
 			})
@@ -399,9 +450,7 @@ describe('Payment Service', () => {
 
 		it('Marks the balance paid and closes the order', async () => {
 			const order = await createOrder('delivered')
-			vi.spyOn(app.db.jobs, 'list').mockResolvedValue([
-				createMockJob({ orderId: order.id, status: 'delivered' }),
-			])
+			deliveredJob(order.id, 'https://mf-x.on.aws')
 			const { payment } = await app.paymentService.checkout(order.id, 'balance', user)
 			vi.mocked(app.paymentProvider.constructWebhookEvent).mockReturnValueOnce(
 				createMockPaymentEvent({ id: 'evt_b', sessionId: payment.sessionId })

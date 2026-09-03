@@ -10,6 +10,7 @@ vi.stubGlobal('localStorage', {
 	removeItem: () => undefined,
 })
 const { nextStep } = await import('#/features/orders/nextStep.ts')
+const { balanceAwaitsPreview } = await import('#/features/orders/payments.ts')
 
 const event = (id: number, payload: Record<string, unknown>, type: JobEvent['type'] = 'delivery') =>
 	({ id, jobId: 'job-1', type, payload, createdAt: '2026-09-02T00:00:00.000Z' }) as JobEvent
@@ -141,5 +142,15 @@ describe('Order next step', () => {
 		expect(nextStep(detail('delivered', 'unhosted'))).toBe('balanceUnhosted')
 		expect(nextStep(detail('building', 'none'))).toBe('building')
 		expect(nextStep(detail('paid', 'unhosted'))).toBe('done')
+	})
+
+	it('Holds the balance while the delivered preview is down (Hasse, 2026-09-03)', () => {
+		// The payment panel explains instead of offering the pay button; the api refuses it too
+		expect(balanceAwaitsPreview(detail('delivered', 'unhosted'))).toBe(true)
+		expect(balanceAwaitsPreview(detail('delivered', 'live'))).toBe(false)
+		expect(balanceAwaitsPreview(detail('delivered', 'none'))).toBe(false)
+		// Not delivered yet, or already closed: the flag is about the balance row only
+		expect(balanceAwaitsPreview(detail('building', 'none'))).toBe(false)
+		expect(balanceAwaitsPreview(detail('paid', 'unhosted'))).toBe(false)
 	})
 })
