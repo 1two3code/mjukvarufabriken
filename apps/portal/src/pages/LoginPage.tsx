@@ -27,9 +27,12 @@ export function LoginPage() {
 	const [requestMagicLink, { isLoading, isError }] = useRequestMagicLinkMutation()
 
 	// `/login?redirect=/claim?…` (the site's quote hand-off): the magic link comes back without
-	// it, so remember where to go once the link has been verified
+	// it, so remember where to go once the link has been verified. Already signed in, the
+	// redirect is taken right now and must not be stored for some later sign-in to replay
 	const redirect = searchParams.get('redirect')
-	useEffectOnce(() => rememberPostLoginRedirect(redirect))
+	useEffectOnce(() => {
+		if (!token) rememberPostLoginRedirect(redirect)
+	})
 
 	if (token) return <Navigate to={safeRedirect(redirect)} replace />
 

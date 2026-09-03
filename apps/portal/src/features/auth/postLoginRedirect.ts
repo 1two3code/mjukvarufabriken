@@ -11,10 +11,14 @@ const storageKey = 'postLoginRedirect'
 export const safeRedirect = (value: string | null | undefined) =>
 	value && value.startsWith('/') && !value.startsWith('//') ? value : '/'
 
+/**
+ * Remembers a safe redirect for the next sign-in — or, with none, forgets any earlier one, so a
+ * plain `/login` visit never replays a stale `/claim?…token` from a previous hand-off.
+ */
 export const rememberPostLoginRedirect = (value: string | null) => {
 	try {
-		if (safeRedirect(value) === '/') return
-		localStorage.setItem(storageKey, value as string)
+		if (safeRedirect(value) === '/') localStorage.removeItem(storageKey)
+		else localStorage.setItem(storageKey, value as string)
 	} catch {
 		// Storage unavailable (private mode, blocked): the visitor simply lands on the home page
 	}

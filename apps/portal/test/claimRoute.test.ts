@@ -1,7 +1,11 @@
 import { readFileSync } from 'node:fs'
 import { join } from 'node:path'
 
-import { safeRedirect } from '#/features/auth/postLoginRedirect.ts'
+import {
+	rememberPostLoginRedirect,
+	safeRedirect,
+	takePostLoginRedirect,
+} from '#/features/auth/postLoginRedirect.ts'
 
 const root = join(import.meta.dirname, '..')
 const read = (path: string) => readFileSync(join(root, path), 'utf8')
@@ -29,5 +33,30 @@ describe('Quote claim route', () => {
 		[undefined, '/'],
 	])('safeRedirect(%s) → %s', (value, expected) => {
 		expect(safeRedirect(value)).toBe(expected)
+	})
+
+	it('Remembers a safe redirect once, and a login visit without one forgets it', () => {
+		// Arrange — a minimal localStorage (the portal tests run in node)
+		const store = new Map<string, string>()
+		vi.stubGlobal('localStorage', {
+			getItem: (key: string) => store.get(key) ?? null,
+			setItem: (key: string, value: string) => store.set(key, value),
+			removeItem: (key: string) => store.delete(key),
+		})
+
+		// Act + Assert — remembered, then consumed exactly once
+		rememberPostLoginRedirect('/claim?order=o1&token=abc')
+		expect(takePostLoginRedirect()).toBe('/claim?order=o1&token=abc')
+		expect(takePostLoginRedirect()).toBeNull()
+
+		// A stale hand-off does not survive a plain `/login` (no redirect) or an unsafe one
+		rememberPostLoginRedirect('/claim?order=o1&token=abc')
+		rememberPostLoginRedirect(null)
+		expect(takePostLoginRedirect()).toBeNull()
+		rememberPostLoginRedirect('/claim?order=o1&token=abc')
+		rememberPostLoginRedirect('https://evil.example/claim')
+		expect(takePostLoginRedirect()).toBeNull()
+
+		vi.unstubAllGlobals()
 	})
 })
