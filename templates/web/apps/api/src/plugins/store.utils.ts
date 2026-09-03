@@ -95,9 +95,24 @@ export const ensureTableSql = `CREATE TABLE IF NOT EXISTS ${storeTable} (
 )`
 
 /**
+ * A stored value as it comes back from the driver. The `postgres` driver parses `jsonb` columns
+ * into objects — but rows written before 2026-09-03 hold a JSON *string* (the store used to
+ * stringify the value itself while the driver, having learnt from the prepared statement that the
+ * parameter is jsonb, stringified it again). Those rows are healed on read; nothing is rewritten.
+ * That double encoding is what broke the first live app's gallery: every record came back as a
+ * string, so every field read off it was undefined.
+ */
+const valueOf = (row: Record<string, unknown>): unknown =>
+	typeof row.value === 'string' ? JSON.parse(row.value) : row.value
+
+/**
  * Durable backend over Postgres. Same semantics as the in-memory one: `list` returns values in
  * insertion order (a `put` on an existing id keeps its place), values round-trip through JSON.
  * The store never connects until the first operation — see `ensureTableSql`.
+ *
+ * `put` hands the driver the VALUE, not JSON text: the `postgres` driver serialises a parameter
+ * according to the type the server describes for it (`$3::jsonb` → `JSON.stringify`), so
+ * pre-stringifying encodes it twice.
  */
 export const createPostgresStore = (query: Query, close: () => Promise<void>): StoreBackend => {
 	let ready: Promise<void> | undefined
@@ -114,7 +129,7 @@ export const createPostgresStore = (query: Query, close: () => Promise<void>): S
 				`SELECT value FROM ${storeTable} WHERE collection = $1 AND id = $2`,
 				[collection, id]
 			)
-			return rows[0]?.value as never
+			return rows[0] === undefined ? undefined : (valueOf(rows[0]) as never)
 		},
 		list: async collection => {
 			await ensureTable()
@@ -122,14 +137,14 @@ export const createPostgresStore = (query: Query, close: () => Promise<void>): S
 				`SELECT value FROM ${storeTable} WHERE collection = $1 ORDER BY created_at, id`,
 				[collection]
 			)
-			return rows.map(row => row.value as never)
+			return rows.map(row => valueOf(row) as never)
 		},
 		put: async (collection, id, value) => {
 			await ensureTable()
 			await query(
 				`INSERT INTO ${storeTable} (collection, id, value) VALUES ($1, $2, $3::jsonb)
 				ON CONFLICT (collection, id) DO UPDATE SET value = EXCLUDED.value, updated_at = now()`,
-				[collection, id, JSON.stringify(value)]
+				[collection, id, value]
 			)
 		},
 		delete: async (collection, id) => {

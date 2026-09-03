@@ -91,6 +91,28 @@ repair-session staging. **Graduated to:** sandbox/orchestrator fixes in
 
 <!-- New entries above the seed section, newest first. -->
 
+## 2026-09-03 — live app, second defect of the morning: store rows double-encoded
+After #127 rolled the fresh password (redelivery fb5e676f, green, URL kept): `GET /bff/photos`
+200 `[]`, `POST /bff/photos` 201 with the object under the app's S3 prefix and a presigned URL
+that serves it — **uploads work end to end** — and then `GET /bff/photos` 500 once a row exists:
+`TypeError: Cannot read properties of undefined (reading 'replace')` in `objectStorage.url`,
+because every field of the record read back was undefined.
+
+- **Root cause:** the template store's `put` bound `JSON.stringify(value)` to `$3::jsonb`. The
+  `postgres` driver learns from the prepared statement that the parameter is jsonb and applies
+  its own serializer (`JSON.stringify`) — so the record was encoded twice and came back from
+  `list` as a JSON *string*. Nothing in the unit tests could see it: the fake `query` recorded the
+  parameter and never involved the driver.
+- **Graduated to:** `put` hands the driver the value; `get`/`list` heal a string value on read
+  (rows the old store wrote), tested both ways.
+- **Two lessons, both already on this page in other clothes:** (1) a test double that skips the
+  real driver cannot see what the driver does to your parameters — the store needs one test
+  against a real Postgres; (2) the live acceptance check probes GET routes on an empty database
+  and passed; a write-then-read probe would have caught this.
+- **App-side again:** run 8's repository carries the old store — a rebuild is the path to a green
+  gallery for this app; every later build inherits the fix.
+
+
 ## 2026-09-03 — the first green delivery died overnight: stale database password
 Hasse, next morning: `GET /bff/photos → 500` on the live URL; POST too. CloudWatch (`/mf/dev/express`,
 req-2s3): `PostgresError 28P01 password authentication failed for user "mf_app_9bfd0c56…"`.
