@@ -567,17 +567,42 @@ const plugin: FastifyPluginAsync = async app => {
 	}
 
 	/**
+	 * True when another job of the order already delivered with a live URL — the hosting window
+	 * was started by THAT delivery. If the order has no window now, an admin cleared it on purpose
+	 * (`PATCH …/hosting-until { hostingUntil: null }`), and a later rebuild/redelivery must not
+	 * quietly start a new one; "cleared" and "never set" look the same on the row, so the order's
+	 * delivery history is what tells them apart.
+	 */
+	const earlierLiveDelivery = async (job: Job) => {
+		const jobs = await db.jobs.list({ orderId: job.orderId })
+		for (const other of jobs) {
+			if (other.id === job.id || other.status !== 'delivered') continue
+			const deliverable = deliverableFromEvents(await db.jobs.listEvents(other.id))
+			if (deliverable?.deployUrl) return true
+		}
+		return false
+	}
+
+	/**
 	 * Stamps the order's included hosting window (wave 14, strategy F4) the FIRST time a delivery
 	 * reports a live URL: `hosting_until = deliveredAt + window`, where the window is the demo or
 	 * build day count from config. Compare-and-set from null, so a redelivery never moves a window
-	 * an admin may already have extended, and a withheld URL (failed acceptance) stamps nothing —
-	 * the customer has nothing to look at yet, so the clock must not start. Best-effort: a failure
+	 * an admin may already have extended; a window an admin CLEARED is not re-stamped either
+	 * (`earlierLiveDelivery`); and a withheld URL (failed acceptance) stamps nothing — the
+	 * customer has nothing to look at yet, so the clock must not start. Best-effort: a failure
 	 * here never fails the container's report.
 	 */
 	const stampHostingWindow = async (job: Job, deliverable: Deliverable) => {
 		if (!deliverable.deployUrl) return
 		const order = await db.orders.getOrder(job.orderId)
 		if (!order || order.hostingUntil !== undefined) return
+		if (await earlierLiveDelivery(job)) {
+			app.log.info(
+				{ jobId: job.id, orderId: order.id },
+				'Hosting window not re-stamped — an earlier delivery started it and it was cleared'
+			)
+			return
+		}
 		const { windowDaysDemo, windowDaysBuild } = app.secrets.hosting
 		const windowDays = order.kind === 'demo' ? windowDaysDemo : windowDaysBuild
 		const hostingUntil = hostingWindowEnd(deliverable.deliveredAt, windowDays)
