@@ -10,11 +10,12 @@ import { isActiveJobStatus, isOrderSpecFrozen, pricesEffectiveAt, toSpecStatus }
 import { nullTaskArnSweepSlackMinutes } from './jobs.ts'
 import { defaultModelPriceRows } from './modelPrices.ts'
 import { rateLimitRetentionMs } from './rateLimits.ts'
+import { toShowcaseItem } from './showcases.ts'
 
 import type {
+	DeployedService,
 	IterationBrief,
 	IterationBriefEntry,
-	DeployedService,
 	Job,
 	JobEvent,
 	ModelPriceRow,
@@ -28,6 +29,7 @@ import type {
 	ResidentUsageRecord,
 	ResidentUsageReport,
 	ResidentUsageSummary,
+	Showcase,
 	SpecDraft,
 	User,
 } from '@mf/models'
@@ -89,6 +91,8 @@ export const createMemoryRepositories = (): MemoryRepositories => {
 	/** `${jobId}:${seq}` → the event stored for that number (idempotent container events) */
 	const numberedEvents = new Map<string, JobEvent>()
 	const orders = new Map<string, OrderEntry>()
+	/** order id → its demo-gallery row (0023) */
+	const showcases = new Map<string, Showcase>()
 	/** Every recorded deployed service, keyed by its own id (live rows have `deletedAt` undefined) */
 	const deployedServices = new Map<string, DeployedService>()
 	const payments = new Map<string, Payment>()
@@ -142,6 +146,11 @@ export const createMemoryRepositories = (): MemoryRepositories => {
 		[...orders.values()]
 			.filter(entry => filter.orgId === undefined || entry.order.orgId === filter.orgId)
 			.sort((a, b) => b.order.createdAt.localeCompare(a.order.createdAt))
+
+	// MARK: Showcases helpers
+	/** Gallery order: `sort` ascending, then the most recently changed first (as the SQL reads) */
+	const sortShowcases = (rows: Showcase[]) =>
+		rows.sort((a, b) => a.sort - b.sort || b.updatedAt.localeCompare(a.updatedAt))
 
 	// Mirrors `users_email_key` (0001): one user per email. The helpers are synchronous so
 	// `insertWithOrg` is atomic like the SQL transaction (no interleaving between the checks)
@@ -323,8 +332,9 @@ export const createMemoryRepositories = (): MemoryRepositories => {
 					modelPrices.some(
 						row => row.modelPrefix === price.modelPrefix && row.effectiveFrom === effectiveFrom
 					)
-				)
-					{throw new UniqueViolation('model_prices_model_prefix_effective_from_key')}
+				) {
+					throw new UniqueViolation('model_prices_model_prefix_effective_from_key')
+				}
 				const row: ModelPriceRow = {
 					id: `price-${modelPrices.length + 1}`,
 					modelPrefix: price.modelPrefix,
@@ -354,8 +364,9 @@ export const createMemoryRepositories = (): MemoryRepositories => {
 					pricingTiers.some(
 						row => row.tierKey === tier.tierKey && row.effectiveFrom === effectiveFrom
 					)
-				)
-					{throw new UniqueViolation('pricing_tiers_tier_key_effective_from_key')}
+				) {
+					throw new UniqueViolation('pricing_tiers_tier_key_effective_from_key')
+				}
 				const row: PricingTierRow = {
 					id: `tier-${pricingTiers.length + 1}`,
 					tierKey: tier.tierKey,
@@ -406,8 +417,7 @@ export const createMemoryRepositories = (): MemoryRepositories => {
 							const budgetMs =
 								(job.budget.maxDurationMinutes + nullTaskArnSweepSlackMinutes) * 60_000
 							return (
-								!job.awaitingApproval &&
-								new Date(job.createdAt).getTime() < Date.now() - budgetMs
+								!job.awaitingApproval && new Date(job.createdAt).getTime() < Date.now() - budgetMs
 							)
 						})
 						.map(clone)
@@ -674,6 +684,51 @@ export const createMemoryRepositories = (): MemoryRepositories => {
 				}
 				return [...totals.entries()].map(([orgId, amountSek]) => ({ orgId, amountSek }))
 			},
+		},
+
+		showcases: {
+			upsert: async showcase => {
+				const existing = showcases.get(showcase.orderId)
+				const next: Showcase = {
+					orderId: showcase.orderId,
+					published: showcase.published,
+					title: showcase.title,
+					blurbSv: showcase.blurbSv,
+					blurbEn: showcase.blurbEn,
+					url: showcase.url ?? undefined,
+					sort: showcase.sort,
+					createdAt: existing?.createdAt ?? now(),
+					updatedAt: now(),
+				}
+				showcases.set(showcase.orderId, next)
+				return clone(next)
+			},
+			getByOrder: async orderId => clone(showcases.get(orderId)),
+			// Both lists mirror the SQL JOIN: a row whose order is gone is not listed
+			list: async () =>
+				sortShowcases([...showcases.values()])
+					.flatMap(showcase => {
+						const order = orders.get(showcase.orderId)?.order
+						if (!order) return []
+						return [
+							{
+								...clone(showcase),
+								orderName: order.name,
+								orderStatus: order.status,
+								lifecycle: order.lifecycle,
+							},
+						]
+					})
+					.slice(0, 200),
+			listPublished: async () =>
+				sortShowcases([...showcases.values()])
+					.flatMap(showcase => {
+						const order = orders.get(showcase.orderId)?.order
+						if (!showcase.published || showcase.url === undefined || !order) return []
+						if (order.lifecycle !== 'active') return []
+						return [toShowcaseItem({ ...showcase, url: showcase.url })]
+					})
+					.slice(0, 200),
 		},
 
 		deployedServices: {

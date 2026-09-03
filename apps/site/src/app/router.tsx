@@ -4,6 +4,7 @@ import { languages, pagePaths, pages } from '#/app/routes.ts'
 
 import { SiteLayout } from '#/layouts/templates/SiteLayout.tsx'
 import { ContactPage } from '#/pages/ContactPage.tsx'
+import { DemosPage } from '#/pages/DemosPage.tsx'
 import { HomePage } from '#/pages/HomePage.tsx'
 import { HowItWorksPage } from '#/pages/HowItWorksPage.tsx'
 import { NotFoundPage } from '#/pages/NotFoundPage.tsx'
@@ -16,6 +17,7 @@ import type { Page, RouteHandle } from '#/app/routes.ts'
 const elements: Record<Page, React.ReactNode> = {
 	home: <HomePage />,
 	howItWorks: <HowItWorksPage />,
+	demos: <DemosPage />,
 	pricing: <PricingPage />,
 	contact: <ContactPage />,
 	terms: <TermsPage />,

@@ -43,6 +43,8 @@ export const publicUrls = new Set([
 	'/bff/auth/github',
 	'/bff/auth/github/callback',
 	'/bff/contact',
+	// The public demo gallery (wave 14, F3): read-only, per-ip rate-limited in its service
+	'/bff/showcases',
 	// Stripe calls the webhook with its own signature (the fake provider's checkout is a normal
 	// authenticated POST, so it is not listed here)
 	'/bff/stripe/webhook',

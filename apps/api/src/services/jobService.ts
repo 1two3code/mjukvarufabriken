@@ -16,12 +16,12 @@ import {
 import { customerSlugForBuild } from '#/lib/customerSlug.ts'
 import { EntityInvalid, EntityNotFound } from '#/lib/entityError.ts'
 import { defaultDownloadExpirySeconds } from '#/plugins/s3.ts'
+import { deliverableFromEvents } from '#/services/jobService.utils.ts'
 
 import type { FastifyInstance, FastifyPluginAsync } from 'fastify'
 import type { JobUpdate } from '@mf/db'
 import type {
 	BackendSession,
-	Deliverable,
 	DeliverablesResponse,
 	GateReport,
 	Job,
@@ -175,7 +175,11 @@ export const budgetForSize: Record<SizeClass, JobBudget> = {
  * spend tokens. Sized well above what those cost so the cap never ends a redelivery, and well
  * below a build so a runaway one cannot cost a build.
  */
-export const redeliveryBudget: JobBudget = { maxTokens: 3_000_000, maxWorkers: 1, maxDurationMinutes: 90 }
+export const redeliveryBudget: JobBudget = {
+	maxTokens: 3_000_000,
+	maxWorkers: 1,
+	maxDurationMinutes: 90,
+}
 
 /** A job whose repository is on GitHub — i.e. its delivery got past the repo step */
 export const hasDeliveredRepository = (job: Job) =>
@@ -259,29 +263,10 @@ export const redactEventsForCustomer = (events: JobEvent[]): JobEvent[] => {
  * timing, tokens and one-line summary. Admins get the row unchanged.
  */
 export const redactJobForCustomer = (job: Job): Job =>
-	job.gates
-		? { ...job, gates: job.gates.map(({ details: _details, ...gate }) => gate) }
-		: job
+	job.gates ? { ...job, gates: job.gates.map(({ details: _details, ...gate }) => gate) } : job
 
-/**
- * The delivery record lives in the last successful `bundle` delivery event (the job writes
- * events only; no job column for it). Undefined until the job delivered.
- */
-export const deliverableFromEvents = (events: JobEvent[]): Deliverable | undefined => {
-	for (const event of events.toReversed()) {
-		if (event.type !== 'delivery') continue
-		const parsed = DeliveryEventPayloadSchema.safeParse(event.payload)
-		if (
-			parsed.success &&
-			parsed.data.step === 'bundle' &&
-			parsed.data.ok &&
-			parsed.data.deliverable
-		) {
-			return parsed.data.deliverable
-		}
-	}
-	return undefined
-}
+/** The delivery record parser lives in `jobService.utils.ts` (shared with the showcase gallery) */
+export { deliverableFromEvents }
 
 /** Notify text is built from raw worker output; cut it to the schema caps rather than drop the mail */
 const truncateNotifyPayload = (payload: Record<string, unknown>) => ({
@@ -447,7 +432,10 @@ const plugin: FastifyPluginAsync = async app => {
 			}
 			// The held first-failure mail must not die with the insert (db blip): page now, then
 			// rethrow for the caller's log line
-			await sendHeldFailureMail(job, `the retry job could not be created: ${(error as Error).message}`)
+			await sendHeldFailureMail(
+				job,
+				`the retry job could not be created: ${(error as Error).message}`
+			)
 			throw error
 		}
 		app.log.warn(

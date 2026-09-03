@@ -59,7 +59,10 @@ export function HomePage() {
 					))}
 				</Grid>
 				<p className={styles.note}>{t('home.ladder.note')}</p>
-				<div>
+				<div className={styles.actions}>
+					<ButtonLink to={pathTo('demos')} color="secondary" size="small">
+						{t('home.ladder.demos')}
+					</ButtonLink>
 					<ButtonLink to={pathTo('pricing')} color="secondary" size="small">
 						{t('home.ladder.cta')}
 					</ButtonLink>

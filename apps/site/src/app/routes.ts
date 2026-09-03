@@ -3,13 +3,23 @@ export type Language = (typeof languages)[number]
 
 export const defaultLanguage: Language = 'sv'
 
-export const pages = ['home', 'howItWorks', 'pricing', 'contact', 'terms', 'privacy'] as const
+export const pages = [
+	'home',
+	'howItWorks',
+	'demos',
+	'pricing',
+	'contact',
+	'terms',
+	'privacy',
+] as const
 export type Page = (typeof pages)[number]
 
 /** Every page has one path per language; Swedish is the default and lives at the root */
 export const pagePaths: Record<Page, Record<Language, string>> = {
 	home: { sv: '/', en: '/en' },
 	howItWorks: { sv: '/sa-funkar-det', en: '/how-it-works' },
+	// The public demo gallery (wave 14, F3)
+	demos: { sv: '/demoappar', en: '/en/demos' },
 	pricing: { sv: '/priser', en: '/pricing' },
 	contact: { sv: '/kontakt', en: '/contact' },
 	// The legal drafts are Swedish-only documents; the English routes show the same text
