@@ -91,7 +91,9 @@ Regenerate any time (it is derived, never hand-maintained): `node scripts/sessio
 | 2026-08-31 | ~339 | Gate A batch 2, Gate B A1 egress proxy, due-diligence review, strategy session |
 | 2026-09-01 | ~305 | waves 12 + 13 (Gate C, Gate B remainder, pricing ladder, M12 UI, audit triage + fixes) — re-priced 2026-09-02 once Fable rows were added to the script (was ~99 with Fable unpriced) |
 | 2026-09-02 | ~155 | run 7 + redeliver path + 6 redeliveries (first live URL), template store/objectStorage, 7 infra/template fix PRs |
+| 2026-09-02 (evening, wave 14 session) | ~97 | re-pricing delta once `claude-fable-5-1` got its own row in `session-cost` (it was silently unpriced; the day now reads 252): next-steps planning, 7 code-map readers + critic, orders foundation (#117), plan doc (#118), six stream builds + 3-lens reviews started |
+| 2026-09-03 | ~131 | wave 14 finish: resumed workflow (refute votes, 2 reviews, 6 fix passes), integration of 6 streams (#119–#124) incl. two agent-driven rebases, morning brief |
 
-Cumulative to date: **~USD 2 497** (2 136 + the 09-01 re-pricing delta of 206 + 155). For scale, the three real customer-style builds delivered so
+Cumulative to date: **~USD 2 725** (2 497 + the 09-02 re-pricing delta of 97 + 131). Wave 14 alone (planning → six merged streams) is ≈ USD 230 of subagent-heavy Fable 5.1 spend — the largest single line of the project, for six customer-facing features in one night. For scale, the three real customer-style builds delivered so
 far (guestbook, family-hub, first green delivery) cost on the order of USD 6–7 each in job tokens —
 the bulk of the spend above is the factory building itself, not the factory running.

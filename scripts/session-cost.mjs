@@ -19,8 +19,12 @@ import { createInterface } from 'node:readline'
 import { homedir } from 'node:os'
 import { join } from 'node:path'
 
-/** USD per million tokens, [input, output]. Cache read = 0.1x in, write 5m = 1.25x, 1h = 2x. */
+/**
+ * USD per million tokens, [input, output, cacheRead?]. Cache read defaults to 0.1x input
+ * (Fable 5.1 bills cache reads at a flat 0.25 USD/MTok), write 5m = 1.25x, 1h = 2x.
+ */
 const PRICES = {
+	'claude-fable-5-1': [10, 50, 0.25],
 	'claude-fable-5': [10, 50],
 	'claude-mythos-5': [10, 50],
 	'claude-opus-5': [5, 25],
@@ -36,14 +40,14 @@ const PRICES = {
 const costOf = (model, u) => {
 	const price = PRICES[model]
 	if (!price) return undefined
-	const [input, output] = price
+	const [input, output, cacheRead = input * 0.1] = price
 	const created = u.cache_creation ?? {}
 	const fiveMin = created.ephemeral_5m_input_tokens ?? u.cache_creation_input_tokens ?? 0
 	const oneHour = created.ephemeral_1h_input_tokens ?? 0
 	return (
 		((u.input_tokens ?? 0) * input +
 			(u.output_tokens ?? 0) * output +
-			(u.cache_read_input_tokens ?? 0) * input * 0.1 +
+			(u.cache_read_input_tokens ?? 0) * cacheRead +
 			fiveMin * input * 1.25 +
 			oneHour * input * 2) /
 		1_000_000
