@@ -2,7 +2,7 @@ import { EntityNotFound } from '#/lib/entityError.ts'
 import { mockCheckoutUrl } from '#/plugins/__mocks__/stripe.ts'
 import createCheckout from '#/routes/bff/orders/checkout/createCheckout.ts'
 import { createMockPayment } from '#/services/__mocks__/paymentService.ts'
-import { PaymentNotDue } from '#/services/paymentService.ts'
+import { BalanceAwaitsPreview, PaymentNotDue } from '#/services/paymentService.ts'
 
 import type { FastifyInstance } from 'fastify'
 
@@ -50,6 +50,20 @@ describe('POST /bff/orders/:orderId/checkout route', () => {
 		// Assert
 		expect(response.statusCode).toBe(409)
 		expect(response.json().error.code).toBe('paymentNotDue')
+	})
+
+	it('Responds 409 balanceAwaitsPreview when the delivered preview is down', async () => {
+		// Arrange
+		vi.spyOn(app.paymentService, 'checkout').mockRejectedValue(
+			new BalanceAwaitsPreview('order-1')
+		)
+
+		// Act
+		const response = await app.inject({ method: 'POST', url, payload: { kind: 'balance' } })
+
+		// Assert
+		expect(response.statusCode).toBe(409)
+		expect(response.json().error.code).toBe('balanceAwaitsPreview')
 	})
 
 	it('Handles unknown order with 404 and other failures with 500', async () => {

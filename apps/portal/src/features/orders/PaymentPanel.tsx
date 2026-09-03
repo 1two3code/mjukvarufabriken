@@ -7,7 +7,7 @@ import {
 	useCompleteFakeCheckoutMutation,
 	useCreateCheckoutMutation,
 } from '#/features/orders/ordersApiSlice.ts'
-import { paymentOf } from '#/features/orders/payments.ts'
+import { balanceAwaitsPreview, paymentOf } from '#/features/orders/payments.ts'
 
 import { Button } from '#/components/Button.tsx'
 
@@ -32,10 +32,21 @@ type PaymentRowProps = {
 	/** A Checkout session opened but not completed yet */
 	pending?: Payment
 	due: boolean
+	/** The order is delivered but its preview is down: explain instead of offering to pay */
+	awaitsPreview?: boolean
 	orderId: string
 }
 
-function PaymentRow({ kind, label, priceSek, paid, pending, due, orderId }: PaymentRowProps) {
+function PaymentRow({
+	kind,
+	label,
+	priceSek,
+	paid,
+	pending,
+	due,
+	awaitsPreview,
+	orderId,
+}: PaymentRowProps) {
 	const { t, i18n } = useTranslation()
 	const [createCheckout, { isLoading }] = useCreateCheckoutMutation()
 	const [completeFake, { isLoading: isCompletingFake }] = useCompleteFakeCheckoutMutation()
@@ -99,6 +110,9 @@ function PaymentRow({ kind, label, priceSek, paid, pending, due, orderId }: Paym
 				</div>
 			)}
 			{paid?.provider === 'fake' && <p className={styles.fake}>{t('payment.fakeNotice')}</p>}
+			{awaitsPreview && !paid && (
+				<p className={styles.awaitsPreview}>{t('payment.balanceAwaitsPreview')}</p>
+			)}
 			{due && !paid && (
 				<div className={styles.actions}>
 					<Button disabled={isLoading || isCompletingFake} onClick={handlePay}>
@@ -113,13 +127,15 @@ function PaymentRow({ kind, label, priceSek, paid, pending, due, orderId }: Paym
 /**
  * The order's payments with Stripe-hosted invoice/receipt links; the due one has a pay button.
  * An order priced below the full-upfront threshold shows a single 100 % payment instead of the
- * deposit/balance split (pricing ladder 2026-08-31).
+ * deposit/balance split (pricing ladder 2026-08-31). The balance of a delivery whose preview is
+ * down is not due (Hasse, 2026-09-03): its row explains that instead of offering to pay.
  */
 export function PaymentPanel({ detail }: PaymentPanelProps) {
 	const { t } = useTranslation()
 	const { order, payments } = detail
 	if (order.priceSek === undefined) return null
 	const fullUpfront = isFullUpfront(order.priceSek)
+	const awaitsPreview = balanceAwaitsPreview(detail)
 
 	return (
 		<section className={styles.panel}>
@@ -134,7 +150,8 @@ export function PaymentPanel({ detail }: PaymentPanelProps) {
 						priceSek={order.priceSek!}
 						paid={paymentOf(payments, kind, 'paid')}
 						pending={paymentOf(payments, kind, 'pending')}
-						due={order.status === dueIn[kind]}
+						due={order.status === dueIn[kind] && !(kind === 'balance' && awaitsPreview)}
+						awaitsPreview={kind === 'balance' && awaitsPreview}
 						orderId={order.id}
 					/>
 				))}

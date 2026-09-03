@@ -32,9 +32,11 @@ declare module 'fastify' {
 		paymentService: {
 			/**
 			 * Creates a pending payment for the order and a Checkout session for it. The deposit
-			 * needs a frozen order, the balance a delivered one; a kind already paid is rejected.
-			 * Any earlier open session of the same kind is expired first, so the customer can only
-			 * ever pay one of them.
+			 * needs a frozen order, the balance a delivered one whose preview is up — a delivery
+			 * without a working preview (`hosting.status === 'unhosted'`) is
+			 * {@link BalanceAwaitsPreview} until "Deliver again" brings it up (Hasse, 2026-09-03);
+			 * a kind already paid is rejected. Any earlier open session of the same kind is expired
+			 * first, so the customer can only ever pay one of them.
 			 */
 			checkout: (
 				orderId: string,
@@ -87,6 +89,16 @@ export type WebhookResult = {
 export class PaymentNotDue extends EntityInvalid {
 	constructor(orderId: string, kind: PaymentKind) {
 		super('payment', `${orderId}/${kind}`)
+	}
+}
+
+/**
+ * The order is delivered but its preview is not up (`hosting.status === 'unhosted'`): the
+ * balance is not due until the preview works (Hasse, 2026-09-03)
+ */
+export class BalanceAwaitsPreview extends EntityInvalid {
+	constructor(orderId: string) {
+		super('payment', `${orderId}/balance`)
 	}
 }
 
@@ -397,14 +409,21 @@ const plugin: FastifyPluginAsync = async app => {
 			return { month, provider: paymentProvider.kind, results }
 		},
 		checkout: async (orderId, kind, session) => {
-			// getDetail syncs the order with its latest job (building → delivered) before the gate
-			const { order, payments } = await orderService.getDetail(orderId, session)
+			// getDetail syncs the order with its latest job (building → delivered) before the gate,
+			// and judges the hosting the same way the order page does
+			const { order, payments, hosting } = await orderService.getDetail(orderId, session)
 			if (order.status !== paymentFlow[kind].from || order.priceSek === undefined) {
 				throw new PaymentNotDue(orderId, kind)
 			}
 			// A full-upfront order (below 3 000 kr) has no balance: the deposit covered 100 %
 			if (!requiredPaymentKinds(order.priceSek).includes(kind)) {
 				throw new PaymentNotDue(orderId, kind)
+			}
+			// The customer bought a hosted app: a delivery whose preview is down (repo + bundle
+			// honoured, URL withheld) owes nothing until "Deliver again" brings it up. `none` cannot
+			// happen on a delivered order, and would not be the customer's problem if it did.
+			if (kind === 'balance' && hosting.status === 'unhosted') {
+				throw new BalanceAwaitsPreview(orderId)
 			}
 			const sameKind = payments.filter(payment => payment.kind === kind)
 			if (sameKind.some(payment => payment.status === 'paid')) {
