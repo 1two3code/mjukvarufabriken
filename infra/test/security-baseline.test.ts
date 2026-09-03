@@ -79,7 +79,9 @@ describe('security baseline', () => {
 				assert.ok(jobPolicy, 'job task role policy')
 				const statements = (
 					jobPolicy.Properties as {
-						PolicyDocument: { Statement: { Action: unknown; Resource?: unknown; Condition?: unknown }[] }
+						PolicyDocument: {
+							Statement: { Action: unknown; Resource?: unknown; Condition?: unknown }[]
+						}
 					}
 				).PolicyDocument.Statement
 				const actions = statements.flatMap(s => (Array.isArray(s.Action) ? s.Action : [s.Action]))
@@ -104,7 +106,9 @@ describe('security baseline', () => {
 				)
 				// RegisterTaskDefinition (a dependency of CreateExpressGatewayService) is scoped to this
 				// cluster's preview families, never every task definition in the account
-				const register = statements.find(s => JSON.stringify(s.Action).includes('ecs:RegisterTaskDefinition'))
+				const register = statements.find(s =>
+					JSON.stringify(s.Action).includes('ecs:RegisterTaskDefinition')
+				)
 				assert.ok(register, 'ecs:RegisterTaskDefinition statement')
 				const registerResource = JSON.stringify(register.Resource)
 				assert.ok(registerResource.includes('task-definition/'), 'scoped to task-definition ARNs')
@@ -317,7 +321,11 @@ describe('security baseline', () => {
 					task => JSON.stringify(task.Properties).includes('EXPRESS_SUBNET_IDS')
 				)
 				assert.ok(jobTask, 'job task definition carries EXPRESS_SUBNET_IDS')
-				const env = (jobTask.Properties.ContainerDefinitions as { Environment: { Name: string; Value: unknown }[] }[])
+				const env = (
+					jobTask.Properties.ContainerDefinitions as {
+						Environment: { Name: string; Value: unknown }[]
+					}[]
+				)
 					.flatMap(container => container.Environment ?? [])
 					.find(entry => entry.Name === 'EXPRESS_SUBNET_IDS')
 				const value = JSON.stringify(env?.Value ?? '')
@@ -354,7 +362,10 @@ describe('security baseline', () => {
 					) as { Resource: unknown; Condition?: unknown }[]
 				assert.equal(tag.length, 1, 'exactly one grant tags preview roles')
 				assert.equal(tag[0]!.Condition, undefined, 'TagRole must not carry the boundary condition')
-				assert.ok(JSON.stringify(tag[0]!.Resource).includes('mf-preview-app-*'), 'TagRole scoped to preview roles')
+				assert.ok(
+					JSON.stringify(tag[0]!.Resource).includes('mf-preview-app-*'),
+					'TagRole scoped to preview roles'
+				)
 			})
 
 			// PassRole is how a PassRole grant turns into privilege escalation: without a service
@@ -430,7 +441,9 @@ describe('security baseline', () => {
 					)
 				)
 				assert.ok(
-					JSON.stringify(infraRole.Properties.AssumeRolePolicyDocument).includes('ecs.amazonaws.com')
+					JSON.stringify(infraRole.Properties.AssumeRolePolicyDocument).includes(
+						'ecs.amazonaws.com'
+					)
 				)
 				// Only the managed policies, no hand-written inline policies (the preview api needs no AWS access)
 				assert.equal(execRole.Properties.Policies, undefined)
@@ -484,20 +497,107 @@ describe('security baseline', () => {
 
 			it('scopes the api task role’s cloudwatch:PutMetricData to its own mf/<env> namespace (M3 hardening #2)', () => {
 				const policies = Object.values(web.findResources('AWS::IAM::Policy'))
-				const apiPolicy = policies.find(p => JSON.stringify(p.Properties).includes('ApiTaskDefTaskRole'))
+				const apiPolicy = policies.find(p =>
+					JSON.stringify(p.Properties).includes('ApiTaskDefTaskRole')
+				)
 				assert.ok(apiPolicy, 'api task role policy')
 				const statements = (
 					apiPolicy.Properties as {
 						PolicyDocument: { Statement: { Action: unknown; Condition?: unknown }[] }
 					}
 				).PolicyDocument.Statement
-				const putMetric = statements.find(
-					s => JSON.stringify(s.Action).includes('cloudwatch:PutMetricData')
+				const putMetric = statements.find(s =>
+					JSON.stringify(s.Action).includes('cloudwatch:PutMetricData')
 				) as { Condition?: { StringEquals?: Record<string, unknown> } } | undefined
 				assert.ok(putMetric, 'cloudwatch:PutMetricData statement')
 				assert.deepEqual(putMetric?.Condition, {
 					StringEquals: { 'cloudwatch:namespace': `mf/${env}` },
 				})
+			})
+
+			// The api's bucket access was `grantReadWrite` on both buckets until wave 14 — every
+			// object in the artifacts bucket (CodeBuild's delivery-source zips, every job's bundle)
+			// and every delivered app's storage, from the one internet-facing principal. The export
+			// and the teardown need exactly Get/Put under deliverables/* and Get/Delete under
+			// preview/*; this pins that nothing wider comes back.
+			it('fences the api task role’s S3 access to deliverables/* and preview/* — never bucket-wide (wave 14)', () => {
+				const policies = Object.values(web.findResources('AWS::IAM::Policy'))
+				const apiPolicy = policies.find(p =>
+					JSON.stringify(p.Properties).includes('ApiTaskDefTaskRole')
+				)
+				assert.ok(apiPolicy, 'api task role policy')
+				const statements = (
+					apiPolicy.Properties as {
+						PolicyDocument: {
+							Statement: {
+								Sid?: string
+								Action: unknown
+								Resource?: unknown
+								Condition?: unknown
+							}[]
+						}
+					}
+				).PolicyDocument.Statement
+				const s3Statements = statements.filter(s =>
+					[s.Action].flat().some(action => typeof action === 'string' && action.startsWith('s3:'))
+				)
+				assert.equal(s3Statements.length, 4, 'exactly the four prefix-fenced S3 grants')
+				const bySid = (sid: string) => {
+					const statement = s3Statements.find(s => s.Sid === sid)
+					assert.ok(statement, `${sid} statement`)
+					return statement
+				}
+				// Object grants: the exact action pairs, each under its one prefix
+				const artifacts = bySid('ArtifactsDeliverablesOnly')
+				assert.deepEqual(
+					new Set([artifacts.Action].flat()),
+					new Set(['s3:GetObject', 's3:PutObject'])
+				)
+				assert.ok(JSON.stringify(artifacts.Resource).includes('/deliverables/*'))
+				const preview = bySid('PreviewObjectsExportAndTeardown')
+				assert.deepEqual(
+					new Set([preview.Action].flat()),
+					new Set(['s3:GetObject', 's3:DeleteObject'])
+				)
+				assert.ok(JSON.stringify(preview.Resource).includes('/preview/*'))
+				// Listings: bucket ARN only, and only under the same prefix
+				assert.deepEqual(bySid('ArtifactsListDeliverablesOnly').Condition, {
+					StringLike: { 's3:prefix': ['deliverables/*'] },
+				})
+				assert.deepEqual(bySid('PreviewListPreviewPrefixOnly').Condition, {
+					StringLike: { 's3:prefix': ['preview/*'] },
+				})
+				// Nothing bucket-wide, nothing under a wildcard, no delete on artifacts, no put on preview
+				const resourceStrings = JSON.stringify(s3Statements.flatMap(s => s.Resource))
+				assert.ok(!/"\/\*"|"\*"|s3:\*/.test(resourceStrings), 'no bucket-wide object access')
+				assert.ok(
+					!resourceStrings.includes('delivery-source'),
+					'the api never reads CodeBuild inputs'
+				)
+				const allActions = s3Statements.flatMap(s => [s.Action].flat())
+				assert.ok(
+					!allActions.some(action => /^s3:(Get|Put|Delete)\*$|^s3:\*$/.test(action as string))
+				)
+				assert.ok(!allActions.includes('s3:PutObjectAcl'))
+			})
+
+			// The role teardown (wave 14) is the destructive half of the per-app IAM grant: it must
+			// sit on the same name+path fence as the mint, never on '*' or the account's roles.
+			it('scopes the api’s iam:DeleteRole/DeleteRolePolicy to the preview app roles only', () => {
+				const deletes = Object.values(web.findResources('AWS::IAM::Policy'))
+					.flatMap(policy => policy.Properties?.PolicyDocument?.Statement ?? [])
+					.filter((statement: { Action?: unknown }) => {
+						const actions = [statement.Action ?? []].flat()
+						return actions.includes('iam:DeleteRole') || actions.includes('iam:DeleteRolePolicy')
+					}) as { Action: unknown; Resource: unknown }[]
+				assert.equal(deletes.length, 1, 'exactly one grant may delete IAM roles/policies')
+				const resource = JSON.stringify(deletes[0]!.Resource)
+				assert.ok(
+					resource.includes('role/mf-preview/mf-preview-app-*'),
+					'fenced to the preview name + path'
+				)
+				assert.ok(!resource.includes('"*"'), 'never unscoped')
+				assert.ok(![deletes[0]!.Action].flat().includes('iam:*'))
 			})
 
 			it('sets the CloudFront security headers', () => {

@@ -21,7 +21,20 @@ A small menu of preview resources on shared infra, provisioned per job, scoped p
 - **Everything exotic** (Fortnox, SMS, third-party APIs): stubbed at preview; real integrations
   belong to the paid stage in the customer's vended account (M11).
 - Teardown: preview prefix + DB dropped together with the existing deployed_services teardown
-  path (same open item as the wave-12 DB note).
+  path (same open item as the wave-12 DB note). **Done, wave 14 (hosting window):**
+  `previewStorageService.teardown(jobId)` deletes every object under `preview/<token>/` and the
+  `mf-preview-app-<token>` role (inline policy first; `NoSuchEntity` = already gone) and
+  `previewDbService.teardown(jobId)` drops the database + role, both from
+  `accountService.runLifecycleAction('teardown')` after the fenced deprovision succeeds. A final
+  export (`exportService.finalExport`: `repo.zip`, `database.json`, `storage/*` +
+  `storage-manifest.json`, then `DELETION-CERTIFICATE.md` at completion) is taken first — a
+  confirmed teardown is refused until it is `done` and at most an hour old (an older one is
+  retaken by the sweeps / `POST /bff/admin/orders/:id/export`) unless an admin passes
+  `skipExport`, and refused while an export run is pending. The api's own bucket grants are now
+  prefix-fenced (`deliverables/*` Get/Put, `preview/*` Get/Delete); a `DeleteObjects` that
+  leaves keys behind (per-key `Errors`) fails the teardown rather than certifying it. The whole
+  confirmed teardown is gated on `ORG_LIFECYCLE_ENABLED`: off → refused (409
+  `LifecycleDisabled`) and the sweeps skip due orders without exporting or mailing.
 
 ## Non-goals
 No per-preview CDK stacks (cost/speed/blast-radius — see the preview-vs-paid split rationale in

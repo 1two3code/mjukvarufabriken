@@ -268,7 +268,11 @@ export class WebStack extends Stack {
 		//   ... on stripe-secret-key / stripe-webhook-secret    — checkout + webhook verification (M6)
 		//   ... on github-oauth-client-secret                  — "Sign in with GitHub" code exchange (M6)
 		//   ... on sentry-dsn                                  — error tracking (SaaS, free tier)
-		//   s3 read/write on the artifacts bucket               — presigned deliverable downloads, uploads
+		//   s3 Get/Put on artifacts deliverables/* only          — presigned deliverable downloads, and the
+		//     final export written next to the bundle (wave 14 hosting window); never bucket-wide
+		//   s3 Get/Delete on preview preview/* only             — the export's storage copy, and the
+		//     prefix deletion at teardown; ListBucket on both fenced by s3:prefix
+		//   iam:DeleteRolePolicy/DeleteRole on mf-preview-app-* — the per-app role's teardown
 		//   ses:SendEmail on the domain identity                — magic-link mail (only with a domain)
 		//   ecs:RunTask (job family, jobs cluster only)         — start a build job
 		//   ecs:DescribeTasks/StopTask/ListTasks (jobs cluster) — job status + admin kill switch
@@ -286,7 +290,27 @@ export class WebStack extends Stack {
 		resources.secrets['stripe-webhook-secret'].grantRead(taskRole)
 		resources.secrets['github-oauth-client-secret'].grantRead(taskRole)
 		resources.secrets['sentry-dsn'].grantRead(taskRole)
-		resources.artifactsBucket.grantReadWrite(taskRole)
+
+		// MARK: Buckets — prefix-fenced, never bucket-wide (audit 2026-08-31 pattern; wave 14).
+		// Artifacts: the api presigns deliverable downloads and, before a hosting window ends, writes
+		// the order's final export under `deliverables/<jobId>/export/` (CopyObject needs Get on the
+		// source and Put on the target — both inside the prefix). `delivery-source/*` (CodeBuild's
+		// input) and anything else in the bucket stay out of reach.
+		taskRole.addToPrincipalPolicy(
+			new PolicyStatement({
+				sid: 'ArtifactsDeliverablesOnly',
+				actions: ['s3:GetObject', 's3:PutObject'],
+				resources: [`${resources.artifactsBucket.bucketArn}/deliverables/*`],
+			})
+		)
+		taskRole.addToPrincipalPolicy(
+			new PolicyStatement({
+				sid: 'ArtifactsListDeliverablesOnly',
+				actions: ['s3:ListBucket'],
+				resources: [resources.artifactsBucket.bucketArn],
+				conditions: { StringLike: { 's3:prefix': ['deliverables/*'] } },
+			})
+		)
 
 		// Magic-link emails. With a verified domain identity the grant is scoped to it; without one
 		// (no `domain` config) SES is not set up and the api runs the `log` transport instead.
@@ -395,7 +419,25 @@ export class WebStack extends Stack {
 		// iam:PassRole lives on the job task role (resources-stack), not here. The api holds no
 		// PassRole on preview roles at all — least privilege, and one fewer path from an api
 		// compromise to a running task with a role of the attacker's choosing.
-		resources.previewBucket.grantReadWrite(taskRole)
+
+		// Preview bucket: the api READS a delivered app's prefix for the final export copy and
+		// DELETES it at teardown (wave 14) — it never writes there (only the app's own role does),
+		// and the listing is fenced by prefix exactly like the minted per-app role's is.
+		taskRole.addToPrincipalPolicy(
+			new PolicyStatement({
+				sid: 'PreviewObjectsExportAndTeardown',
+				actions: ['s3:GetObject', 's3:DeleteObject'],
+				resources: [`${resources.previewBucket.bucketArn}/preview/*`],
+			})
+		)
+		taskRole.addToPrincipalPolicy(
+			new PolicyStatement({
+				sid: 'PreviewListPreviewPrefixOnly',
+				actions: ['s3:ListBucket'],
+				resources: [resources.previewBucket.bucketArn],
+				conditions: { StringLike: { 's3:prefix': ['preview/*'] } },
+			})
+		)
 
 		// MARK: DNS
 		// MARK: Same-origin API — CloudFront forwards /bff/* on both SPAs to the ALB (no CORS needed)

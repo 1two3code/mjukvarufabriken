@@ -11,10 +11,14 @@ import { z } from 'zod'
  *                 lands here first, never straight to deletion.
  * - `torn_down` — permanent: everything the delivery owns is deleted (the customer's repo is
  *                 theirs and is transferred, never deleted). Reached from `suspended` by an admin
- *                 or by the grace-period sweep after N days, never as a first step.
+ *                 or by the grace-period sweep after N days — or straight from `active` when the
+ *                 order's included hosting window ends (wave 14, `Order.hostingUntil`): that path
+ *                 is scheduled, announced by the window itself, and always takes a final export
+ *                 of the customer's data first (`order_exports`).
  *
- * The reversible `suspended` middle state is the whole point: deletion is last, not first, and a
- * suspended order can always be resumed back to `active` within the grace window.
+ * The reversible `suspended` middle state is the whole point for non-payment: deletion is last,
+ * not first, and a suspended order can always be resumed back to `active` within the grace
+ * window. The hosting-window end is the single-use product's designed ending, not a sanction.
  */
 export const lifecycleStates = ['active', 'suspended', 'torn_down'] as const
 export type LifecycleState = (typeof lifecycleStates)[number]

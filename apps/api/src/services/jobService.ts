@@ -16,12 +16,13 @@ import {
 import { customerSlugForBuild } from '#/lib/customerSlug.ts'
 import { EntityInvalid, EntityNotFound } from '#/lib/entityError.ts'
 import { defaultDownloadExpirySeconds } from '#/plugins/s3.ts'
-import { deliverableFromEvents } from '#/services/jobService.utils.ts'
+import { deliverableFromEvents, provisioningJobIdOf } from '#/services/jobService.utils.ts'
 
 import type { FastifyInstance, FastifyPluginAsync } from 'fastify'
 import type { JobUpdate } from '@mf/db'
 import type {
 	BackendSession,
+	Deliverable,
 	DeliverablesResponse,
 	GateReport,
 	Job,
@@ -192,13 +193,9 @@ export const redeliveryBudget: JobBudget = {
 export const hasDeliveredRepository = (job: Job) =>
 	!isActiveJobStatus(job.status) && /^https:\/\/github\.com\//.test(job.repositoryUrl ?? '')
 
-/**
- * Which job the preview resources belong to: a redelivery reuses its SOURCE job's database,
- * storage role and Express service (deterministic names), so a retry of the hosting side never
- * mints a second set the customer's app would not be pointed at.
- */
-export const provisioningJobIdOf = (job: Job) =>
-	job.mode === 'redeliver' && job.sourceJobId ? job.sourceJobId : job.id
+// Pure helpers other services share live in `jobService.utils.ts` (a `.utils.ts` file is never
+// auto-mocked, so they stay real when this service is); re-exported for the existing importers.
+export { deliverableFromEvents, provisioningJobIdOf }
 
 const isAdmin = (session: BackendSession) => session.role === 'admin'
 
@@ -277,8 +274,12 @@ export const redactEventsForCustomer = (events: JobEvent[]): JobEvent[] => {
 export const redactJobForCustomer = (job: Job): Job =>
 	job.gates ? { ...job, gates: job.gates.map(({ details: _details, ...gate }) => gate) } : job
 
-/** The delivery record parser lives in `jobService.utils.ts` (shared with the showcase gallery) */
-export { deliverableFromEvents }
+/** Milliseconds in a day — hosting windows are configured in whole days */
+const dayMs = 24 * 60 * 60 * 1000
+
+/** When the included hosting window of an order delivered at `deliveredAt` ends */
+export const hostingWindowEnd = (deliveredAt: string, windowDays: number) =>
+	new Date(new Date(deliveredAt).getTime() + windowDays * dayMs)
 
 /** Notify text is built from raw worker output; cut it to the schema caps rather than drop the mail */
 const truncateNotifyPayload = (payload: Record<string, unknown>) => ({
@@ -541,8 +542,12 @@ const plugin: FastifyPluginAsync = async app => {
 		if (event.type !== 'delivery') return
 		const parsed = DeliveryEventPayloadSchema.safeParse(event.payload)
 		const deliverable = parsed.success ? parsed.data.deliverable : undefined
-		const service = deliverable?.deployedService
-		if (!deliverable || !service) return
+		if (!deliverable) return
+		await stampHostingWindow(job, deliverable).catch((error: Error) =>
+			app.log.warn({ err: error, jobId: job.id }, 'Could not stamp the order hosting window')
+		)
+		const service = deliverable.deployedService
+		if (!service) return
 		await db.deployedServices
 			.record({
 				orderId: job.orderId,
@@ -559,6 +564,55 @@ const plugin: FastifyPluginAsync = async app => {
 					'Could not record the deployed service for teardown/resume'
 				)
 			)
+	}
+
+	/**
+	 * True when another job of the order already delivered with a live URL — the hosting window
+	 * was started by THAT delivery. If the order has no window now, an admin cleared it on purpose
+	 * (`PATCH …/hosting-until { hostingUntil: null }`), and a later rebuild/redelivery must not
+	 * quietly start a new one; "cleared" and "never set" look the same on the row, so the order's
+	 * delivery history is what tells them apart.
+	 */
+	const earlierLiveDelivery = async (job: Job) => {
+		const jobs = await db.jobs.list({ orderId: job.orderId })
+		for (const other of jobs) {
+			if (other.id === job.id || other.status !== 'delivered') continue
+			const deliverable = deliverableFromEvents(await db.jobs.listEvents(other.id))
+			if (deliverable?.deployUrl) return true
+		}
+		return false
+	}
+
+	/**
+	 * Stamps the order's included hosting window (wave 14, strategy F4) the FIRST time a delivery
+	 * reports a live URL: `hosting_until = deliveredAt + window`, where the window is the demo or
+	 * build day count from config. Compare-and-set from null, so a redelivery never moves a window
+	 * an admin may already have extended; a window an admin CLEARED is not re-stamped either
+	 * (`earlierLiveDelivery`); and a withheld URL (failed acceptance) stamps nothing — the
+	 * customer has nothing to look at yet, so the clock must not start. Best-effort: a failure
+	 * here never fails the container's report.
+	 */
+	const stampHostingWindow = async (job: Job, deliverable: Deliverable) => {
+		if (!deliverable.deployUrl) return
+		const order = await db.orders.getOrder(job.orderId)
+		if (!order || order.hostingUntil !== undefined) return
+		if (await earlierLiveDelivery(job)) {
+			app.log.info(
+				{ jobId: job.id, orderId: order.id },
+				'Hosting window not re-stamped — an earlier delivery started it and it was cleared'
+			)
+			return
+		}
+		const { windowDaysDemo, windowDaysBuild } = app.secrets.hosting
+		const windowDays = order.kind === 'demo' ? windowDaysDemo : windowDaysBuild
+		const hostingUntil = hostingWindowEnd(deliverable.deliveredAt, windowDays)
+		const stamped = await db.orders.initHostingUntil(order.id, hostingUntil)
+		if (stamped) {
+			app.log.info(
+				{ jobId: job.id, orderId: order.id, hostingUntil, windowDays },
+				'Hosting window started'
+			)
+		}
 	}
 
 	/** `ecs:RunTask` for an inserted row, or a terminal `failed` row when the launch itself fails */
@@ -829,6 +883,7 @@ export default fp(plugin, {
 		'#internal/email',
 		'#internal/metrics',
 		'#internal/s3',
+		'#internal/secrets',
 		'#internal/specService',
 	],
 })

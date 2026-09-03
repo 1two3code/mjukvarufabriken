@@ -12,6 +12,7 @@ import { Deliverables } from '#/features/jobs/Deliverables.tsx'
 import { GateReports } from '#/features/jobs/GateReports.tsx'
 import { ApprovalPanel } from '#/features/orders/ApprovalPanel.tsx'
 import { DeliveryOutcomePanel } from '#/features/orders/DeliveryOutcomePanel.tsx'
+import { HostingPanel } from '#/features/orders/HostingPanel.tsx'
 import { OrderStatusBadge } from '#/features/orders/OrderStatusBadge.tsx'
 import { OrderStepper } from '#/features/orders/OrderStepper.tsx'
 import { PaymentPanel } from '#/features/orders/PaymentPanel.tsx'
@@ -161,6 +162,7 @@ export function OrderPage() {
 					<ApprovalPanel orderId={order.id} status={order.status} job={job} />
 					<DeliveryOutcomePanel detail={detail} />
 					<PaymentPanel detail={detail} />
+					<HostingPanel order={order} />
 					{job && (
 						<>
 							<GateReports gates={job.gates} />

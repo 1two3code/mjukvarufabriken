@@ -4,10 +4,10 @@ import { tryCatch } from '@mf/utils/function'
 
 import { EntityInvalid, EntityNotFound } from '#/lib/entityError.ts'
 
-import type { DeprovisionResult } from '@mf/org'
-import type { DeprovisionSummary } from '@mf/models'
 import type { FastifyContextConfig } from 'fastify'
 import type { FastifyPluginAsyncZod } from 'fastify-type-provider-zod'
+import type { DeprovisionSummary } from '@mf/models'
+import type { DeprovisionResult } from '@mf/org'
 
 const schema = {
 	params: z.object({ orderId: z.string() }),
@@ -30,7 +30,9 @@ const toSummary = (result: DeprovisionResult): DeprovisionSummary => ({
 /**
  * Admin deprovisioning action on an order's delivery (wave 9, teardown-deprovisioning.md #2):
  * suspend / resume / teardown. DRY-RUN by default — pass `confirm: true` to actually deprovision
- * the tagged AWS resources and write the new lifecycle state.
+ * the tagged AWS resources and write the new lifecycle state. A confirmed teardown is 409 while
+ * `ORG_LIFECYCLE_ENABLED` is off (nothing would be deleted), until the order's final export is
+ * done and fresh (wave 14) unless `skipExport: true` is passed, and while an export is pending.
  */
 const route: FastifyPluginAsyncZod = async function (app) {
 	const { accountService } = app
@@ -39,7 +41,10 @@ const route: FastifyPluginAsyncZod = async function (app) {
 		const { params, body } = request
 
 		const [error, result] = await tryCatch(
-			accountService.runLifecycleAction(params.orderId, body.action, { confirm: body.confirm })
+			accountService.runLifecycleAction(params.orderId, body.action, {
+				confirm: body.confirm,
+				skipExport: body.skipExport,
+			})
 		)
 		if (error instanceof EntityNotFound) return reply.error(404, error)
 		if (error instanceof EntityInvalid) return reply.error(409, error)
@@ -53,6 +58,7 @@ const route: FastifyPluginAsyncZod = async function (app) {
 			applied: result.applied,
 			order: result.order,
 			...(result.deprovision && { deprovision: toSummary(result.deprovision) }),
+			...(result.previewResources && { previewResources: result.previewResources }),
 		})
 	})
 }

@@ -15,18 +15,40 @@ export const graceWindowMs = (graceDays: number) => graceDays * dayMs
  * this): Postgres-only, run shortly after boot and hourly, idempotent (a torn-down order leaves the
  * `suspended` set, so a later pass skips it), and fault-tolerant — a single order's teardown that
  * throws is logged and the sweep continues. Returns the counts for logs and tests.
+ *
+ * Since wave 14 every teardown is preceded by the order's final export (`exportService`): the
+ * teardown is refused until it is `done`, so the sweep takes it first and leaves an order whose
+ * export failed `suspended` for the next pass (the hosting sweep does the same for `active`).
+ * While `ORG_LIFECYCLE_ENABLED` is off a teardown is refused outright (nothing would be
+ * deleted), so the pass only counts the due orders as `skipped` — no export, no state change.
  */
 export const runLifecycleSweep = async (
 	app: FastifyInstance
-): Promise<{ checked: number; tornDown: number; failed: number }> => {
+): Promise<{ checked: number; tornDown: number; failed: number; skipped: number }> => {
 	const changedBefore = new Date(Date.now() - graceWindowMs(app.secrets.orgLifecycle.graceDays))
 	const due = await app.db.orders.listSuspendedBefore(changedBefore)
-	if (!due.length) return { checked: 0, tornDown: 0, failed: 0 }
+	if (!due.length) return { checked: 0, tornDown: 0, failed: 0, skipped: 0 }
+	if (!app.secrets.orgLifecycle.enabled) {
+		app.log.info(
+			{ orderIds: due.map(order => order.id) },
+			'Grace-period sweep skipped due orders — ORG_LIFECYCLE_ENABLED is off'
+		)
+		return { checked: due.length, tornDown: 0, failed: 0, skipped: due.length }
+	}
 
 	let tornDown = 0
 	let failed = 0
 	for (const order of due) {
 		try {
+			const exported = await app.exportService.finalExport(order.id)
+			if (exported.status !== 'done') {
+				failed++
+				app.log.warn(
+					{ orderId: order.id, status: exported.status, error: exported.error },
+					'Grace-period export not done — teardown postponed to the next pass'
+				)
+				continue
+			}
 			const result = await app.accountService.runLifecycleAction(order.id, 'teardown', {
 				confirm: true,
 				label: 'grace-period sweep',
@@ -49,7 +71,7 @@ export const runLifecycleSweep = async (
 		}
 	}
 
-	const result = { checked: due.length, tornDown, failed }
+	const result = { checked: due.length, tornDown, failed, skipped: 0 }
 	if (tornDown || failed) app.log.info(result, 'Grace-period sweep ran over suspended orders')
 	return result
 }

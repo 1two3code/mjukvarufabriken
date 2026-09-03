@@ -3,9 +3,18 @@ import { canTransitionLifecycle, lifecycleActionMode, lifecycleActionTarget } fr
 
 import { customerSlugForOrg } from '#/lib/customerSlug.ts'
 import { EntityInvalid, EntityNotFound } from '#/lib/entityError.ts'
+import { isExportFresh } from '#/services/exportService.ts'
+import { provisioningJobIdOf } from '#/services/jobService.utils.ts'
 
 import type { FastifyInstance, FastifyPluginAsync } from 'fastify'
-import type { DeployedService, LifecycleAction, LifecycleState, Order, Org } from '@mf/models'
+import type {
+	DeployedService,
+	LifecycleAction,
+	LifecycleState,
+	Order,
+	Org,
+	PreviewTeardownReport,
+} from '@mf/models'
 import type { DeprovisionMode, DeprovisionResult, OutcomeTally } from '@mf/org'
 import type { RedeployResult } from '#/lib/expressRedeploy.ts'
 
@@ -35,6 +44,56 @@ export type LifecycleActionResult = {
 	applied: boolean
 	/** The @mf/org deprovision result; absent when the order has no delivery to act on. */
 	deprovision?: DeprovisionResult
+	/**
+	 * A confirmed teardown's preview-resource cleanup (database + role, storage prefix + role) per
+	 * provisioning job (wave 14). Absent for other actions and dry-runs.
+	 */
+	previewResources?: PreviewTeardownReport[]
+}
+
+/**
+ * A confirmed teardown was asked for before the order's final export was `done` (wave 14). The
+ * export is what the customer keeps of their hosting window; skipping it is an explicit admin
+ * decision (`skipExport: true`), never a default.
+ */
+export class ExportRequired extends EntityInvalid {
+	constructor(orderId: string) {
+		super('export', orderId)
+	}
+}
+
+/**
+ * The order's export is `done` but older than `exportFreshnessMs`: everything the app wrote since
+ * would be destroyed uncertified. Retake it (`POST /bff/admin/orders/:id/export` — the sweeps do
+ * this themselves) and tear down within the window.
+ */
+export class ExportStale extends EntityInvalid {
+	constructor(orderId: string) {
+		super('stale export', orderId)
+	}
+}
+
+/**
+ * A confirmed teardown with `skipExport` while an export run is `pending`: the certificate this
+ * teardown would append is dropped when that run finishes (it replaces the file list), so wait
+ * for it — or, if it is a crashed run, let the next export call reclaim it first.
+ */
+export class ExportInFlight extends EntityInvalid {
+	constructor(orderId: string) {
+		super('export in flight', orderId)
+	}
+}
+
+/**
+ * A confirmed teardown while `ORG_LIFECYCLE_ENABLED` is off. With the flag off nothing is wired
+ * to AWS: the deprovision runs against an empty world and the preview database/storage teardown
+ * would be skipped, so the only thing a "teardown" could do is record `torn_down` — a terminal
+ * state — over resources that keep running, and certify a deletion that never happened. Refused.
+ */
+export class LifecycleDisabled extends EntityInvalid {
+	constructor(orderId: string) {
+		super('lifecycle (ORG_LIFECYCLE_ENABLED is off)', orderId)
+	}
 }
 
 declare module 'fastify' {
@@ -57,12 +116,18 @@ declare module 'fastify' {
 			 * dry-run previews the deprovision and leaves the lifecycle untouched; a confirmed run
 			 * deprovisions the tagged resources (fenced to the order's `Customer=<slug>`) and writes
 			 * the new lifecycle state. Refuses a transition the state machine disallows (e.g. resuming
-			 * a torn-down order).
+			 * a torn-down order). A confirmed `teardown` is refused outright while
+			 * `ORG_LIFECYCLE_ENABLED` is off (`LifecycleDisabled`: nothing would actually be
+			 * deleted), refused (`ExportRequired` / `ExportStale`) until the order's final export is
+			 * `done` and fresh unless `skipExport` is passed (and `ExportInFlight` even then while an
+			 * export run is pending), and — after the fenced deprovision succeeded and before the
+			 * state flips — drops every provisioning job's preview database + role and storage
+			 * prefix + role (wave 14), then writes the deletion certificate into the export.
 			 */
 			runLifecycleAction: (
 				orderId: string,
 				action: LifecycleAction,
-				options?: { confirm?: boolean; label?: string }
+				options?: { confirm?: boolean; label?: string; skipExport?: boolean }
 			) => Promise<LifecycleActionResult>
 		}
 	}
@@ -113,7 +178,7 @@ const aggregateDeprovision = (results: DeprovisionResult[]): DeprovisionResult =
 }
 
 const plugin: FastifyPluginAsync = async app => {
-	const { db, org, secrets } = app
+	const { db, org, secrets, previewDbService, previewStorageService, exportService } = app
 
 	const provisionCustomerAccount: FastifyInstance['accountService']['provisionCustomerAccount'] =
 		async orgId => {
@@ -149,6 +214,23 @@ const plugin: FastifyPluginAsync = async app => {
 		const dryRun = !(options?.confirm ?? false)
 		const label = options?.label ?? order.name
 
+		if (action === 'teardown' && !dryRun) {
+			// With the flag off nothing is wired to AWS: a "teardown" would record a terminal state
+			// over live resources and certify a deletion that never happened. Refuse it here, not
+			// deep in the preview-resource step, so no export is taken and no state is written.
+			if (!secrets.orgLifecycle.enabled) throw new LifecycleDisabled(orderId)
+
+			// The export is the customer's copy of everything the window held; a confirmed teardown
+			// without one is only ever an explicit admin choice (`skipExport`), never a default —
+			// and even then not over a pending run, whose finish would drop the certificate.
+			const exported = await db.orderExports.get(orderId)
+			if (exported?.status === 'pending') throw new ExportInFlight(orderId)
+			if (!options?.skipExport) {
+				if (exported?.status !== 'done') throw new ExportRequired(orderId)
+				if (!isExportFresh(exported)) throw new ExportStale(orderId)
+			}
+		}
+
 		// Every service this order ever delivered. A rebuild mints a new job-unique fence per build,
 		// so an order accumulates services across builds; teardown/suspend act on ALL of them and
 		// `resume` re-stands-up ALL of them from their recorded image/config (ECS Express has no
@@ -180,13 +262,80 @@ const plugin: FastifyPluginAsync = async app => {
 			return { action, dryRun: false, order, from, to, applied: false, deprovision }
 		}
 
+		// Teardown completeness (wave 14): the fenced deprovision only covers what @mf/org can
+		// discover by tag — the Express service. The preview database/role and storage prefix/role
+		// were minted by this api under deterministic names, so they are dropped here, AFTER the
+		// deprovision succeeded and BEFORE the state flips: a throw leaves the order where it is
+		// (the hosting sweep / grace sweep retries) rather than recording `torn_down` over live data.
+		const previewResources =
+			mode === 'teardown' ? await teardownPreviewResources(orderId) : undefined
+
 		// Persist the record side-effects of a confirmed, successful action before the state flips.
 		await applyRecordEffects(orderId, mode, deprovision)
 
 		const updated = await db.orders.setLifecycle(orderId, [from], to)
 		const applied = Boolean(updated) && from !== to
 		app.log.info({ orderId, action, from, to, applied }, 'Lifecycle action applied')
-		return { action, dryRun: false, order: updated ?? order, from, to, applied, deprovision }
+
+		// The certificate is the last word of a completed teardown. Best-effort: the resources are
+		// gone and the state is written — a failure here is logged for a re-run, never a rollback.
+		if (mode === 'teardown' && previewResources) {
+			await exportService
+				.writeDeletionCertificate(orderId, {
+					label,
+					completedAt: new Date(),
+					deprovision,
+					previewResources,
+					repositoryUrl: await repositoryUrlOf(orderId),
+				})
+				.catch((error: Error) =>
+					app.log.error({ err: error, orderId }, 'Could not write the deletion certificate')
+				)
+		}
+		return {
+			action,
+			dryRun: false,
+			order: updated ?? order,
+			from,
+			to,
+			applied,
+			deprovision,
+			...(previewResources && { previewResources }),
+		}
+	}
+
+	/** The newest repository URL any of the order's jobs delivered (for the certificate) */
+	const repositoryUrlOf = async (orderId: string) =>
+		(await db.jobs.list({ orderId }))
+			.toSorted((a, b) => b.createdAt.localeCompare(a.createdAt))
+			.find(job => job.repositoryUrl)?.repositoryUrl
+
+	/**
+	 * Drops the preview database + role and the storage prefix + role of EVERY provisioning job of
+	 * the order (a rebuilt order has several; a redelivery maps onto its source). Every step is
+	 * idempotent ("already gone" is success). Only reached with `ORG_LIFECYCLE_ENABLED` on — a
+	 * confirmed teardown is refused upstream while it is off, so this never runs as the one part
+	 * of an otherwise dry teardown that actually deletes.
+	 */
+	const teardownPreviewResources = async (orderId: string): Promise<PreviewTeardownReport[]> => {
+		const jobs = await db.jobs.list({ orderId })
+		const provisioningJobIds = [...new Set(jobs.map(provisioningJobIdOf))]
+		const reports: PreviewTeardownReport[] = []
+		for (const jobId of provisioningJobIds) {
+			const database = await previewDbService.teardown(jobId)
+			const storage = await previewStorageService.teardown(jobId)
+			const reason = [database.reason, storage.reason].filter(Boolean).join('; ') || undefined
+			reports.push({
+				jobId,
+				database: database.database,
+				databaseRole: database.role,
+				storageObjects: storage.objects,
+				storageObjectCount: storage.objectCount,
+				storageRole: storage.role,
+				...(reason && { reason }),
+			})
+		}
+		return reports
 	}
 
 	/** Suspend / teardown: deprovision EVERY recorded fence tag for the order, results folded into one. */
@@ -259,5 +408,12 @@ const plugin: FastifyPluginAsync = async app => {
 
 export default fp(plugin, {
 	name: '#internal/accountService',
-	dependencies: ['#internal/db', '#internal/org', '#internal/secrets'],
+	dependencies: [
+		'#internal/db',
+		'#internal/org',
+		'#internal/secrets',
+		'#internal/previewDbService',
+		'#internal/previewStorageService',
+		'#internal/exportService',
+	],
 })

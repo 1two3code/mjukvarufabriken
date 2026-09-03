@@ -1,9 +1,18 @@
 import {
+	DeleteRoleCommand,
+	DeleteRolePolicyCommand,
+	NoSuchEntityException,
+} from '@aws-sdk/client-iam'
+
+import {
 	assumeRolePolicy,
 	prefixPolicy,
 	previewPrefix,
 	previewRoleName,
+	teardownPreviewRole,
 } from '#/services/previewStorageService.ts'
+
+import type { IamRoleDeleter } from '#/services/previewStorageService.ts'
 
 const jobId = '11111111-2222-3333-4444-555555555555'
 
@@ -41,6 +50,57 @@ describe('preview storage naming', () => {
 	})
 })
 
+describe('teardownPreviewRole (wave 14)', () => {
+	const missing = () => new NoSuchEntityException({ message: 'no such entity', $metadata: {} })
+
+	/** Records every IAM command; `existing` says whether the policy / role are there to delete */
+	const fakeIam = (existing: { policy?: boolean; role?: boolean } = {}) => {
+		const commands: (DeleteRolePolicyCommand | DeleteRoleCommand)[] = []
+		const iam: IamRoleDeleter = {
+			send: async command => {
+				commands.push(command)
+				if (command instanceof DeleteRolePolicyCommand && !existing.policy) throw missing()
+				if (command instanceof DeleteRoleCommand && !existing.role) throw missing()
+				return {}
+			},
+		}
+		return { iam, commands }
+	}
+
+	it('Deletes the inline policy first, then the role, scoped to the job’s own role name', async () => {
+		const { iam, commands } = fakeIam({ policy: true, role: true })
+
+		const outcome = await teardownPreviewRole(iam, jobId)
+
+		expect(outcome).toBe('deleted')
+		expect(commands.map(command => command.constructor.name)).toEqual([
+			'DeleteRolePolicyCommand',
+			'DeleteRoleCommand',
+		])
+		expect(commands[0]?.input).toEqual({
+			RoleName: previewRoleName(jobId),
+			PolicyName: 'own-prefix-only',
+		})
+		expect(commands[1]?.input).toEqual({ RoleName: previewRoleName(jobId) })
+	})
+
+	it('Is idempotent — a role already gone (and its policy) reports already-gone, never throws', async () => {
+		const { iam } = fakeIam()
+
+		await expect(teardownPreviewRole(iam, jobId)).resolves.toBe('already-gone')
+	})
+
+	it('Surfaces any other IAM error (nothing is swallowed but NoSuchEntity)', async () => {
+		const iam: IamRoleDeleter = {
+			send: async () => {
+				throw new Error('AccessDenied')
+			},
+		}
+
+		await expect(teardownPreviewRole(iam, jobId)).rejects.toThrow('AccessDenied')
+	})
+})
+
 describe('preview storage policies', () => {
 	const bucket = 'mf-preview-dev'
 	const prefix = previewPrefix(jobId)
@@ -60,7 +120,10 @@ describe('preview storage policies', () => {
 
 	it('fences ListBucket by prefix, or listing would reveal every other app’s keys', () => {
 		const policy = JSON.parse(prefixPolicy(bucket, prefix)) as {
-			Statement: { Action: string | string[]; Condition?: Record<string, Record<string, string[]>> }[]
+			Statement: {
+				Action: string | string[]
+				Condition?: Record<string, Record<string, string[]>>
+			}[]
 		}
 		const list = policy.Statement.find(statement =>
 			[statement.Action].flat().includes('s3:ListBucket')

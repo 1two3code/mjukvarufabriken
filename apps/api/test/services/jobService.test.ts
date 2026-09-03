@@ -499,6 +499,108 @@ describe('Job Service', () => {
 			})
 		})
 
+		it('Starts the hosting window on the first delivery with a live URL: deliveredAt + the kind’s days (wave 14)', async () => {
+			await app.db.orders.insert({ id: 'order-1', orgId: 'org-1', name: 'Gym' })
+			const deliverable = createMockDeliverable({ deliveredAt: '2026-09-01T12:00:00.000Z' })
+
+			await app.jobService.reportEvents(job(), [
+				{ type: 'delivery', payload: { step: 'bundle', ok: true, deliverable } },
+			])
+
+			// A build: 30 days from delivery
+			expect((await app.db.orders.getOrder('order-1'))?.hostingUntil).toBe(
+				'2026-10-01T12:00:00.000Z'
+			)
+
+			// A redelivery a week later must NOT move the window
+			await app.jobService.reportEvents(job(), [
+				{
+					type: 'delivery',
+					payload: {
+						step: 'bundle',
+						ok: true,
+						deliverable: createMockDeliverable({ deliveredAt: '2026-09-08T12:00:00.000Z' }),
+					},
+				},
+			])
+			expect((await app.db.orders.getOrder('order-1'))?.hostingUntil).toBe(
+				'2026-10-01T12:00:00.000Z'
+			)
+		})
+
+		it('Does not re-stamp a window an admin cleared: a later delivery finds the earlier live one', async () => {
+			await app.db.orders.insert({ id: 'order-1', orgId: 'org-1', name: 'Gym' })
+			const live = createMockDeliverable({ deliveredAt: '2026-09-01T12:00:00.000Z' })
+			await app.jobService.reportEvents(job(), [
+				{ type: 'delivery', payload: { step: 'bundle', ok: true, deliverable: live } },
+			])
+			expect((await app.db.orders.getOrder('order-1'))?.hostingUntil).toBeDefined()
+			// The admin exempts the order from the sweep
+			await app.db.orders.setHostingUntil('order-1', null)
+			// …and the first delivery is now history on the order
+			vi.spyOn(app.db.jobs, 'list').mockResolvedValue([
+				createMockJob({ id: 'job-1', status: 'delivered' }),
+				createMockJob({ id: 'job-2', status: 'building' }),
+			])
+			vi.spyOn(app.db.jobs, 'listEvents').mockResolvedValue([
+				createMockJobEvent({
+					jobId: 'job-1',
+					type: 'delivery',
+					payload: { step: 'bundle', ok: true, deliverable: live },
+				}),
+			])
+
+			// A rebuild delivers again with a live URL
+			await app.jobService.reportEvents(createMockJob({ id: 'job-2', status: 'building' }), [
+				{
+					type: 'delivery',
+					payload: {
+						step: 'bundle',
+						ok: true,
+						deliverable: createMockDeliverable({
+							jobId: 'job-2',
+							deliveredAt: '2026-09-08T12:00:00.000Z',
+						}),
+					},
+				},
+			])
+
+			expect((await app.db.orders.getOrder('order-1'))?.hostingUntil).toBeUndefined()
+		})
+
+		it('Gives a demo its shorter window, and starts no window while the URL is withheld', async () => {
+			await app.db.orders.insert({ id: 'order-1', orgId: 'org-1', name: 'Demo', kind: 'demo' })
+
+			await app.jobService.reportEvents(job(), [
+				{
+					type: 'delivery',
+					payload: {
+						step: 'bundle',
+						ok: true,
+						deliverable: createMockDeliverable({
+							deployUrl: null,
+							deliveredAt: '2026-09-01T12:00:00.000Z',
+						}),
+					},
+				},
+			])
+			expect((await app.db.orders.getOrder('order-1'))?.hostingUntil).toBeUndefined()
+
+			await app.jobService.reportEvents(job(), [
+				{
+					type: 'delivery',
+					payload: {
+						step: 'bundle',
+						ok: true,
+						deliverable: createMockDeliverable({ deliveredAt: '2026-09-01T12:00:00.000Z' }),
+					},
+				},
+			])
+			expect((await app.db.orders.getOrder('order-1'))?.hostingUntil).toBe(
+				'2026-09-15T12:00:00.000Z'
+			)
+		})
+
 		it('Still records a service whose URL was withheld (failed live acceptance) — it must stay teardownable', async () => {
 			const deliverable = createMockDeliverable({
 				deployUrl: null,

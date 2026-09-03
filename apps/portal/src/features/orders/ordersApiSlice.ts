@@ -4,6 +4,7 @@ import type {
 	CheckoutResponse,
 	Order,
 	OrderDetail,
+	OrderExportResponse,
 	OrderMutation,
 	Payment,
 	PaymentKind,
@@ -22,6 +23,13 @@ export const ordersApiSlice = appApi.enhanceEndpoints({ addTagTypes: ['order'] }
 		getOrder: build.query<OrderDetail, string>({
 			query: orderId => `/orders/${orderId}`,
 			providesTags: (_result, _error, orderId) => [{ type: 'order', id: orderId }],
+			keepUnusedDataFor: ApiCaching.none,
+		}),
+		/** The final export before / after the hosting window ends (wave 14): 404 until one exists */
+		getOrderExport: build.query<OrderExportResponse, string>({
+			query: orderId => `/orders/${orderId}/export`,
+			providesTags: (_result, _error, orderId) => [{ type: 'order', id: `${orderId}/export` }],
+			// Presigned links live 15 minutes; refetch on every mount rather than serve a dead link
 			keepUnusedDataFor: ApiCaching.none,
 		}),
 		createOrder: build.mutation<Order, OrderMutation['CreateOrder']>({
@@ -74,6 +82,7 @@ export const ordersApiSlice = appApi.enhanceEndpoints({ addTagTypes: ['order'] }
 export const {
 	useGetOrdersQuery,
 	useGetOrderQuery,
+	useGetOrderExportQuery,
 	useCreateOrderMutation,
 	useCancelOrderMutation,
 	useApproveOrderMutation,

@@ -50,6 +50,8 @@ describe('Secrets plugin (secrets)', () => {
 		vi.stubEnv('AUTH_EMAIL_FROM', 'hello@example.com')
 		vi.stubEnv('RESIDENT_INSTALLATIONS', 'acme-shop:tok-a, beta-crm:tok:b,broken,')
 		vi.stubEnv('RESIDENT_USAGE_PRICE_ID', 'price_123')
+		vi.stubEnv('HOSTING_WINDOW_DAYS_DEMO', '7')
+		vi.stubEnv('PREVIEW_BUCKET', 'mf-preview')
 
 		// Act
 		const app = await createTestApp({ skipMock: '#/plugins/secrets.ts' })
@@ -79,8 +81,11 @@ describe('Secrets plugin (secrets)', () => {
 				graceDays: 30,
 			},
 			demoWeeklyCap: 5,
+			// The demo window from the env, the build window from its default (wave 14)
+			hosting: { windowDaysDemo: 7, windowDaysBuild: 30 },
 			infra: expect.objectContaining({
 				artifactsBucket: 'mf-artifacts',
+				previewBucket: 'mf-preview',
 				jobSubnetIds: ['subnet-a', 'subnet-b'],
 			}),
 		})

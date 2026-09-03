@@ -3,6 +3,7 @@ import { z } from 'zod'
 import { JobSchema } from './Job.ts'
 import { lifecycleActions, LifecycleStateSchema } from './Lifecycle.ts'
 import { orderKind, OrderSchema } from './Order.ts'
+import { PreviewTeardownReportSchema } from './OrderExport.ts'
 import { OrgSchema } from './Org.ts'
 import { paymentKind, PaymentSchema } from './Payment.ts'
 import { specStatus } from './Spec.ts'
@@ -21,16 +22,27 @@ export const OrderMutationSchemas = {
 	/**
 	 * Admin deprovisioning action on an order's delivery (wave 9). `confirm` is the dry-run guard:
 	 * omitted / false previews the deprovision and leaves the lifecycle untouched, `true` performs
-	 * it and writes the new state.
+	 * it and writes the new state. A confirmed `teardown` is refused while `ORG_LIFECYCLE_ENABLED`
+	 * is off, and until the order's final export is `done` and fresh (wave 14) unless `skipExport`
+	 * says the admin knows there is nothing to keep.
 	 */
 	LifecycleAction: z
-		.object({ action: z.enum(lifecycleActions), confirm: z.boolean().optional() })
+		.object({
+			action: z.enum(lifecycleActions),
+			confirm: z.boolean().optional(),
+			skipExport: z.boolean().optional(),
+		})
 		.strict(),
 	/**
 	 * Admin approval of a demo order's build (wave 14): the paid demo starts building. `force`
 	 * bypasses the weekly voucher cap (a deliberate over-allocation, never the default).
 	 */
 	ApproveBuild: z.object({ force: z.boolean().optional() }).strict(),
+	/**
+	 * Admin override of the included hosting window (wave 14): a new end instant extends or
+	 * shortens it, `null` clears the scheduled end so the sweep never picks the order up.
+	 */
+	SetHostingUntil: z.object({ hostingUntil: z.iso.datetime().nullable() }).strict(),
 }
 
 export type OrderMutation = {
@@ -39,6 +51,7 @@ export type OrderMutation = {
 	SetApprovalGate: z.infer<typeof OrderMutationSchemas.SetApprovalGate>
 	LifecycleAction: z.infer<typeof OrderMutationSchemas.LifecycleAction>
 	ApproveBuild: z.infer<typeof OrderMutationSchemas.ApproveBuild>
+	SetHostingUntil: z.infer<typeof OrderMutationSchemas.SetHostingUntil>
 }
 
 // MARK: Operations
@@ -155,6 +168,11 @@ export const LifecycleActionResponseSchema = z.object({
 	order: OrderSchema,
 	/** Absent when the order has no delivery to deprovision. */
 	deprovision: DeprovisionSummarySchema.optional(),
+	/**
+	 * A confirmed teardown's preview-resource cleanup per provisioning job (database + role,
+	 * storage prefix + role) — wave 14. Absent for other actions and dry-runs.
+	 */
+	previewResources: z.array(PreviewTeardownReportSchema).optional(),
 })
 export type LifecycleActionResponse = z.infer<typeof LifecycleActionResponseSchema>
 

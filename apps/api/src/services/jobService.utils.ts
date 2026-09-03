@@ -1,6 +1,14 @@
 import { DeliveryEventPayloadSchema } from '@mf/models'
 
-import type { Deliverable, JobEvent } from '@mf/models'
+import type { Deliverable, Job, JobEvent } from '@mf/models'
+
+/**
+ * Which job the preview resources belong to: a redelivery reuses its SOURCE job's database,
+ * storage role and Express service (deterministic names), so a retry of the hosting side never
+ * mints a second set the customer's app would not be pointed at.
+ */
+export const provisioningJobIdOf = (job: Job) =>
+	job.mode === 'redeliver' && job.sourceJobId ? job.sourceJobId : job.id
 
 /**
  * The delivery record lives in the last successful `bundle` delivery event (the job writes

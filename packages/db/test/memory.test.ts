@@ -25,6 +25,82 @@ describe('memory repositories', () => {
 		repos = createMemoryRepositories()
 	})
 
+	describe('order exports (wave 14)', () => {
+		const claim = { orderId: 'o1', jobId: 'j1', key: 'deliverables/j1/export/' }
+		const fresh = () => new Date(Date.now() - 60 * 60 * 1000)
+
+		it('Claims once: a fresh pending row is somebody else’s run, a done row is final', async () => {
+			const first = await repos.orderExports.claim(claim, fresh())
+			expect(first.claimed).toBe(true)
+			expect(first.export).toMatchObject({ status: 'pending', files: [], key: claim.key })
+
+			const inFlight = await repos.orderExports.claim(claim, fresh())
+			expect(inFlight.claimed).toBe(false)
+
+			await repos.orderExports.finish('o1', {
+				status: 'done',
+				files: [{ name: 'repo.zip', key: 'deliverables/j1/export/repo.zip', size: 1 }],
+			})
+			const done = await repos.orderExports.claim(claim, fresh())
+			expect(done.claimed).toBe(false)
+			expect(done.export.status).toBe('done')
+		})
+
+		it('Re-claims a failed row and a stale pending one (a crashed run)', async () => {
+			await repos.orderExports.claim(claim, fresh())
+			await repos.orderExports.finish('o1', { status: 'failed', files: [], error: 'boom' })
+			const retry = await repos.orderExports.claim(claim, fresh())
+			expect(retry.claimed).toBe(true)
+			expect(retry.export.status).toBe('pending')
+			expect(retry.export.error).toBeUndefined()
+
+			// Still pending, but created before the stale instant → reclaimable
+			const stale = await repos.orderExports.claim(claim, new Date(Date.now() + 1000))
+			expect(stale.claimed).toBe(true)
+		})
+
+		it('Re-claims a done row only when asked to and only when it finished before the instant', async () => {
+			await repos.orderExports.claim(claim, fresh())
+			await repos.orderExports.finish('o1', { status: 'done', files: [] })
+
+			// Final by default, and still final when it finished after the instant
+			expect((await repos.orderExports.claim(claim, fresh(), fresh())).claimed).toBe(false)
+			// Stale (finished before the instant): retaken, reset to pending
+			const retaken = await repos.orderExports.claim(claim, fresh(), new Date(Date.now() + 1000))
+			expect(retaken.claimed).toBe(true)
+			expect(retaken.export).toMatchObject({ status: 'pending', files: [] })
+		})
+
+		it('Finishes only a pending row, appends files to any row', async () => {
+			expect(await repos.orderExports.finish('o1', { status: 'done', files: [] })).toBeUndefined()
+			await repos.orderExports.claim(claim, fresh())
+			await repos.orderExports.finish('o1', { status: 'done', files: [] })
+			expect(await repos.orderExports.finish('o1', { status: 'done', files: [] })).toBeUndefined()
+
+			const file = { name: 'DELETION-CERTIFICATE.md', key: 'k', size: 2 }
+			expect((await repos.orderExports.appendFiles('o1', [file]))?.files).toEqual([file])
+			expect(await repos.orderExports.appendFiles('nope', [file])).toBeUndefined()
+		})
+	})
+
+	describe('orders hosting window (wave 14)', () => {
+		it('initHostingUntil stamps only while no window is set (first delivery wins)', async () => {
+			await repos.orders.insert({ id: 'o1', orgId: 'org', name: 'App' })
+			const first = new Date('2026-10-01T00:00:00.000Z')
+
+			expect((await repos.orders.initHostingUntil('o1', first))?.hostingUntil).toBe(
+				first.toISOString()
+			)
+			expect(
+				await repos.orders.initHostingUntil('o1', new Date('2026-11-01T00:00:00.000Z'))
+			).toBeUndefined()
+			expect((await repos.orders.getOrder('o1'))?.hostingUntil).toBe(first.toISOString())
+			// An admin's explicit set (or clear) still works
+			expect((await repos.orders.setHostingUntil('o1', null))?.hostingUntil).toBeUndefined()
+			expect(await repos.orders.initHostingUntil('nope', first)).toBeUndefined()
+		})
+	})
+
 	describe('jobs', () => {
 		it('Finds a job by its report token hash and keeps the hash off the model', async () => {
 			const job = await repos.jobs.insert({

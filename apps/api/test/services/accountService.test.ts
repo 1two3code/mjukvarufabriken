@@ -1,4 +1,12 @@
 import { EntityInvalid, EntityNotFound } from '#/lib/entityError.ts'
+import { createMockJob } from '#/plugins/__mocks__/db.ts'
+import {
+	ExportInFlight,
+	ExportRequired,
+	ExportStale,
+	LifecycleDisabled,
+} from '#/services/accountService.ts'
+import { exportFreshnessMs } from '#/services/exportService.ts'
 
 import type { FastifyInstance } from 'fastify'
 import type { DeployedServiceConfig } from '@mf/models'
@@ -9,17 +17,28 @@ describe('Account Service', () => {
 	beforeEach(async () => {
 		// Real accountService against the in-memory db; the @mf/org seam (`app.org`) stays mocked.
 		app = await createTestApp({ skipMock: '#/services/accountService.ts' })
+		// A confirmed teardown is refused outright while the flag is off (see the wave-14 tests)
+		app.secrets.orgLifecycle.enabled = true
 	})
+
+	afterEach(() => vi.useRealTimers())
 
 	const seedOrg = async (name = 'Acme AB') => {
 		const org = await app.db.users.insertOrg({ name })
 		return org
 	}
 
+	/** A `done` final export — a confirmed teardown is refused without one (wave 14) */
+	const seedExport = async (orderId: string) => {
+		await app.db.orderExports.claim({ orderId, key: `deliverables/${orderId}/export/` }, new Date())
+		return app.db.orderExports.finish(orderId, { status: 'done', files: [] })
+	}
+
 	const seedDeliveredOrder = async (customerSlug = 'acme-gym-11111111') => {
 		const org = await seedOrg()
 		const order = await app.db.orders.insert({ id: 'order-1', orgId: org.id, name: 'Acme gym' })
 		await app.db.orders.setCustomerSlug(order.id, customerSlug)
+		await seedExport(order.id)
 		return { org, order }
 	}
 
@@ -232,6 +251,174 @@ describe('Account Service', () => {
 			expect(await app.db.deployedServices.listForOrder(order.id)).toHaveLength(0)
 		})
 
+		// MARK: wave-14 hosting window — teardown completeness
+
+		it('Refuses a confirmed teardown until the final export is done, unless skipExport', async () => {
+			const org = await seedOrg()
+			const order = await app.db.orders.insert({ id: 'order-3', orgId: org.id, name: 'No export' })
+			await app.db.orders.setCustomerSlug(order.id, 'no-export-33333333')
+
+			await expect(
+				app.accountService.runLifecycleAction(order.id, 'teardown', { confirm: true })
+			).rejects.toThrow(ExportRequired)
+			expect((await app.db.orders.getOrder(order.id))?.lifecycle).toBe('active')
+			// A dry-run previews without the export; a failed export is not good enough either
+			const preview = await app.accountService.runLifecycleAction(order.id, 'teardown')
+			expect(preview.dryRun).toBe(true)
+			await app.db.orderExports.claim({ orderId: order.id, key: 'k/' }, new Date())
+			await app.db.orderExports.finish(order.id, { status: 'failed', files: [], error: 'x' })
+			await expect(
+				app.accountService.runLifecycleAction(order.id, 'teardown', { confirm: true })
+			).rejects.toThrow(ExportRequired)
+
+			const skipped = await app.accountService.runLifecycleAction(order.id, 'teardown', {
+				confirm: true,
+				skipExport: true,
+			})
+			expect(skipped.applied).toBe(true)
+			expect((await app.db.orders.getOrder(order.id))?.lifecycle).toBe('torn_down')
+		})
+
+		it('Refuses a confirmed teardown while ORG_LIFECYCLE_ENABLED is off — nothing would be deleted', async () => {
+			const { order } = await seedDeliveredOrder()
+			app.secrets.orgLifecycle.enabled = false
+
+			// Even with skipExport: the refusal is about the flag, not the export
+			await expect(
+				app.accountService.runLifecycleAction(order.id, 'teardown', {
+					confirm: true,
+					skipExport: true,
+				})
+			).rejects.toThrow(LifecycleDisabled)
+
+			// The order stays active over its live resources; no state, no certificate, no deletes
+			expect((await app.db.orders.getOrder(order.id))?.lifecycle).toBe('active')
+			expect(app.org.deprovision).not.toHaveBeenCalled()
+			expect(app.previewDbService.teardown).not.toHaveBeenCalled()
+			expect(app.previewStorageService.teardown).not.toHaveBeenCalled()
+			expect(app.exportService.writeDeletionCertificate).not.toHaveBeenCalled()
+			// A dry-run preview and the reversible suspend/resume still work with the flag off
+			const preview = await app.accountService.runLifecycleAction(order.id, 'teardown')
+			expect(preview.dryRun).toBe(true)
+			const suspended = await app.accountService.runLifecycleAction(order.id, 'suspend', {
+				confirm: true,
+			})
+			expect(suspended.applied).toBe(true)
+		})
+
+		it('Refuses a confirmed teardown on a done export older than the freshness window (stale)', async () => {
+			const { order } = await seedDeliveredOrder()
+			vi.useFakeTimers()
+			vi.setSystemTime(Date.now() + exportFreshnessMs + 60_000)
+
+			await expect(
+				app.accountService.runLifecycleAction(order.id, 'teardown', { confirm: true })
+			).rejects.toThrow(ExportStale)
+			expect((await app.db.orders.getOrder(order.id))?.lifecycle).toBe('active')
+
+			// A fresh export (retaken) satisfies the gate again
+			await app.db.orderExports.claim({ orderId: order.id, key: 'k/' }, new Date(), new Date())
+			await app.db.orderExports.finish(order.id, { status: 'done', files: [] })
+			const torn = await app.accountService.runLifecycleAction(order.id, 'teardown', {
+				confirm: true,
+			})
+			expect(torn.applied).toBe(true)
+		})
+
+		it('Refuses a confirmed teardown while an export run is pending, even with skipExport', async () => {
+			const org = await seedOrg()
+			const order = await app.db.orders.insert({ id: 'order-4', orgId: org.id, name: 'Pending' })
+			await app.db.orders.setCustomerSlug(order.id, 'pending-44444444')
+			await app.db.orderExports.claim({ orderId: order.id, key: 'k/' }, new Date())
+
+			await expect(
+				app.accountService.runLifecycleAction(order.id, 'teardown', {
+					confirm: true,
+					skipExport: true,
+				})
+			).rejects.toThrow(ExportInFlight)
+			await expect(
+				app.accountService.runLifecycleAction(order.id, 'teardown', { confirm: true })
+			).rejects.toThrow(ExportInFlight)
+			expect((await app.db.orders.getOrder(order.id))?.lifecycle).toBe('active')
+		})
+
+		it('Drops the preview database + storage of every provisioning job when the flag is on, then certifies', async () => {
+			const { order } = await seedDeliveredOrder()
+			app.secrets.orgLifecycle.enabled = true
+			// A build and its redelivery share one set of resources (the source job's)
+			vi.spyOn(app.db.jobs, 'list').mockResolvedValue([
+				createMockJob({
+					id: 'job-1',
+					orderId: order.id,
+					status: 'delivered',
+					repositoryUrl: 'https://github.com/x/y',
+				}),
+				createMockJob({
+					id: 'job-2',
+					orderId: order.id,
+					mode: 'redeliver',
+					sourceJobId: 'job-1',
+					status: 'delivered',
+				}),
+			])
+
+			const result = await app.accountService.runLifecycleAction(order.id, 'teardown', {
+				confirm: true,
+				label: 'hosting window ended',
+			})
+
+			expect(result.applied).toBe(true)
+			expect(app.previewDbService.teardown).toHaveBeenCalledTimes(1)
+			expect(app.previewDbService.teardown).toHaveBeenCalledWith('job-1')
+			expect(app.previewStorageService.teardown).toHaveBeenCalledWith('job-1')
+			expect(result.previewResources).toEqual([
+				{
+					jobId: 'job-1',
+					database: 'deleted',
+					databaseRole: 'deleted',
+					storageObjects: 'deleted',
+					storageObjectCount: 2,
+					storageRole: 'deleted',
+				},
+			])
+			expect(app.exportService.writeDeletionCertificate).toHaveBeenCalledWith(
+				order.id,
+				expect.objectContaining({
+					label: 'hosting window ended',
+					previewResources: result.previewResources,
+					repositoryUrl: 'https://github.com/x/y',
+				})
+			)
+		})
+
+		it('Does NOT advance the lifecycle when a preview-resource teardown throws', async () => {
+			const { order } = await seedDeliveredOrder()
+			app.secrets.orgLifecycle.enabled = true
+			vi.mocked(app.previewDbService.teardown).mockRejectedValueOnce(new Error('pg down'))
+
+			await expect(
+				app.accountService.runLifecycleAction(order.id, 'teardown', { confirm: true })
+			).rejects.toThrow('pg down')
+
+			expect((await app.db.orders.getOrder(order.id))?.lifecycle).toBe('active')
+			expect(app.exportService.writeDeletionCertificate).not.toHaveBeenCalled()
+		})
+
+		it('Keeps a completed teardown when the certificate cannot be written', async () => {
+			const { order } = await seedDeliveredOrder()
+			vi.mocked(app.exportService.writeDeletionCertificate).mockRejectedValueOnce(
+				new Error('S3 down')
+			)
+
+			const result = await app.accountService.runLifecycleAction(order.id, 'teardown', {
+				confirm: true,
+			})
+
+			expect(result.applied).toBe(true)
+			expect((await app.db.orders.getOrder(order.id))?.lifecycle).toBe('torn_down')
+		})
+
 		it('Resume re-stands-up the recorded services (redeploy) and writes back the new arns', async () => {
 			const { order } = await seedDeliveredOrder('app-11111111')
 			// Suspended: the service was deleted (arn nulled), the record + config retained
@@ -245,7 +432,11 @@ describe('Account Service', () => {
 			// It replays via redeploy (NOT a tag-discovery deprovision — the service is gone)
 			expect(app.org.redeploy).toHaveBeenCalledTimes(1)
 			expect(vi.mocked(app.org.redeploy).mock.calls[0]![0]).toEqual([
-				{ id: expect.any(String), serviceName: 'mf-11111111-app', config: { serviceName: 'mf-11111111-app' } },
+				{
+					id: expect.any(String),
+					serviceName: 'mf-11111111-app',
+					config: { serviceName: 'mf-11111111-app' },
+				},
 			])
 			expect(result.to).toBe('active')
 			expect((await app.db.orders.getOrder(order.id))?.lifecycle).toBe('active')

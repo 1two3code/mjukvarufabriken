@@ -1,0 +1,95 @@
+/* MARK: Layout */
+.panel {
+	display: flex;
+	flex-direction: column;
+	gap: var(--spacing-xs);
+
+	padding: var(--spacing-s);
+	border: var(--border-width-xs) solid var(--divider-color);
+	border-radius: var(--border-radius-base);
+
+	background: var(--content-background);
+}
+
+.title {
+	margin: 0;
+}
+
+.subtitle {
+	composes: composable-subheader-font from global;
+	margin: 0;
+}
+
+.status {
+	margin: 0;
+}
+
+.countdown {
+	color: var(--secondary-text-color);
+}
+
+.intro {
+	margin: 0;
+	color: var(--secondary-text-color);
+}
+
+/* MARK: Export */
+.export {
+	display: flex;
+	flex-direction: column;
+	gap: var(--spacing-xxs);
+}
+
+.empty {
+	margin: 0;
+	color: var(--secondary-text-color);
+}
+
+.list {
+	margin: 0;
+	padding-left: var(--spacing-base);
+}
+
+.description {
+	color: var(--secondary-text-color);
+}
+
+/* MARK: Admin control */
+.admin {
+	display: flex;
+	flex-direction: column;
+	gap: var(--spacing-xxs);
+
+	margin-top: var(--spacing-xxs);
+	padding-top: var(--spacing-xs);
+	border-top: var(--border-width-xs) solid var(--divider-color);
+}
+
+.field {
+	display: flex;
+	flex-direction: column;
+	gap: var(--spacing-xxs);
+}
+
+.label {
+	font-size: var(--font-size-s);
+	color: var(--secondary-text-color);
+}
+
+.date {
+	max-width: 12rem;
+	padding: var(--spacing-xxs) var(--spacing-xs);
+	border: var(--border-width-xs) solid var(--divider-color);
+	border-radius: var(--border-radius-xs);
+
+	font: inherit;
+	color: inherit;
+
+	background: var(--content-background);
+}
+
+.actions {
+	display: flex;
+	flex-wrap: wrap;
+	gap: var(--spacing-xs);
+}
