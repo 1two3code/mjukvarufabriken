@@ -110,7 +110,7 @@ would have been ~USD 150.
 **Still OPEN after today (in priority order):**
 1. **`delivered` without `deployUrl`** — recurred ten times today. A build whose preview was
    withheld must not read "delivered" to the customer; the status word is wrong for what they
-   bought. Product decision + a small state change.
+   bought. Product decision + a small state change. → **graduated (wave 14, S5 delivery-outcome):** the harness forwards the withheld-URL reason onto `jobs.reason`, the order detail carries `hosting: live | unhosted | none`, the portal says "Delivered without a preview" with the reason and a "Deliver again" button, and a full-upfront order no longer auto-closes as `paid` while unhosted.
 2. **Redelivery to an existing service does not roll a new image** — `createOrDescribe` treats
    "already exists" as live. Right for an SDK retry (and it is what made this redelivery cheap),
    wrong when the app changed: needs `UpdateExpressGatewayService`.
@@ -139,7 +139,7 @@ acceptance check then failed on one line: `blank page: the headless render put n
   reason), and a configured-but-missing browser reports itself.
 - **Cheap retry:** run 8's repository is correct, so the fix is proven by a *redelivery* of it —
   the deploy step reuses the running service, the browser check runs against it.
-- **Recurred, still OPEN (10th time):** `delivered` with `deployUrl: null`.
+- **Recurred (10th time):** `delivered` with `deployUrl: null` → **graduated (wave 14, S5 delivery-outcome):** the harness forwards the withheld-URL reason onto `jobs.reason`, the order detail carries `hosting: live | unhosted | none`, the portal says "Delivered without a preview" with the reason and a "Deliver again" button, and a full-upfront order no longer auto-closes as `paid` while unhosted.
 
 
 ## 2026-09-02 — job a92fb019 (Ögonblick, redeliver of run 7, 6th) — the first live URL
@@ -170,7 +170,7 @@ The first two are app-side: run 7's repository carries the old store and its own
 plugin, so a redelivery cannot pick them up. A **rebuild** (run 8) is the path to a green live
 check for this app. Both fixes are in the template, so every later build inherits them.
 
-- **Recurred, still OPEN (9th time):** `delivered` with `deployUrl: null`.
+- **Recurred (9th time):** `delivered` with `deployUrl: null` — graduated with the 10th (wave 14, S5).
 
 
 ## 2026-09-02 — job 0f497ced (Ögonblick, redeliver of run 7, 5th) — a live app nobody can reach
@@ -192,7 +192,7 @@ Then: `ECS Express service … exposed no endpoint in time` after 15 minutes.
   already runs: the new image is never rolled out, and a service created with a wrong
   configuration (this one) can only be fixed by deleting it out of band. Redelivery should
   `UpdateExpressGatewayService` (new image, current env, current network) when the service exists.
-- **Recurred, still OPEN (8th time):** `delivered` with `deployUrl: null`.
+- **Recurred (8th time):** `delivered` with `deployUrl: null` — graduated with the 10th (wave 14, S5).
 
 
 ## 2026-09-02 — job e9010835 (Ögonblick, redeliver of run 7, 4th) — RegisterTaskDefinition
@@ -212,7 +212,7 @@ on resource: …task-definition/mf-jobs-dev-mf-c15b94b8-…:*`.
   untested until it runs in production, and a cheap retry is how it gets tested.
 - **Graduated to:** `ecs:RegisterTaskDefinition` on the job role, scoped to
   `task-definition/<cluster>-mf-*:*`; the fence test asserts the scope.
-- **Recurred, still OPEN (7th time):** `delivered` with `deployUrl: null`.
+- **Recurred (7th time):** `delivered` with `deployUrl: null` — graduated with the 10th (wave 14, S5).
 
 
 ## 2026-09-02 — job bed47e0c (Ögonblick, redeliver of run 7, 3rd) — same PassRole denial
@@ -229,7 +229,7 @@ on resource: …task-definition/mf-jobs-dev-mf-c15b94b8-…:*`.
   A simulation is only as good as its context entries; the live error message is the truth.
 - **Graduated to:** the preview PassRole lists both ECS principals; the fence test asserts the
   set; the simulation asks with `ecs.amazonaws.com` too.
-- **Recurred, still OPEN (6th time):** `delivered` with `deployUrl: null`.
+- **Recurred (6th time):** `delivered` with `deployUrl: null` — graduated with the 10th (wave 14, S5).
 
 
 ## 2026-09-02 — job 4922e82d (Ögonblick, redeliver of run 7, 2nd) — "delivered" without a URL
@@ -247,7 +247,7 @@ CodeBuild image built — and `CreateExpressGatewayService` was refused:
   ECS-tasks fence), removed from the api (least privilege). `security-baseline` now asserts the
   job's three PassRole statements include the preview roles → ECS tasks, and that the api has
   none. The IAM simulation script asks the job role too.
-- **Recurred, still OPEN (5th time):** `delivered` with `deployUrl: null`.
+- **Recurred (5th time):** `delivered` with `deployUrl: null` — graduated with the 10th (wave 14, S5).
 
 **Cost note:** two redeliveries so far have cost ~USD 0.25 combined and found three defects the
 deploy half was hiding. The same two retries as rebuilds would have been ~USD 34.
@@ -273,7 +273,7 @@ Two defects, both first-exercise bugs on the redelivery path, both fixed in the 
   node_modules. Nothing installed dependencies on the clone path, so the boot smoke would have
   failed the same way had the deploy not been skipped first.
 - **Graduated to:** `installDependencies` (extracted from the seed) runs after every clone.
-- **Recurred, still OPEN (4th time):** `delivered` with `deployUrl: null`.
+- **Recurred (4th time):** `delivered` with `deployUrl: null` — graduated with the 10th (wave 14, S5).
 
 **Pattern note:** both are "the branch a fresh build never takes" — the same lesson as the
 template's in-memory store and the fake provisioners: a path that only a retry exercises is
@@ -309,9 +309,11 @@ live URL; the job still finished `delivered`.
   condition), plus a `security-baseline` fence: **the boundary-conditioned statement may contain
   `iam:CreateRole` and nothing else**, and TagRole must exist unconditioned on the preview-role
   resource. The IAM simulation script now asks about TagRole too.
-- **Recurred, still OPEN:** the order/job reads `delivered` with `deployUrl: null` — a build with
+- **Recurred:** the order/job reads `delivered` with `deployUrl: null` — a build with
   no URL is presented to the customer as a delivery (first logged after run 4). The repo + bundle
-  contract is honoured, but the status word is wrong for what the customer bought.
+  contract is honoured, but the status word is wrong for what the customer bought. Graduated with
+  the 10th recurrence (wave 14, S5 delivery-outcome): `hosting` on the order detail, honest portal
+  wording, no auto-`paid` while unhosted.
 
 **Graduated to (second half):** a `redeliver` job mode (`POST /bff/orders/:orderId/jobs/redeliver`,
 "Deliver again" on the job page). It clones the order's delivered repository and runs only the

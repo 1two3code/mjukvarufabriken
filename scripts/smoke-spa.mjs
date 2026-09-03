@@ -245,6 +245,19 @@ const showcaseAdminRow = {
 	lifecycle: 'active',
 }
 
+/** The order detail's view of the job: no spec/plan/gates */
+const jobSummary = {
+	id: jobId,
+	status: job.status,
+	mode: job.mode,
+	reason: job.reason,
+	tokensUsed: job.tokensUsed,
+	budget: job.budget,
+	startedAt: now,
+	finishedAt: now,
+	createdAt: now,
+}
+
 /** GET fixtures per `/bff` path (query string stripped); anything else is a loud 404 */
 const bff = {
 	'/bff/session': session,
@@ -252,15 +265,15 @@ const bff = {
 	[`/bff/orders/${orderId}`]: {
 		order,
 		spec: { status: 'frozen', complete: true, openQuestions: 0 },
-		latestJob: {
-			id: jobId,
-			status: job.status,
-			tokensUsed: job.tokensUsed,
-			budget: job.budget,
-			startedAt: now,
-			finishedAt: now,
-			createdAt: now,
-		},
+		latestJob: jobSummary,
+		jobs: [jobSummary],
+		// What the customer got (wave 14, F7): judged from the fixture's deliverable
+		hosting:
+			job.status === 'delivered'
+				? deliverables.deployUrl
+					? { status: 'live', deployUrl: deliverables.deployUrl, reason: null }
+					: { status: 'unhosted', deployUrl: null, reason: job.reason ?? null }
+				: { status: 'none', deployUrl: null, reason: null },
 		payments,
 	},
 	[`/bff/orders/${orderId}/spec`]: specDraft,

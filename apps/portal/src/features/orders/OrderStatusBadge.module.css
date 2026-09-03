@@ -21,6 +21,10 @@
 	background: var(--caution);
 }
 
+.caution {
+	background: var(--caution);
+}
+
 .success {
 	background: var(--success);
 }

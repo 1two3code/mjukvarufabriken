@@ -1,0 +1,51 @@
+/* MARK: Layout */
+.panel {
+	display: flex;
+	flex-direction: column;
+	gap: var(--spacing-xs);
+
+	padding: var(--spacing-s);
+	border: var(--border-width-xs) solid var(--divider-color);
+	border-left-width: 0.3rem;
+	border-radius: var(--border-radius-base);
+
+	background: var(--content-background);
+}
+
+.live {
+	border-left-color: var(--success);
+}
+
+.unhosted {
+	border-left-color: var(--caution);
+}
+
+.title {
+	margin: 0;
+}
+
+.body {
+	margin: 0;
+}
+
+.reason {
+	margin: 0;
+	padding: var(--spacing-xs);
+	border-left: 0.3rem solid var(--caution);
+
+	white-space: pre-wrap;
+
+	background: var(--secondary-button-color);
+}
+
+.actions {
+	display: flex;
+	gap: var(--spacing-s);
+	align-items: center;
+}
+
+.hint {
+	composes: composable-caption-font from global;
+	margin: 0;
+	color: var(--secondary-text-color);
+}

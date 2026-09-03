@@ -1,5 +1,6 @@
 import { EntityNotFound } from '#/lib/entityError.ts'
-import { createMockJob } from '#/plugins/__mocks__/db.ts'
+import { createMockJob, createMockJobEvent } from '#/plugins/__mocks__/db.ts'
+import { createMockDeliverable } from '#/services/__mocks__/jobService.ts'
 import {
 	demoCapWindowMs,
 	DemoNotApprovable,
@@ -9,11 +10,20 @@ import {
 } from '#/services/orderService.ts'
 
 import type { FastifyInstance } from 'fastify'
-import type { BackendSession, OrderKind, OrderStatus } from '@mf/models'
+import type { BackendSession, JobEvent, OrderKind, OrderStatus } from '@mf/models'
 
 const user: BackendSession = { userId: 'user-1', role: 'user', orgId: 'org-1' }
 const other: BackendSession = { userId: 'user-2', role: 'user', orgId: 'org-2' }
 const admin: BackendSession = { userId: 'admin-1', role: 'admin', orgId: 'org-admin' }
+
+/** The final `bundle` delivery event of a job — with a live preview URL, or without one */
+const bundleEvent = (jobId: string, deployUrl: string | null): JobEvent =>
+	createMockJobEvent({
+		id: 9,
+		jobId,
+		type: 'delivery',
+		payload: { step: 'bundle', ok: true, deliverable: createMockDeliverable({ jobId, deployUrl }) },
+	})
 
 describe('Order Service', () => {
 	let app: FastifyInstance
@@ -181,7 +191,10 @@ describe('Order Service', () => {
 			await walk(id, ['ready', 'frozen', 'deposit_paid', 'building'])
 			return id
 		}
-		const delivered = (id: string) => [createMockJob({ orderId: id, status: 'delivered' })]
+		const delivered = (id: string) => {
+			vi.spyOn(app.db.jobs, 'listEvents').mockResolvedValue([bundleEvent('job-1', 'https://x')])
+			return [createMockJob({ orderId: id, status: 'delivered' })]
+		}
 
 		it('Flag off: a delivered build auto-delivers the order (unchanged flow)', async () => {
 			const id = await toBuilding()
@@ -280,10 +293,12 @@ describe('Order Service', () => {
 			})
 			await app.db.orders.markPaymentPaid(payment.id, {})
 		}
-		const jobDelivered = (id: string) =>
-			vi
-				.spyOn(app.db.jobs, 'list')
-				.mockResolvedValue([createMockJob({ orderId: id, status: 'delivered' })])
+		const jobDelivered = (id: string, deployUrl: string | null = 'https://preview.on.aws') => {
+			vi.spyOn(app.db.jobs, 'list').mockResolvedValue([
+				createMockJob({ orderId: id, status: 'delivered' }),
+			])
+			vi.spyOn(app.db.jobs, 'listEvents').mockResolvedValue([bundleEvent('job-1', deployUrl)])
+		}
 
 		it('Closes a delivered full-upfront order as paid (no balance step)', async () => {
 			const id = await toBuilding(500)
@@ -313,6 +328,55 @@ describe('Order Service', () => {
 			const detail = await app.orderService.getDetail(id, user)
 
 			expect(detail.order.status).toBe('delivered')
+		})
+
+		it('Does NOT close an unhosted delivery as paid — the customer bought a hosted app', async () => {
+			const id = await toBuilding(500)
+			await payUpfront(id)
+			jobDelivered(id, null)
+
+			const detail = await app.orderService.getDetail(id, user)
+
+			expect(detail.order.status).toBe('delivered')
+			expect(detail.hosting.status).toBe('unhosted')
+			// Still not on a later read while the preview is missing
+			await expect(app.orderService.getDetail(id, user)).resolves.toMatchObject({
+				order: { status: 'delivered' },
+			})
+		})
+
+		it('Settles a delivered order on a later read once a redelivery brought the preview up', async () => {
+			const id = await toBuilding(500)
+			await payUpfront(id)
+			jobDelivered(id, null)
+			await expect(app.orderService.getDetail(id, user)).resolves.toMatchObject({
+				order: { status: 'delivered' },
+			})
+
+			// A `redeliver` job of the same order delivered with a URL: it is the newest delivered job
+			vi.spyOn(app.db.jobs, 'list').mockResolvedValue([
+				createMockJob({ id: 'job-2', orderId: id, status: 'delivered', mode: 'redeliver' }),
+				createMockJob({ id: 'job-1', orderId: id, status: 'delivered', reason: 'deploy: skipped' }),
+			])
+			vi.spyOn(app.db.jobs, 'listEvents').mockResolvedValue([bundleEvent('job-2', 'https://x')])
+
+			const detail = await app.orderService.getDetail(id, user)
+
+			expect(app.db.jobs.listEvents).toHaveBeenLastCalledWith('job-2')
+			expect(detail.hosting).toEqual({ status: 'live', deployUrl: 'https://x', reason: null })
+			expect(detail.order.status).toBe('paid')
+		})
+
+		it('Approval of an unhosted delivery leaves the order delivered, not paid', async () => {
+			const id = await toBuilding(500)
+			await payUpfront(id)
+			await app.db.orders.setApproveBeforeDeliver(id, true)
+			jobDelivered(id, null)
+			await app.orderService.getDetail(id, user)
+
+			await expect(app.orderService.approve(id, user)).resolves.toMatchObject({
+				status: 'delivered',
+			})
 		})
 
 		it('Also settles after an approval (awaiting_approval → delivered → paid)', async () => {
@@ -357,6 +421,9 @@ describe('Order Service', () => {
 			expect(detail.latestJob).toEqual({
 				id: 'job-9',
 				status: 'building',
+				mode: undefined,
+				sourceJobId: undefined,
+				reason: undefined,
 				tokensUsed: 42,
 				budget: job.budget,
 				startedAt: undefined,
@@ -364,7 +431,146 @@ describe('Order Service', () => {
 				createdAt: job.createdAt,
 			})
 			expect(detail.latestJob).not.toHaveProperty('spec')
+			expect(detail.jobs).toEqual([detail.latestJob])
+			expect(detail.hosting).toEqual({ status: 'none', deployUrl: null, reason: null })
 			expect(detail.payments).toHaveLength(1)
+		})
+
+		it('Lists every job newest first with mode, source and reason', async () => {
+			const { id } = await app.orderService.create('x', user)
+			vi.spyOn(app.db.jobs, 'list').mockResolvedValue([
+				createMockJob({
+					id: 'job-2',
+					orderId: id,
+					status: 'building',
+					mode: 'redeliver',
+					sourceJobId: 'job-1',
+				}),
+				createMockJob({ id: 'job-1', orderId: id, status: 'delivered', reason: 'deploy: skipped' }),
+			])
+			vi.spyOn(app.db.jobs, 'listEvents').mockResolvedValue([])
+
+			const detail = await app.orderService.getDetail(id, user)
+
+			expect(detail.jobs.map(job => [job.id, job.mode, job.sourceJobId, job.reason])).toEqual([
+				['job-2', 'redeliver', 'job-1', undefined],
+				['job-1', undefined, undefined, 'deploy: skipped'],
+			])
+			expect(detail.latestJob?.id).toBe('job-2')
+		})
+
+		describe('hosting (what the customer actually got, F7)', () => {
+			it('none: no job has delivered yet', async () => {
+				const { id } = await app.orderService.create('x', user)
+				vi.spyOn(app.db.jobs, 'list').mockResolvedValue([
+					createMockJob({ orderId: id, status: 'failed', reason: 'boom' }),
+				])
+
+				const detail = await app.orderService.getDetail(id, user)
+
+				expect(detail.hosting).toEqual({ status: 'none', deployUrl: null, reason: null })
+				expect(app.db.jobs.listEvents).not.toHaveBeenCalled()
+			})
+
+			it('live: the latest delivered job carries a preview URL', async () => {
+				const { id } = await app.orderService.create('x', user)
+				vi.spyOn(app.db.jobs, 'list').mockResolvedValue([
+					createMockJob({ id: 'job-1', orderId: id, status: 'delivered' }),
+				])
+				vi.spyOn(app.db.jobs, 'listEvents').mockResolvedValue([
+					bundleEvent('job-1', 'https://mf-x.on.aws'),
+				])
+
+				const detail = await app.orderService.getDetail(id, user)
+
+				expect(detail.hosting).toEqual({
+					status: 'live',
+					deployUrl: 'https://mf-x.on.aws',
+					reason: null,
+				})
+			})
+
+			it('unhosted: delivered without a URL, with the job’s forwarded reason', async () => {
+				const { id } = await app.orderService.create('x', user)
+				vi.spyOn(app.db.jobs, 'list').mockResolvedValue([
+					createMockJob({
+						id: 'job-1',
+						orderId: id,
+						status: 'delivered',
+						reason: 'acceptance: blank page',
+					}),
+				])
+				vi.spyOn(app.db.jobs, 'listEvents').mockResolvedValue([bundleEvent('job-1', null)])
+
+				const detail = await app.orderService.getDetail(id, user)
+
+				expect(detail.hosting).toEqual({
+					status: 'unhosted',
+					deployUrl: null,
+					reason: 'acceptance: blank page',
+				})
+			})
+
+			it('unhosted: falls back to the failed deploy/acceptance step for rows without a reason', async () => {
+				// Jobs delivered before the harness forwarded the delivery reason
+				const { id } = await app.orderService.create('x', user)
+				vi.spyOn(app.db.jobs, 'list').mockResolvedValue([
+					createMockJob({ id: 'job-1', orderId: id, status: 'delivered' }),
+				])
+				vi.spyOn(app.db.jobs, 'listEvents').mockResolvedValue([
+					createMockJobEvent({
+						id: 7,
+						type: 'delivery',
+						payload: { step: 'deploy', ok: true, url: 'https://mf-x.on.aws' },
+					}),
+					createMockJobEvent({
+						id: 8,
+						type: 'delivery',
+						payload: {
+							step: 'acceptance',
+							ok: false,
+							reason: 'blank page',
+							url: 'https://mf-x.on.aws',
+						},
+					}),
+					bundleEvent('job-1', null),
+				])
+
+				const detail = await app.orderService.getDetail(id, user)
+
+				expect(detail.hosting).toEqual({
+					status: 'unhosted',
+					deployUrl: null,
+					reason: 'blank page',
+				})
+			})
+
+			it('unhosted with no reason at all when nothing recorded why', async () => {
+				const { id } = await app.orderService.create('x', user)
+				vi.spyOn(app.db.jobs, 'list').mockResolvedValue([
+					createMockJob({ id: 'job-1', orderId: id, status: 'delivered' }),
+				])
+				vi.spyOn(app.db.jobs, 'listEvents').mockResolvedValue([])
+
+				const detail = await app.orderService.getDetail(id, user)
+
+				expect(detail.hosting).toEqual({ status: 'unhosted', deployUrl: null, reason: null })
+			})
+
+			it('judges the newest DELIVERED job, not a newer failed retry', async () => {
+				const { id } = await app.orderService.create('x', user)
+				vi.spyOn(app.db.jobs, 'list').mockResolvedValue([
+					createMockJob({ id: 'job-3', orderId: id, status: 'failed', mode: 'redeliver' }),
+					createMockJob({ id: 'job-2', orderId: id, status: 'delivered' }),
+					createMockJob({ id: 'job-1', orderId: id, status: 'delivered' }),
+				])
+				vi.spyOn(app.db.jobs, 'listEvents').mockResolvedValue([bundleEvent('job-2', 'https://x')])
+
+				const detail = await app.orderService.getDetail(id, user)
+
+				expect(app.db.jobs.listEvents).toHaveBeenCalledWith('job-2')
+				expect(detail.hosting.status).toBe('live')
+			})
 		})
 
 		it('Moves a building order to delivered once its job has delivered', async () => {

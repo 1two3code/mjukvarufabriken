@@ -11,6 +11,7 @@ export type NextStep =
 	| 'building'
 	| 'approval'
 	| 'balance'
+	| 'balanceUnhosted'
 	| 'done'
 	| 'cancelled'
 
@@ -21,7 +22,7 @@ export type NextStep =
  * order.
  */
 export const nextStep = (detail: OrderDetail): NextStep => {
-	const { order, spec } = detail
+	const { order, spec, hosting } = detail
 	switch (order.status) {
 		case 'drafting':
 			return spec.complete ? 'freeze' : 'spec'
@@ -38,7 +39,9 @@ export const nextStep = (detail: OrderDetail): NextStep => {
 		case 'awaiting_approval':
 			return 'approval'
 		case 'delivered':
-			return 'balance'
+			// The repo + bundle are delivered either way; without a preview the copy must not
+			// claim the site is live, and must point at "Deliver again"
+			return hosting.status === 'unhosted' ? 'balanceUnhosted' : 'balance'
 		case 'paid':
 			return 'done'
 		case 'cancelled':

@@ -76,7 +76,10 @@ export function JobStatusCard({ job }: JobStatusCardProps) {
 				)}
 			</dl>
 
-			{job.reason && <p className={styles.reason}>{job.reason}</p>}
+			{/* The failure. A delivered job's withheld-preview reason is the DeliveryTimeline's below */}
+			{(job.status === 'failed' || job.status === 'killed') && job.reason && (
+				<p className={styles.reason}>{job.reason}</p>
+			)}
 
 			{active && (
 				<Has permissions={['job:admin']}>

@@ -27,6 +27,7 @@ const hooks = vi.hoisted(() => ({
 vi.mock('react-i18next', () => ({ useTranslation: () => ({ t: (key: string) => key }) }))
 vi.mock('react-router-dom', () => ({
 	useParams: () => ({ orderId: 'order-1' }),
+	useSearchParams: () => [new URLSearchParams(), vi.fn()],
 	Link: 'a',
 }))
 vi.mock('#/features/jobs/jobsApiSlice.ts', () => ({

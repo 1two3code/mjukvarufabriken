@@ -1,0 +1,38 @@
+.outcome {
+	display: inline-flex;
+	gap: var(--spacing-xs);
+	align-items: baseline;
+	max-width: 100%;
+}
+
+.label {
+	composes: composable-subheader-font from global;
+	white-space: nowrap;
+}
+
+.reason {
+	composes: composable-caption-font from global;
+
+	overflow: hidden;
+
+	color: var(--secondary-text-color);
+	text-overflow: ellipsis;
+	white-space: nowrap;
+}
+
+/* MARK: Tones */
+.neutral {
+	color: var(--secondary-text-color);
+}
+
+.success {
+	color: var(--success);
+}
+
+.caution {
+	color: var(--caution);
+}
+
+.error {
+	color: var(--error);
+}

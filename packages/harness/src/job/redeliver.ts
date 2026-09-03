@@ -64,6 +64,7 @@ export const runRedelivery = async (
 					tokensUsed: result.tokensUsed,
 					repositoryUrl: result.deliverable?.repositoryUrl,
 					deployUrl: result.deliverable?.deployUrl,
+					reason: result.reason,
 				},
 			})
 		} else {
@@ -119,5 +120,11 @@ export const runRedelivery = async (
 	if (!delivery.ok) {
 		return finish({ status: 'failed', reason: `delivery failed: ${delivery.reason}` })
 	}
-	return finish({ status: 'delivered', deliverable: delivery.deliverable })
+	// A withheld preview URL keeps its reason on the outcome (see the orchestrator's finish); a
+	// live one drops the deploy step's notes — they are on the `delivery` event, not the job
+	return finish({
+		status: 'delivered',
+		deliverable: delivery.deliverable,
+		reason: delivery.deliverable?.deployUrl ? undefined : delivery.reason,
+	})
 }

@@ -11,6 +11,7 @@ import { useCancelOrderMutation, useGetOrderQuery } from '#/features/orders/orde
 import { Deliverables } from '#/features/jobs/Deliverables.tsx'
 import { GateReports } from '#/features/jobs/GateReports.tsx'
 import { ApprovalPanel } from '#/features/orders/ApprovalPanel.tsx'
+import { DeliveryOutcomePanel } from '#/features/orders/DeliveryOutcomePanel.tsx'
 import { OrderStatusBadge } from '#/features/orders/OrderStatusBadge.tsx'
 import { OrderStepper } from '#/features/orders/OrderStepper.tsx'
 import { PaymentPanel } from '#/features/orders/PaymentPanel.tsx'
@@ -60,14 +61,14 @@ export function OrderPage() {
 	if (isLoading) return <Spinner center />
 	if (isError || !detail) return <p className={styles.error}>{t('order.page.loadError')}</p>
 
-	const { order, latestJob, spec } = detail
+	const { order, latestJob, spec, hosting } = detail
 	const paymentResult = searchParams.get('payment')
 
 	return (
 		<>
 			<div className={styles.heading}>
 				<h1 className={styles.title}>{order.name || t('order.page.untitled')}</h1>
-				<OrderStatusBadge status={order.status} />
+				<OrderStatusBadge status={order.status} hosting={hosting.status} />
 			</div>
 			<p className={styles.intro}>
 				<Link to="/orders">{t('order.page.backToOrders')}</Link>
@@ -127,6 +128,7 @@ export function OrderPage() {
 							<>
 								<dt className={styles.label}>{t('order.field.build')}</dt>
 								<dd className={styles.value}>
+									{latestJob.mode === 'redeliver' && `${t('job.mode.redeliver')} · `}
 									{t(`job.status.${latestJob.status}`)} ·{' '}
 									{t('order.page.tokens', {
 										used: latestJob.tokensUsed.toLocaleString(i18n.language),
@@ -157,6 +159,7 @@ export function OrderPage() {
 
 				<aside className={styles.side}>
 					<ApprovalPanel orderId={order.id} status={order.status} job={job} />
+					<DeliveryOutcomePanel detail={detail} />
 					<PaymentPanel detail={detail} />
 					{job && (
 						<>

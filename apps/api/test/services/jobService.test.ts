@@ -253,6 +253,42 @@ describe('Job Service', () => {
 			expect(forAdmin).toEqual([deploy, acceptance])
 		})
 
+		it('Strips artifacts-bucket URLs (the bundle, a failed deploy) from customer delivery events', async () => {
+			const bucket = 'https://mf-artifacts-dev.s3.eu-north-1.amazonaws.com/jobs/job-1'
+			const events = [
+				{
+					...createMockJobEvent({ id: 2, type: 'delivery' }),
+					payload: { step: 'repo', ok: true, url: 'https://github.com/mjukvaruhuset/app' },
+				},
+				{
+					...createMockJobEvent({ id: 3, type: 'delivery' }),
+					payload: {
+						step: 'deploy',
+						ok: false,
+						reason: 'ecs express: boom',
+						url: `${bucket}/site/index.html`,
+					},
+				},
+				{
+					...createMockJobEvent({ id: 4, type: 'delivery' }),
+					payload: { step: 'bundle', ok: true, url: `${bucket}/deliverable/` },
+				},
+			]
+			vi.spyOn(app.db.jobs, 'listEvents').mockResolvedValue(events)
+
+			const forCustomer = await app.jobService.listEvents('job-1', 0, user)
+			// The repository link stays; the bucket name / region / key layout never leave the api
+			expect(forCustomer.map(event => event.payload)).toEqual([
+				{ step: 'repo', ok: true, url: 'https://github.com/mjukvaruhuset/app' },
+				{ step: 'deploy', ok: false, reason: 'ecs express: boom' },
+				{ step: 'bundle', ok: true },
+			])
+			expect(JSON.stringify(forCustomer)).not.toContain('amazonaws.com')
+
+			const forAdmin = await app.jobService.listEvents('job-1', 0, admin)
+			expect(forAdmin).toEqual(events)
+		})
+
 		it('Keeps delivery-event URLs whose acceptance check passed — including a re-delivery that later passes', async () => {
 			const url = 'https://mf-11111111-app.eu-north-1.on.aws'
 			const events = [

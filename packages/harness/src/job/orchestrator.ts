@@ -53,6 +53,8 @@ export const runJob = async (
 
 	const gates: GateReport[] = []
 	let deliverable: Deliverable | undefined
+	/** Why a delivered build carries no preview URL (deploy skipped/failed, live check failed) */
+	let deliveryReason: string | undefined
 
 	const finish = async (
 		outcome: Omit<JobOutcome, 'tokensUsed' | 'usage' | 'gates'>
@@ -67,6 +69,7 @@ export const runJob = async (
 					tokensUsed: result.tokensUsed,
 					repositoryUrl: deliverable?.repositoryUrl,
 					deployUrl: deliverable?.deployUrl,
+					reason: result.reason,
 				},
 			})
 		} else {
@@ -331,7 +334,15 @@ export const runJob = async (
 			return finish({ status: 'failed', plan, reason: `delivery failed: ${delivery.reason}` })
 		}
 		deliverable = delivery.deliverable
+		// Only when the URL really was withheld: `delivery.reason` also carries the deploy step's
+		// notes on a LIVE preview (env-manifest placeholders, a blocked site upload), and those
+		// must not turn a live job into "delivered without a preview" (review, wave 14)
+		deliveryReason = deliverable?.deployUrl ? undefined : delivery.reason
 	}
 
-	return finish({ status: 'delivered', plan })
+	// The repo + bundle contract is honoured, so the job is `delivered` — but a withheld preview
+	// URL is not silent: its reason rides on the outcome (→ `jobs.reason`) so the api and the
+	// portal can say "delivered without a preview, because …" instead of just "delivered"
+	// (docs/LEARNINGS.md, the ten-times-recurred `delivered` with `deployUrl: null`).
+	return finish({ status: 'delivered', plan, reason: deliveryReason })
 }

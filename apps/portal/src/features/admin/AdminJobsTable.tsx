@@ -10,8 +10,9 @@ import {
 	useGetAdminOrgsQuery,
 	useKillAdminJobMutation,
 } from '#/features/admin/adminApiSlice.ts'
-import { formatTokens } from '#/features/admin/AdminTotals.tsx'
 import { formatUsd } from '#/features/admin/residentBilling.ts'
+import { formatTokens } from '#/features/admin/AdminTotals.tsx'
+import { JobOutcome } from '#/features/jobs/JobOutcome.tsx'
 
 import { Button } from '#/components/Button.tsx'
 import { Table } from '#/components/table/Table.tsx'
@@ -47,6 +48,20 @@ export function AdminJobsTable({ jobs, isLoading, isError }: AdminJobsTableProps
 			field: 'status',
 			sortable: true,
 			cell: row => t(`job.status.${row.status}`),
+		},
+		{
+			header: t('admin.field.mode'),
+			field: 'mode',
+			sortable: true,
+			cell: row => t(`job.mode.${row.mode ?? 'build'}`),
+		},
+		{
+			header: t('admin.field.outcome'),
+			field: 'outcome',
+			maxWidth: '24rem',
+			// No deliverables fetch per row (this table polls every 5 s): a delivered job reads
+			// `delivered`, or `unhosted` with its reason when the harness forwarded one
+			cell: row => <JobOutcome job={row} />,
 		},
 		{
 			header: t('admin.field.org'),

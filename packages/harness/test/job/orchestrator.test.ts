@@ -417,6 +417,88 @@ describe('runJob', () => {
 		expect(fake.ports.verify).not.toHaveBeenCalled()
 	})
 
+	it('Forwards the delivery reason of a delivered build whose preview URL was withheld', async () => {
+		// The repo + bundle contract is honoured (status `delivered`), but the deploy/live-check
+		// side withheld the URL: the api must be told WHY, not just see `deployUrl: null`.
+		const fake = createFakePorts()
+		const { hooks, events } = createHooks()
+		const deliverable = {
+			jobId: 'job-1',
+			repositoryUrl: 'https://github.com/mjukvaruhuset/x',
+			transferPending: false,
+			deployUrl: null,
+			siteUrl: null,
+			deliverableKey: 'deliverables/job-1/',
+			files: [],
+			deliveredAt: '2026-09-02T00:00:00.000Z',
+		}
+		fake.ports.deliver = vi.fn(async () => ({
+			ok: true,
+			tokens: 0,
+			steps: [],
+			deliverable,
+			reason: 'acceptance: blank page',
+		}))
+
+		const outcome = await runJob(
+			{ ...job(), delivery: { slug: 'x', appName: 'X' } },
+			{ ports: fake.ports, hooks }
+		)
+
+		expect(outcome.status).toBe('delivered')
+		expect(outcome.reason).toBe('acceptance: blank page')
+		expect(outcome.deliverable).toBe(deliverable)
+		expect(events.at(-1)).toMatchObject({
+			type: 'done',
+			payload: { deployUrl: null, reason: 'acceptance: blank page' },
+		})
+	})
+
+	it('Delivers without a reason when the preview came up', async () => {
+		const fake = createFakePorts()
+		const { hooks, events } = createHooks()
+		fake.ports.deliver = vi.fn(async () => ({
+			ok: true,
+			tokens: 0,
+			steps: [],
+			deliverable: { deployUrl: 'https://preview.on.aws' } as never,
+		}))
+
+		const outcome = await runJob(
+			{ ...job(), delivery: { slug: 'x', appName: 'X' } },
+			{ ports: fake.ports, hooks }
+		)
+
+		expect(outcome.status).toBe('delivered')
+		expect(outcome.reason).toBeUndefined()
+		expect(events.at(-1)?.payload).toMatchObject({ deployUrl: 'https://preview.on.aws' })
+	})
+
+	it('Drops the deploy notes of a LIVE preview — the reason only rides on a withheld URL', async () => {
+		// The real `deliver` returns a reason for a live deploy too (env-manifest placeholders, a
+		// blocked site upload — see deliver.test "Injects the app-declared required env"); that
+		// must not turn the job into "delivered without a preview"
+		const fake = createFakePorts()
+		const { hooks, events } = createHooks()
+		fake.ports.deliver = vi.fn(async () => ({
+			ok: true,
+			tokens: 0,
+			steps: [],
+			deliverable: { deployUrl: 'https://preview.on.aws' } as never,
+			reason: 'MAPBOX_TOKEN: set by the operator before real use',
+		}))
+
+		const outcome = await runJob(
+			{ ...job(), delivery: { slug: 'x', appName: 'X' } },
+			{ ports: fake.ports, hooks }
+		)
+
+		expect(outcome.status).toBe('delivered')
+		expect(outcome.reason).toBeUndefined()
+		expect(events.at(-1)?.payload).toMatchObject({ deployUrl: 'https://preview.on.aws' })
+		expect((events.at(-1)?.payload as { reason?: string }).reason).toBeUndefined()
+	})
+
 	it('Keeps going when the event sink throws', async () => {
 		const fake = createFakePorts()
 		const { hooks } = createHooks({ emit: vi.fn().mockRejectedValue(new Error('db down')) })
