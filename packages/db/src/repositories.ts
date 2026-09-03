@@ -157,6 +157,21 @@ export type OrdersRepository = {
 	listActiveWithHostingUntilBefore: (until: Date) => Promise<Order[]>
 	/** Demo orders whose build was approved at or after the instant (the weekly voucher cap) */
 	countDemoApprovalsSince: (since: Date) => Promise<number>
+	/** Paid demos (`deposit_paid`) without a build approval, oldest first — the admin's demo queue */
+	listDemosAwaitingApproval: () => Promise<Order[]>
+	/**
+	 * Records a demo build approval under the weekly cap atomically: the count of demo approvals
+	 * since `window.since` and the stamp (compare-and-set from "not yet approved", like
+	 * `setBuildApprovedAt`) happen in one serialised step, so concurrent approvals cannot both
+	 * slip under the cap. No `window.cap` means no limit (an admin's `force`). `order` is
+	 * undefined when the cap is full, the order is missing or already approved; `approved` is the
+	 * count before this call.
+	 */
+	stampDemoApproval: (
+		orderId: string,
+		approvedAt: Date,
+		window: { since: Date; cap?: number }
+	) => Promise<{ order: Order | undefined; approved: number }>
 
 	// MARK: Payments (M6)
 	insertPayment: (payment: NewPayment) => Promise<Payment>

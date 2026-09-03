@@ -142,6 +142,15 @@ export const createMemoryRepositories = (): MemoryRepositories => {
 		order.priceSek = draft.priceSek
 		order.frozenAt = draft.frozenAt
 	}
+	/** Demo orders approved at or after `since` — the weekly voucher cap's count */
+	const countDemoApprovals = (since: Date) =>
+		[...orders.values()].filter(
+			({ order }) =>
+				order.kind === 'demo' &&
+				order.buildApprovedAt !== undefined &&
+				new Date(order.buildApprovedAt) >= since
+		).length
+
 	const listEntries = (filter: { orgId?: string }) =>
 		[...orders.values()]
 			.filter(entry => filter.orgId === undefined || entry.order.orgId === filter.orgId)
@@ -611,13 +620,36 @@ export const createMemoryRepositories = (): MemoryRepositories => {
 					.sort((a, b) => (a.hostingUntil ?? '').localeCompare(b.hostingUntil ?? ''))
 					.slice(0, 200)
 					.map(clone),
-			countDemoApprovalsSince: async since =>
-				[...orders.values()].filter(
-					({ order }) =>
-						order.kind === 'demo' &&
-						order.buildApprovedAt !== undefined &&
-						new Date(order.buildApprovedAt) >= since
-				).length,
+			countDemoApprovalsSince: async since => countDemoApprovals(since),
+			listDemosAwaitingApproval: async () =>
+				[...orders.values()]
+					.map(entry => entry.order)
+					.filter(
+						order =>
+							order.kind === 'demo' &&
+							order.status === 'deposit_paid' &&
+							order.buildApprovedAt === undefined
+					)
+					.sort((a, b) => a.createdAt.localeCompare(b.createdAt))
+					.slice(0, 200)
+					.map(clone),
+			// Synchronous between the count and the stamp — atomic like the SQL transaction
+			stampDemoApproval: async (orderId, approvedAt, window) => {
+				const approved = countDemoApprovals(window.since)
+				if (window.cap !== undefined && approved >= window.cap) {
+					return { order: undefined, approved }
+				}
+				const entry = orders.get(orderId)
+				if (!entry || entry.order.buildApprovedAt !== undefined) {
+					return { order: undefined, approved }
+				}
+				entry.order = {
+					...entry.order,
+					buildApprovedAt: approvedAt.toISOString(),
+					updatedAt: now(),
+				}
+				return { order: clone(entry.order), approved }
+			},
 
 			insertPayment: async payment => {
 				if ([...payments.values()].some(p => p.sessionId === payment.sessionId)) {

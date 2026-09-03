@@ -343,6 +343,59 @@ export const countDemoApprovalsSince = async (db: Db, since: Date): Promise<numb
 	return Number(row?.count ?? 0)
 }
 
+/**
+ * Paid voucher demos waiting for a build approval, oldest first — the admin's demo queue. A
+ * query of its own rather than a filter over the newest-200 `listOrderRecords` window: the
+ * oldest waiting demo is exactly the row the queue exists to surface.
+ */
+export const listDemosAwaitingApproval = async (db: Db): Promise<Order[]> => {
+	const rows = await db.sql<OrderRow[]>`
+		select * from orders
+		where kind = 'demo' and status = 'deposit_paid' and build_approved_at is null
+		order by created_at asc
+		limit 200`
+	return rows.map(toOrder)
+}
+
+/**
+ * Arbitrary constant, distinct from `migrationLockKey`: every demo approval takes the same
+ * transaction-level advisory lock, so the week's count and the stamp serialise across approvals
+ */
+export const demoApprovalLockKey = 727_014
+
+/**
+ * Stamps a demo build approval under the weekly voucher cap in ONE serialised step: counts the
+ * demo approvals since `window.since` and records `approvedAt` on the order only while that count
+ * is below `window.cap` (no cap: an admin's `force`) and the order is not yet approved. Count and
+ * stamp run in a transaction holding an advisory lock, so two concurrent approvals cannot both
+ * read "one short of the cap" and both stamp — a plain count-then-update would (READ COMMITTED
+ * gives each statement its own snapshot). `order` is undefined when the cap is full, the order is
+ * missing, or it already carries an approval; `approved` is the count before this stamp, so the
+ * caller can tell the cases apart by re-reading the row.
+ */
+export const stampDemoApproval = async (
+	db: Db,
+	orderId: string,
+	approvedAt: Date,
+	window: { since: Date; cap?: number }
+): Promise<{ order: Order | undefined; approved: number }> => {
+	const { sql } = db
+	return sql.begin(async tx => {
+		await tx`select pg_advisory_xact_lock(${demoApprovalLockKey})`
+		const [count] = await tx<{ count: number | string }[]>`
+			select count(*) as count from orders
+			where kind = 'demo' and build_approved_at is not null
+				and build_approved_at >= ${window.since}`
+		const approved = Number(count?.count ?? 0)
+		if (window.cap !== undefined && approved >= window.cap) return { order: undefined, approved }
+		const [row] = await tx<OrderRow[]>`
+			update orders set build_approved_at = ${approvedAt}, updated_at = now()
+			where id = ${orderId} and build_approved_at is null
+			returning *`
+		return { order: row && toOrder(row), approved }
+	})
+}
+
 // MARK: Payments (M6)
 
 export const insertPayment = async (db: Db, payment: NewPayment): Promise<Payment> => {
@@ -440,8 +493,7 @@ export const createOrdersRepository = (db: Db): OrdersRepository => ({
 	getOrder: orderId => getOrderRecord(db, orderId),
 	listOrders: filter => listOrderRecords(db, filter),
 	transition: (orderId, from, to) => transitionOrder(db, orderId, from, to),
-	setApproveBeforeDeliver: (orderId, enabled) =>
-		setApproveBeforeDeliver(db, orderId, enabled),
+	setApproveBeforeDeliver: (orderId, enabled) => setApproveBeforeDeliver(db, orderId, enabled),
 	setLifecycle: (orderId, from, to) => setLifecycle(db, orderId, from, to),
 	setCustomerSlug: (orderId, customerSlug) => setCustomerSlug(db, orderId, customerSlug),
 	listSuspendedBefore: changedBefore => listSuspendedBefore(db, changedBefore),
@@ -449,6 +501,9 @@ export const createOrdersRepository = (db: Db): OrdersRepository => ({
 	setBuildApprovedAt: (orderId, approvedAt) => setBuildApprovedAt(db, orderId, approvedAt),
 	listActiveWithHostingUntilBefore: until => listActiveWithHostingUntilBefore(db, until),
 	countDemoApprovalsSince: since => countDemoApprovalsSince(db, since),
+	listDemosAwaitingApproval: () => listDemosAwaitingApproval(db),
+	stampDemoApproval: (orderId, approvedAt, window) =>
+		stampDemoApproval(db, orderId, approvedAt, window),
 	insertPayment: payment => insertPayment(db, payment),
 	getPayment: id => getPayment(db, id),
 	findPaymentBySession: sessionId => findPaymentBySession(db, sessionId),
