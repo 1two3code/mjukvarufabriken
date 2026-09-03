@@ -23,7 +23,7 @@ concurrency:
 jobs:
   verify:
     name: Lint, test, build, synth
-    runs-on: ubuntu-latest
+    runs-on: namespace-profile-mjukvaruhuset
     # Throwaway Postgres so migrations run against a real server (packages/db migrations.test.ts).
     # Reached at localhost:5432; TEST_DATABASE_URL below opts the migration suite in.
     services:

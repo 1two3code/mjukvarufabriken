@@ -20,7 +20,7 @@ on:
 jobs:
   deploy:
     name: Deploy ${{ inputs.environment }}
-    runs-on: ubuntu-latest
+    runs-on: namespace-profile-mjukvaruhuset
     environment: ${{ inputs.environment }}
     env:
       CDK_DEFAULT_ACCOUNT: ${{ vars.AWS_ACCOUNT_ID }}
