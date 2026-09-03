@@ -123,6 +123,15 @@ describe('Showcase Service', () => {
 			)
 			expect(app.db.jobs.list).not.toHaveBeenCalled()
 		})
+
+		it('Rejects an unclaimed anonymous quote like an unknown order (wave 14)', async () => {
+			await app.db.orders.insert({ id: 'quote-1', orgId: `anon:${'0'.repeat(32)}`, name: 'Offert' })
+
+			await expect(app.showcaseService.upsert('quote-1', input())).rejects.toBeInstanceOf(
+				EntityNotFound
+			)
+			expect(app.db.jobs.list).not.toHaveBeenCalled()
+		})
 	})
 
 	describe('listPublished', () => {

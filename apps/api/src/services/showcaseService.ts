@@ -1,5 +1,6 @@
 import fp from 'fastify-plugin'
 import { rateLimitWindowStart } from '@mf/db'
+import { isAnonymousOrgId } from '@mf/models'
 
 import { EntityNotFound } from '#/lib/entityError.ts'
 import { deliverableFromEvents } from '#/services/jobService.utils.ts'
@@ -96,7 +97,9 @@ const plugin: FastifyPluginAsync = async app => {
 		listAdmin: () => db.showcases.list(),
 		upsert: async (orderId, input) => {
 			const order = await db.orders.getOrder(orderId)
-			if (!order) throw new EntityNotFound('order', orderId)
+			// An unclaimed anonymous quote (wave 14) belongs to nobody and is never in the gallery —
+			// the same "not found" every other read gives it, admins included
+			if (!order || isAnonymousOrgId(order.orgId)) throw new EntityNotFound('order', orderId)
 			const url = input.url ?? (await liveUrlOf(orderId))
 			if (input.published && !url) throw new ShowcaseNoLiveUrl(orderId)
 			return db.showcases.upsert({
