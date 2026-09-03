@@ -4,6 +4,7 @@ import { useState } from 'react'
 import { useTranslation } from 'react-i18next'
 import { skipToken } from '@reduxjs/toolkit/query'
 
+import { isApiError } from '#/app/api.ts'
 import { usePageMeta } from '#/hooks/usePageMeta.ts'
 import {
 	useCreateQuoteMutation,
@@ -35,7 +36,7 @@ export function QuotePage() {
 	usePageMeta('meta.quote.title', 'meta.quote.description')
 
 	const [handle, setHandle] = useState<QuoteHandle | null>(readQuoteHandle)
-	const { data: quote, isLoading, isError } = useGetQuoteQuery(handle ?? skipToken)
+	const { data: quote, isLoading, isError, error, refetch } = useGetQuoteQuery(handle ?? skipToken)
 	const [createQuote, { isLoading: isCreating }] = useCreateQuoteMutation()
 	const [postMessage, { isLoading: isPosting }] = usePostQuoteMessageMutation()
 
@@ -44,8 +45,11 @@ export function QuotePage() {
 		setHandle(null)
 	}
 
-	// A stored handle the api no longer honours (claimed, swept, wrong origin): offer a fresh start
-	const stale = handle !== null && isError
+	// Only the api's 404 means the stored handle is dead (claimed, swept, wrong origin): offer a
+	// fresh start. Anything else — a 429 read window shared by a NAT, a 5xx, a network blip — is
+	// transient: the draft is still there, so keep the handle and offer a retry instead
+	const stale = handle !== null && isError && isApiError(error) && error.status === 404
+	const unreachable = handle !== null && isError && !stale
 
 	/** The first message mints the quote; every message is one engine turn. True when sent. */
 	const send = async (content: string) => {
@@ -75,6 +79,19 @@ export function QuotePage() {
 					<div>
 						<Button color="secondary" size="small" onClick={restart}>
 							{t('quote.action.restart')}
+						</Button>
+					</div>
+				</Section>
+			)}
+
+			{unreachable && (
+				<Section variant="card">
+					<p className={styles.stale} role="status">
+						{t('quote.resume.retry')}
+					</p>
+					<div>
+						<Button color="secondary" size="small" onClick={() => void refetch()}>
+							{t('quote.action.retry')}
 						</Button>
 					</div>
 				</Section>
