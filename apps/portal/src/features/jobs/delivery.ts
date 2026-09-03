@@ -9,8 +9,17 @@ export type DeliveryStepState = {
 	/** `pending` = the step has not reported (yet, or ever — the delivery stopped before it) */
 	state: 'ok' | 'failed' | 'pending'
 	reason?: string
+	/** A link the customer may open: the repository, or the live preview — see {@link linkableSteps} */
 	url?: string
 }
+
+/**
+ * Steps whose `url` is for the customer when the step passed: the GitHub repository and the live
+ * preview. Every other URL in a delivery event is an artifacts-bucket object (the bundle, the
+ * static-site fallback a failed deploy points at) — BLOCK_ALL, reachable only through the
+ * presigned links of the Deliverables panel — so the timeline never links it.
+ */
+const linkableSteps: readonly DeliveryStep[] = ['repo', 'deploy', 'acceptance']
 
 /**
  * One row per delivery step in run order, judged by the LAST `delivery` event of that step (a
@@ -24,7 +33,12 @@ export const deliveryTimeline = (events: JobEvent[]): DeliveryStepState[] => {
 		const parsed = DeliveryEventPayloadSchema.safeParse(event.payload)
 		if (!parsed.success) continue
 		const { step, ok, reason, url } = parsed.data
-		latest.set(step, { step, state: ok ? 'ok' : 'failed', reason, url })
+		latest.set(step, {
+			step,
+			state: ok ? 'ok' : 'failed',
+			reason,
+			url: ok && linkableSteps.includes(step) ? url : undefined,
+		})
 	}
 	return deliveryStep.map(step => latest.get(step) ?? { step, state: 'pending' })
 }
@@ -48,9 +62,9 @@ export type JobOutcome = {
 /**
  * What a job amounted to, for a list row. `deployUrl` is the deliverable's, when the caller has
  * loaded it: a string makes the job `live`, null `unhosted`. Without it (undefined) a delivered
- * job with a reason is still `unhosted` — the harness forwards the withheld-URL reason onto the
- * row — and one without is plain `delivered`: honest about the repo, silent about hosting,
- * never a claim that the site is live.
+ * job with a reason is still `unhosted` — a delivered row carries a reason ONLY when its preview
+ * URL was withheld (the harness gates it on `deployUrl`) — and one without is plain `delivered`:
+ * honest about the repo, silent about hosting, never a claim that the site is live.
  */
 export const jobOutcome = (
 	job: Pick<Job, 'status' | 'reason'>,

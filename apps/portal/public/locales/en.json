@@ -88,6 +88,7 @@
   "job.event.deliveryOk": "Delivery — {{step}} done",
   "job.event.done": "Delivered — {{tokens}} tokens used",
   "job.event.doneUnhosted": "Delivered without a preview — {{reason}} ({{tokens}} tokens used)",
+  "job.event.doneUnhostedNoReason": "Delivered without a preview ({{tokens}} tokens used)",
   "job.event.failed": "Build failed: {{reason}}",
   "job.event.gateFailed": "Gate {{name}} failed: {{summary}}",
   "job.event.gateOk": "Gate {{name}} passed: {{summary}}",

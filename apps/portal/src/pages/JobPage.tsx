@@ -54,7 +54,7 @@ export function JobPage() {
 				<p className={styles.empty}>{t('job.page.noJob')}</p>
 			) : (
 				<>
-					{jobs && jobs.length > 1 && (
+					{jobs && (
 						<JobList
 							jobs={jobs}
 							selectedJobId={job.id}

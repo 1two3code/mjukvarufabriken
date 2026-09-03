@@ -61,10 +61,12 @@ const eventText = (event: JobEvent, t: TFunction) => {
 				output: payload.output ?? '',
 			})
 		case 'done':
-			// A delivered job whose preview URL was withheld carries why (harness → `reason`)
+			// Judged by the URL itself, never by `reason` alone: a delivered job whose preview URL
+			// was withheld (`deployUrl: null`) says so, and why when the harness recorded it
+			if (payload.deployUrl !== null) return t('job.event.done', { tokens: payload.tokensUsed })
 			return payload.reason
 				? t('job.event.doneUnhosted', { tokens: payload.tokensUsed, reason: payload.reason })
-				: t('job.event.done', { tokens: payload.tokensUsed })
+				: t('job.event.doneUnhostedNoReason', { tokens: payload.tokensUsed })
 		case 'failed':
 		case 'killed':
 			return t(`job.event.${event.type}`, { reason: payload.reason ?? '' })

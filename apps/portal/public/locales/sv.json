@@ -88,6 +88,7 @@
   "job.event.deliveryOk": "Leverans — {{step}} klar",
   "job.event.done": "Levererat — {{tokens}} tokens använda",
   "job.event.doneUnhosted": "Levererat utan förhandsvisning — {{reason}} ({{tokens}} tokens använda)",
+  "job.event.doneUnhostedNoReason": "Levererat utan förhandsvisning ({{tokens}} tokens använda)",
   "job.event.failed": "Bygget misslyckades: {{reason}}",
   "job.event.gateFailed": "Grind {{name}} underkänd: {{summary}}",
   "job.event.gateOk": "Grind {{name}} godkänd: {{summary}}",
