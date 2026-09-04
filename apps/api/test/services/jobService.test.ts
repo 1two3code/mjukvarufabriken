@@ -1070,6 +1070,52 @@ describe('Job Service', () => {
 			expect(app.db.jobs.appendEvent).toHaveBeenCalledWith('job-1', notify)
 		})
 
+		it.each([
+			['budget exceeded'],
+			['budget exhausted before the acceptance-tests gate — the build phase left too little behind'],
+		])('Never retries a job the same budget cannot fix: %s', async reason => {
+			vi.spyOn(app.db.jobs, 'insertRetry').mockResolvedValue(retryRow())
+			const job = createMockJob({ id: 'job-1', status: 'failed', reason, budget: budgetForSize.S })
+
+			await expect(app.jobService.retryFailedBuild(job)).resolves.toBeUndefined()
+			// Rebuilding on the SAME ceiling reaches the same wall — run 10 paid ~USD 12 to prove it
+			expect(app.db.jobs.insertRetry).not.toHaveBeenCalled()
+			expect(app.ecs.runJob).not.toHaveBeenCalled()
+		})
+
+		it('Still retries a failure that merely mentions the budget further in', async () => {
+			vi.spyOn(app.db.jobs, 'insertRetry').mockResolvedValue(retryRow())
+			const job = createMockJob({
+				id: 'job-1',
+				status: 'failed',
+				reason: '1 gate(s) failed: review\nreview: the budget of the calendar page is unclear',
+				budget: budgetForSize.S,
+			})
+
+			await expect(app.jobService.retryFailedBuild(job)).resolves.toMatchObject({ id: 'job-2' })
+		})
+
+		it('Pages immediately on a budget failure instead of holding the mail for a retry that will not come', async () => {
+			app.secrets.authAdminEmails = ['a@example.com']
+			// The container reports both in one batch, and writes the row's own reason only after
+			await app.jobService.reportEvents(createMockJob({ id: 'job-1', reason: undefined }), [
+				{ type: 'failed', payload: { reason: 'budget exceeded', tokensUsed: 9_000_042 } },
+				{
+					type: 'notify',
+					payload: {
+						to: 'admins',
+						subject: 'Build job job-1 failed',
+						text: 't',
+						kind: 'job-failed',
+					},
+				},
+			])
+
+			expect(app.email.send).toHaveBeenCalledWith(
+				expect.objectContaining({ subject: '[mf test] Build job job-1 failed' })
+			)
+		})
+
 		it('Still mails the failure of a job that IS a retry — the second failure pages a human', async () => {
 			app.secrets.authAdminEmails = ['a@example.com']
 			vi.spyOn(app.db.jobs, 'listEvents').mockResolvedValue([
