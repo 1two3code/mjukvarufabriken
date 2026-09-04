@@ -9,6 +9,45 @@ export const unknownModel = 'unknown'
 export type AbortReason = 'budget exceeded' | 'duration exceeded' | 'killed'
 
 /**
+ * What a gate chain costs when it runs to completion: 1.37M budget-tokens on the M-class job
+ * 86fe268f (2026-09-03), of which acceptance-tests alone was 1.08M, review 249k and
+ * acceptance-check 43k (verify and licence are deterministic and free).
+ *
+ * The gates are the last thing a job does before delivery, so a build phase that leaves less than
+ * this behind cannot finish — and job d0339616 proved the expensive way that discovering it inside
+ * the acceptance-tests session costs another 374k tokens and nine minutes, and then reports the
+ * useless reason `budget exceeded`. `runGates` refuses to start a gate it cannot pay for instead.
+ */
+export const gateChainReserveTokens = 1_400_000
+
+/**
+ * Ceiling on the chain reserve as a share of the job's own budget. The absolute number above is
+ * what the gates cost on a real job; without this clamp it would also make a deliberately small
+ * job impossible — a 1M-token job would be refused its gates because a 9M-token job's chain does
+ * not fit inside it.
+ */
+export const gateChainReserveShare = 0.25
+
+/**
+ * Held back from the gate chain so a green build always has enough left to actually deliver.
+ * Merges plus the whole delivery (handover prose, repo, deploy, bundle) came to 93k on 86fe268f;
+ * this is that with room to spare, and it is small next to any size class's budget.
+ */
+export const deliveryReserveTokens = 250_000
+
+/** Ceiling on the delivery reserve as a share of the job's budget — see `gateChainReserveShare` */
+export const deliveryReserveShare = 0.05
+
+/**
+ * Ceiling on what a single gate may spend, as a share of the job's total budget. A runaway gate
+ * must not be able to eat the whole remainder: it is stopped at its allowance and reported red,
+ * leaving the reason legible and the rest of the budget intact. Deliberately loose — 25 % of the
+ * S budget is 2.25M against the 1.08M a real acceptance-tests gate has been measured at, so this
+ * only ever trips on a gate that has genuinely lost the plot.
+ */
+export const gateAllowanceShare = 0.25
+
+/**
  * Hard token + wall-clock budget shared by every session in a job. The first breach aborts the
  * shared `AbortController` (every in-flight Agent SDK / Anthropic call listens to it) and records
  * the reason so the orchestrator can report it.

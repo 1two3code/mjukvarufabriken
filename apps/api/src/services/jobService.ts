@@ -161,13 +161,22 @@ export class JobNotAwaitingApproval extends EntityInvalid {
 }
 
 /**
- * Hard token budget per size class: S 6M / M 15M / L 40M budget-tokens. Budget-tokens weight
+ * Hard token budget per size class: S 9M / M 15M / L 40M budget-tokens. Budget-tokens weight
  * cache reads at 10 %, and measured cost is ≈ USD 2.5 per million (demo job 2026-08-26:
- * three-task S spec, 2M spent ≈ USD 5, third task aborted), so these are ≈ USD 15 / 40 / 100
- * ceilings against 15k / 45k / 120k SEK prices.
+ * three-task S spec, 2M spent ≈ USD 5, third task aborted), so these are ≈ USD 22 / 40 / 100
+ * ceilings — a few per cent of the S/M/L prices.
+ *
+ * S was 6M until 2026-09-04, and that was a build-phase number with nothing left for the rest of
+ * the job. Two measurements from 2026-09-03 set the new one: the delivered M-class job 86fe268f
+ * spent 4.43M on its four tasks and then 1.37M on the gate chain (acceptance-tests 1.08M of it)
+ * plus 93k on merges and delivery; the failed S-class job d0339616 spent 5.63M on five tasks, so
+ * the ~1.4M of gates it still owed never had anywhere to come from — it died 374k into
+ * acceptance-tests having already built the whole app. 9M covers a build phase that heavy plus
+ * the gate chain and delivery, with ~2M of slack. `gateChainReserveTokens` in @mf/harness is the
+ * other half of the fix: it fails such a job before the gate session starts instead of after.
  */
 export const budgetForSize: Record<SizeClass, JobBudget> = {
-	S: { maxTokens: 6_000_000, maxWorkers: 2, maxDurationMinutes: 120 },
+	S: { maxTokens: 9_000_000, maxWorkers: 2, maxDurationMinutes: 120 },
 	M: { maxTokens: 15_000_000, maxWorkers: 3, maxDurationMinutes: 240 },
 	L: { maxTokens: 40_000_000, maxWorkers: 4, maxDurationMinutes: 480 },
 }
