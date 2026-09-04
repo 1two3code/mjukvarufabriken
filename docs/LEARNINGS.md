@@ -106,21 +106,36 @@ killed: `reason: "budget exceeded"`, `tokensUsed: 6,012,260` against the 6,000,0
 - **Symptom:** `budget exceeded` with the app otherwise looking sound (repository fully merged,
   lint + tests green). Because this run WAS the retry, Gate C's one-shot rule means nothing
   restarts it automatically — the order needs a human decision (rebuild, or investigate first).
-- **Root cause, two contributing factors, neither ruled out:** (1) this spec's plan has 5 tasks
-  to Ögonblick's 4, and every worker session this run hit its own turn cap (`foundation` twice —
-  worker AND repair — plus `api-doors`, `spa-calendar`, `spa-editor`), where run 9's tasks mostly
-  finished under cap; more tasks + more turn-capped sessions is a real, budget-neutral-in-isolation
-  reason a 5-task S build can cost more than a 4-task one. (2) Hasse observed live `529 overloaded`
-  errors from Claude.ai in the same window this job ran — if the same overload reached the job's
-  own Anthropic calls, retried requests would inflate turns (and therefore tokens) without
-  inflating the amount of real work done, which is consistent with turn caps hitting on tasks that
-  didn't need repair last time. The job logs don't carry raw HTTP-retry counts, so this can't be
-  confirmed from here — flagging both rather than picking one.
-- **Graduated to:** OPEN. Two candidate fixes, not yet decided between: raise the S budget (cost:
-  every S build gets more expensive, defeats part of the point of the size ladder), or make the
-  acceptance-tests gate cheaper/abortable near a budget ceiling so a near-complete build doesn't
-  lose everything to the last gate. Needs a repeat run once Anthropic's status is normal before
-  concluding it's (1) alone — right now a rebuild risks paying for the same overload twice.
+- **Root cause (measured 2026-09-04, no longer a guess): the S budget never had room for a gate
+  chain.** Two breakdowns, both from the job events and the delivered `gates.json`:
+
+  | | run 9 — 86fe268f (M, delivered) | this job — d0339616 (S, failed) |
+  | --- | --- | --- |
+  | plan | 5,853 | 5,642 |
+  | tasks | 4,431,986 (4 tasks) | **5,632,831 (5 tasks)** |
+  | merges + delivery | 92,641 | 0 (merges were free) |
+  | gate chain | **1,374,519** — acceptance-tests 1,082,104 / review 248,989 / acceptance-check 43,426 | 373,787 and cut off |
+  | total | 5,904,999 of 15M | 6,012,260 of 6M |
+
+  The gate chain costs ~1.4M, and acceptance-tests alone ~1.1M of it. This job's build phase left
+  367k behind. It was dead before the first model gate started — it just took nine minutes and
+  another 374k tokens to find out. Two things this table also says: run 9, an **M** job, would have
+  fitted inside the old **S** budget with 95k to spare (the ladder was never calibrated against a
+  real delivery); and gates are 23% of a successful job, which nothing in `budgetForSize` accounted
+  for. The `529 overloaded` errors Hasse saw live in the same window are not needed to explain any
+  of this and are dropped as a theory.
+- **Graduated to: FIXED (2026-09-04).** Both halves, since the budget number and the failure mode
+  are separate bugs: `budgetForSize.S` 6M → **9M** (5.6M of build + 1.4M of gates + delivery, with
+  ~2M of slack), and `runGates` now takes a `GateBudget` — it prices the gates that have not run
+  yet against measured shares (`gateCostShare`), refuses to *start* a model gate the job cannot pay
+  for, holds a delivery reserve back so a green build can always deliver, and stops a runaway gate
+  at a per-gate allowance instead of letting it eat the remainder. A job in this state now fails in
+  seconds with `budget exhausted before the acceptance-tests gate` and a full set of gate reports,
+  rather than after nine minutes with the useless reason `budget exceeded`. Rails scale down with
+  the budget so a small job is not locked out of its own gates.
+- **Still open, deliberately not changed here:** Gate C retries a `budget exceeded` job with the
+  *same* budget, which cannot succeed. The new reason string makes that case distinguishable — the
+  retry policy should read it.
 
 ## 2026-09-03 — job 185c8eb5 (Julkalender, S) — dogfood run 10, task lost its work to a git failure
 4.57 M budget-tokens (~USD 12, of the 6 M S budget) before failing. Three of four tasks merged

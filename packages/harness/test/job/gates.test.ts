@@ -1,6 +1,12 @@
 import { GateReportSchema, NotifyPayloadSchema } from '@mf/models'
 
-import { failureNotification, gateOrder, gatesFailedReason, runGates } from '#job/gates.ts'
+import {
+	failureNotification,
+	gateBudgetFor,
+	gateOrder,
+	gatesFailedReason,
+	runGates,
+} from '#job/gates.ts'
 
 import type { NewJobEvent, Spec } from '@mf/models'
 import type { GateOutcome, OrchestratorPorts } from '#job/types.ts'
@@ -217,6 +223,128 @@ describe('runGates', () => {
 				seedCommit: 'abc',
 			})
 		)
+	})
+})
+
+// MARK: Budget guard rails
+
+/** A job budget with `left` tokens still on it, guard rails scaled to a 9M S-class budget */
+const withBudget = (left: number) => ({
+	budget: { ...gateBudgetFor(9_000_000), remaining: () => left },
+})
+
+describe('runGates under a job budget', () => {
+	it('Refuses a model gate the job cannot pay for, without starting it (job d0339616)', async () => {
+		const { ports, calls } = createPorts()
+		// What job d0339616 actually had left after its build phase: 374k against a 1.4M chain
+		const { outcome, events } = run(ports, withBudget(374_000))
+		const result = await outcome
+
+		expect(result.ok).toBe(false)
+		expect(result.exhausted).toBe('acceptance-tests')
+		expect(result.failed).toEqual(['acceptance-tests'])
+		// Free lint + test still ran; the expensive session never started
+		expect(calls).toEqual(['verify'])
+		expect(ports.acceptanceTests).not.toHaveBeenCalled()
+		const report = result.reports.at(-1)!
+		expect(report).toMatchObject({ name: 'acceptance-tests', ok: false, tokens: 0 })
+		expect(report.summary).toContain('the remaining gates need about 1.4M')
+		expect(GateReportSchema.parse(report)).toEqual(report)
+		expect(events).toHaveLength(2)
+	})
+
+	it('Prices only the gates still to come, so the floor shrinks as the chain advances', async () => {
+		const { ports, calls } = createPorts()
+		// A run-9-shaped chain: 1.7M up front, acceptance-tests takes 1.1M of it, review 250k
+		let left = 1_700_000
+		// Replacing the implementation drops createPorts' recorder, so `calls` is pushed by hand
+		const spend = (port: 'acceptanceTests' | 'review', name: string, tokens: number) =>
+			vi.mocked(ports[port]).mockImplementation(async ({ onUsage }) => {
+				calls.push(name)
+				left -= tokens
+				onUsage({ inputTokens: tokens, outputTokens: 0 })
+				return green(name)
+			})
+		spend('acceptanceTests', 'acceptance-tests', 1_100_000)
+		spend('review', 'review', 250_000)
+		const result = await run(ports, {
+			budget: { ...gateBudgetFor(9_000_000), remaining: () => left },
+		}).outcome
+
+		// review starts with 600k left — far under the 1.4M a whole chain needs, but its own
+		// remaining slice (review + acceptance-check ≈ 294k) fits
+		expect(result.ok).toBe(true)
+		expect(calls).toEqual([...gateOrder])
+	})
+
+	it('Holds the delivery reserve back from the chain', async () => {
+		const { ports } = createPorts()
+		// 1.4M chain + a 250k delivery reserve: 1.5M is not enough, 1.7M is
+		expect((await run(ports, withBudget(1_500_000)).outcome).exhausted).toBe('acceptance-tests')
+		expect((await run(ports, withBudget(1_700_000)).outcome).exhausted).toBeUndefined()
+	})
+
+	it('Stops a runaway gate at its allowance and reports it red instead of aborting the job', async () => {
+		const jobSignal = new AbortController()
+		let seen: AbortSignal | undefined
+		const { ports } = createPorts()
+		// Spends past the 2.25M allowance (25 % of 9M) in two samples, then keeps insisting it is fine
+		vi.mocked(ports.acceptanceTests).mockImplementation(async ({ signal, onUsage }) => {
+			seen = signal
+			onUsage({ inputTokens: 2_000_000, outputTokens: 0 })
+			onUsage({ inputTokens: 1_000_000, outputTokens: 0 })
+			return green('all criteria covered')
+		})
+		const result = await run(ports, {
+			...withBudget(9_000_000),
+			signal: jobSignal.signal,
+		}).outcome
+
+		expect(result.ok).toBe(false)
+		expect(result.failed).toEqual(['acceptance-tests'])
+		expect(result.exhausted).toBeUndefined()
+		const report = result.reports.at(-1)!
+		expect(report.summary).toBe('stopped at its token allowance (3.0M of 2.3M)')
+		expect(report.tokens).toBe(3_000_000)
+		// The gate's own signal was aborted; the job's was left alone
+		expect(seen?.aborted).toBe(true)
+		expect(jobSignal.signal.aborted).toBe(false)
+	})
+
+	it('Scales the guard rails down with the budget so a small job still runs its gates', async () => {
+		const { ports, calls } = createPorts()
+		const tiny = { budget: { ...gateBudgetFor(10_000), remaining: () => 10_000 } }
+		const result = await run(ports, tiny).outcome
+
+		expect(result.ok).toBe(true)
+		expect(calls).toEqual([...gateOrder])
+	})
+
+	it('Runs unmetered when no budget is supplied (gates-demo)', async () => {
+		const { ports, calls } = createPorts()
+		const result = await run(ports).outcome
+
+		expect(result.ok).toBe(true)
+		expect(result.exhausted).toBeUndefined()
+		expect(calls).toEqual([...gateOrder])
+	})
+})
+
+describe('gateBudgetFor', () => {
+	it('Uses the measured costs when the budget is large enough to carry them', () => {
+		expect(gateBudgetFor(9_000_000)).toEqual({
+			reserve: 250_000,
+			chainReserve: 1_400_000,
+			allowancePerGate: 2_250_000,
+		})
+	})
+
+	it('Clamps every rail to a share of a small budget', () => {
+		expect(gateBudgetFor(1_000_000)).toEqual({
+			reserve: 50_000,
+			chainReserve: 250_000,
+			allowancePerGate: 250_000,
+		})
 	})
 })
 

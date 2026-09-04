@@ -293,6 +293,21 @@ describe('runJob', () => {
 		expect(types().slice(-2)).toEqual(['failed', 'notify'])
 	})
 
+	it('Fails legibly when the build phase leaves too little behind for the gates (job d0339616)', async () => {
+		// 9M budget, tasks that spend 8.9M of it: the gate chain can never be paid for
+		const fake = createFakePorts({ taskTokens: 2_225_000 })
+		const { hooks, types } = createHooks()
+
+		const outcome = await runJob(job({ maxTokens: 9_000_000 }), { ports: fake.ports, hooks })
+
+		expect(outcome.status).toBe('failed')
+		expect(outcome.reason).toContain('budget exhausted before the acceptance-tests gate')
+		// Not an abort: the expensive gate never started, and the free one still reported
+		expect(fake.ports.acceptanceTests).not.toHaveBeenCalled()
+		expect(outcome.gates.map(gate => gate.name)).toEqual(['verify', 'acceptance-tests'])
+		expect(types().slice(-2)).toEqual(['failed', 'notify'])
+	})
+
 	it('Fails immediately when the planner alone exhausts the budget', async () => {
 		const fake = createFakePorts()
 		const { hooks } = createHooks()

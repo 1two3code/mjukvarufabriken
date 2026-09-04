@@ -1,6 +1,6 @@
 import { BudgetTracker } from './budget.ts'
 import { blockedBy, readyTasks, validateDag } from './dag.ts'
-import { failureNotification, gatesFailedReason, runGates } from './gates.ts'
+import { failureNotification, gateBudgetFor, gatesFailedReason, runGates } from './gates.ts'
 
 import type { Deliverable, GateReport, Plan, Task } from '@mf/models'
 import type { JobInput, JobOutcome, OnUsage, RunJobOptions } from './types.ts'
@@ -276,12 +276,23 @@ export const runJob = async (
 		ports,
 		emit: hooks.emit,
 		isAborted: () => budget.aborted,
+		budget: {
+			...gateBudgetFor(job.budget.maxTokens),
+			remaining: () => Math.max(0, job.budget.maxTokens - budget.used),
+		},
 		now,
 	})
 	gates.push(...gateRun.reports)
 	await persistTokens()
 	if (budget.aborted) return abortedOutcome(plan)
-	if (!gateRun.ok) return finish({ status: 'failed', plan, reason: gatesFailedReason(gates) })
+	if (!gateRun.ok) {
+		// A chain the job could not pay for is a budget verdict, not a quality one: say so on the
+		// job, so the reason distinguishes "this build is bad" from "this budget was too small".
+		const reason = gateRun.exhausted
+			? `budget exhausted before the ${gateRun.exhausted} gate — the build phase left too little behind\n${gatesFailedReason(gates)}`
+			: gatesFailedReason(gates)
+		return finish({ status: 'failed', plan, reason })
+	}
 
 	// MARK: Approval hold (W9) — an actual pre-delivery pause, not just a post-delivery label.
 	// Only a job whose order set `approveBeforeDeliver` AND that has somewhere to deliver holds
