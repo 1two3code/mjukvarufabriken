@@ -228,9 +228,9 @@ describe('runGates', () => {
 
 // MARK: Budget guard rails
 
-/** A job budget with `left` tokens still on it, guard rails scaled to a 9M S-class budget */
+/** A job budget with `left` tokens still on it, guard rails from the 9M S-class budget */
 const withBudget = (left: number) => ({
-	budget: { ...gateBudgetFor(9_000_000), remaining: () => left },
+	budget: { ...gateBudgetFor(9_000_000)!, remaining: () => left },
 })
 
 describe('runGates under a job budget', () => {
@@ -255,7 +255,7 @@ describe('runGates under a job budget', () => {
 
 	it('Prices only the gates still to come, so the floor shrinks as the chain advances', async () => {
 		const { ports, calls } = createPorts()
-		// A run-9-shaped chain: 1.7M up front, acceptance-tests takes 1.1M of it, review 250k
+		// A run-9-shaped chain: 1.7M left, acceptance-tests takes 1.1M of it, review 250k
 		let left = 1_700_000
 		// Replacing the implementation drops createPorts' recorder, so `calls` is pushed by hand
 		const spend = (port: 'acceptanceTests' | 'review', name: string, tokens: number) =>
@@ -268,7 +268,7 @@ describe('runGates under a job budget', () => {
 		spend('acceptanceTests', 'acceptance-tests', 1_100_000)
 		spend('review', 'review', 250_000)
 		const result = await run(ports, {
-			budget: { ...gateBudgetFor(9_000_000), remaining: () => left },
+			budget: { ...gateBudgetFor(9_000_000)!, remaining: () => left },
 		}).outcome
 
 		// review starts with 600k left — far under the 1.4M a whole chain needs, but its own
@@ -311,15 +311,6 @@ describe('runGates under a job budget', () => {
 		expect(jobSignal.signal.aborted).toBe(false)
 	})
 
-	it('Scales the guard rails down with the budget so a small job still runs its gates', async () => {
-		const { ports, calls } = createPorts()
-		const tiny = { budget: { ...gateBudgetFor(10_000), remaining: () => 10_000 } }
-		const result = await run(ports, tiny).outcome
-
-		expect(result.ok).toBe(true)
-		expect(calls).toEqual([...gateOrder])
-	})
-
 	it('Runs unmetered when no budget is supplied (gates-demo)', async () => {
 		const { ports, calls } = createPorts()
 		const result = await run(ports).outcome
@@ -331,20 +322,18 @@ describe('runGates under a job budget', () => {
 })
 
 describe('gateBudgetFor', () => {
-	it('Uses the measured costs when the budget is large enough to carry them', () => {
+	it('Rails every real size class against the measured costs', () => {
 		expect(gateBudgetFor(9_000_000)).toEqual({
 			reserve: 250_000,
 			chainReserve: 1_400_000,
 			allowancePerGate: 2_250_000,
 		})
+		expect(gateBudgetFor(40_000_000)).toMatchObject({ allowancePerGate: 10_000_000 })
 	})
 
-	it('Clamps every rail to a share of a small budget', () => {
-		expect(gateBudgetFor(1_000_000)).toEqual({
-			reserve: 50_000,
-			chainReserve: 250_000,
-			allowancePerGate: 250_000,
-		})
+	it('Leaves a budget too small for the measurements unrailed rather than extrapolating', () => {
+		expect(gateBudgetFor(5_999_999)).toBeUndefined()
+		expect(gateBudgetFor(2000)).toBeUndefined()
 	})
 })
 

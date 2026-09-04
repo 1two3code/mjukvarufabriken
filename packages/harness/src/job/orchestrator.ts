@@ -265,6 +265,7 @@ export const runJob = async (
 	}
 
 	// MARK: Gates — verify → acceptance-tests → review → acceptance-check, fail closed
+	const gateRails = gateBudgetFor(job.budget.maxTokens)
 	const gateRun = await runGates({
 		spec: job.spec,
 		plan,
@@ -276,10 +277,9 @@ export const runJob = async (
 		ports,
 		emit: hooks.emit,
 		isAborted: () => budget.aborted,
-		budget: {
-			...gateBudgetFor(job.budget.maxTokens),
-			remaining: () => Math.max(0, job.budget.maxTokens - budget.used),
-		},
+		...(gateRails && {
+			budget: { ...gateRails, remaining: () => Math.max(0, job.budget.maxTokens - budget.used) },
+		}),
 		now,
 	})
 	gates.push(...gateRun.reports)
