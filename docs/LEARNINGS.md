@@ -94,6 +94,65 @@ repair-session staging. **Graduated to:** sandbox/orchestrator fixes in
 
 <!-- New entries above the seed section, newest first. -->
 
+## 2026-09-03 — job d0339616 (Julkalender, S, auto-retry of 185c8eb5) — ran the S budget dry
+Gate C's automatic retry (see the entry below) ran clean where the first attempt didn't: all five
+tasks merged — including the SAME concurrent pairing that lost work to a git failure last time
+(`spa-editor` + `social-preview` this run, `app-editor` + `app-public-calendar` last run) — and
+`verify` (lint + test) passed green at 15:18:38. Nine minutes into the next gate (acceptance-tests,
+never got to report `ok` or `fail` — `acceptance.json` in the debug bundle is `{}`), the job was
+killed: `reason: "budget exceeded"`, `tokensUsed: 6,012,260` against the 6,000,000 S ceiling.
+
+- **Phase:** gate (acceptance-tests, inferred — cut off mid-session)
+- **Symptom:** `budget exceeded` with the app otherwise looking sound (repository fully merged,
+  lint + tests green). Because this run WAS the retry, Gate C's one-shot rule means nothing
+  restarts it automatically — the order needs a human decision (rebuild, or investigate first).
+- **Root cause, two contributing factors, neither ruled out:** (1) this spec's plan has 5 tasks
+  to Ögonblick's 4, and every worker session this run hit its own turn cap (`foundation` twice —
+  worker AND repair — plus `api-doors`, `spa-calendar`, `spa-editor`), where run 9's tasks mostly
+  finished under cap; more tasks + more turn-capped sessions is a real, budget-neutral-in-isolation
+  reason a 5-task S build can cost more than a 4-task one. (2) Hasse observed live `529 overloaded`
+  errors from Claude.ai in the same window this job ran — if the same overload reached the job's
+  own Anthropic calls, retried requests would inflate turns (and therefore tokens) without
+  inflating the amount of real work done, which is consistent with turn caps hitting on tasks that
+  didn't need repair last time. The job logs don't carry raw HTTP-retry counts, so this can't be
+  confirmed from here — flagging both rather than picking one.
+- **Graduated to:** OPEN. Two candidate fixes, not yet decided between: raise the S budget (cost:
+  every S build gets more expensive, defeats part of the point of the size ladder), or make the
+  acceptance-tests gate cheaper/abortable near a budget ceiling so a near-complete build doesn't
+  lose everything to the last gate. Needs a repeat run once Anthropic's status is normal before
+  concluding it's (1) alone — right now a rebuild risks paying for the same overload twice.
+
+## 2026-09-03 — job 185c8eb5 (Julkalender, S) — dogfood run 10, task lost its work to a git failure
+4.57 M budget-tokens (~USD 12, of the 6 M S budget) before failing. Three of four tasks merged
+clean (`foundation`, `api-doors`, `app-editor`); `app-public-calendar` — running in parallel with
+`app-editor` — wrote its real work (component, API-slice wiring, i18n strings, a passing test
+file, clean lint/prettier/stylelint) and then could not stage it.
+
+- **Phase:** worker (task `app-public-calendar`)
+- **Symptom:** `git status --porcelain` after the code was written and tests were green produced
+  nothing usable; the session spent its remaining ~15 turns diagnosing (`getfacl`, `stat`, `sudo -n`,
+  `touch` a test file in `.git`, `mount`, `git remote -v`) and ended by running `mv .git .git-orig`
+  — then ran out of turns (`error_max_turns`) with the branch never committed. The harness reports
+  this to the job as `task_failed: Claude Code process exited with code 1` (a max-turns exit maps
+  to that generic message, which reads like a crash rather than a stuck git session — worth fixing
+  in its own right so the next person doesn't have to read a transcript to find this).
+- **Root cause: OPEN, not yet reproduced live.** `app-editor` and `app-public-calendar` are the
+  first two tasks in this order's dependency graph to run genuinely concurrently at `maxWorkers: 2`
+  — every earlier defect involving worktree git permissions (`b6a5c09f`, 2026-08-27, the
+  `.git/index.lock` EACCES that `shareWithWorker`'s `chmod g+s` fixed) was found with one worker
+  at a time. Two candidate mechanisms, neither confirmed: (1) a race in `shareWithWorker`/
+  `protectGitDir` between the two tasks' worktree setup (both call `ensureShared` on the shared
+  main repo's `.git` at start), or (2) the same class of env-leak the 2026-08-30 incident fixed
+  in `exec.ts`, in a shape `sandboxEnv` doesn't strip. Needs a live repro (run two workers against
+  the same job image locally with `GIT_TRACE=1`) before it can graduate to a fix.
+- **What it cost:** nothing beyond the wasted 4.57 M tokens — Gate C's demo/S auto-retry (jobService
+  `retryFailedBuild`) started job `d0339616` unattended ~30 s after the failure was recorded and
+  mailed the admins once, holding the first-failure mail as designed. No manual restart needed.
+- **Graduated to:** OPEN — needs a live repro under two-worker concurrency before a fix lands.
+  Secondary, smaller OPEN item: `task_failed` should say `error_max_turns` rather than the generic
+  process-exit message when that is what actually happened, so the reason string itself points at
+  the right transcript.
+
 ## 2026-09-03 — job 86fe268f (Ögonblick, M) — run 9: green in one pass, gallery verified
 5.9 M budget-tokens (~USD 15). The first build to go green **in a single pass**: five gates
 (review: 0 findings), docs → secret scan → repo → deploy → browser live check → bundle, URL handed
