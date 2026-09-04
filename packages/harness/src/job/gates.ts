@@ -1,11 +1,10 @@
 import { gateName } from '@mf/models'
 
 import {
-	deliveryReserveShare,
 	deliveryReserveTokens,
 	gateAllowanceShare,
-	gateChainReserveShare,
 	gateChainReserveTokens,
+	gateGuardMinBudgetTokens,
 } from './budget.ts'
 import { tail } from './exec.ts'
 import { licenceGate } from './gates/licence.ts'
@@ -54,15 +53,18 @@ export type GateBudget = {
 }
 
 /**
- * The guard rails for one job's budget. Each is the measured absolute cost, clamped to a share of
- * this job's own budget so the guard scales down with it instead of locking a small job out of its
- * own gates.
+ * The guard rails for one job's budget, or `undefined` for a budget too small for the measured
+ * reserves to mean anything (`gateGuardMinBudgetTokens`) — such a job runs its gates unmetered,
+ * exactly as every job did before the reserves existed.
  */
-export const gateBudgetFor = (maxTokens: number): Omit<GateBudget, 'remaining'> => ({
-	reserve: Math.min(deliveryReserveTokens, maxTokens * deliveryReserveShare),
-	chainReserve: Math.min(gateChainReserveTokens, maxTokens * gateChainReserveShare),
-	allowancePerGate: maxTokens * gateAllowanceShare,
-})
+export const gateBudgetFor = (maxTokens: number): Omit<GateBudget, 'remaining'> | undefined =>
+	maxTokens < gateGuardMinBudgetTokens
+		? undefined
+		: {
+				reserve: deliveryReserveTokens,
+				chainReserve: gateChainReserveTokens,
+				allowancePerGate: maxTokens * gateAllowanceShare,
+			}
 
 export type RunGatesInput = Omit<GateInput, 'onUsage'> & {
 	ports: OrchestratorPorts

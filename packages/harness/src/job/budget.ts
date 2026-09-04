@@ -21,22 +21,20 @@ export type AbortReason = 'budget exceeded' | 'duration exceeded' | 'killed'
 export const gateChainReserveTokens = 1_400_000
 
 /**
- * Ceiling on the chain reserve as a share of the job's own budget. The absolute number above is
- * what the gates cost on a real job; without this clamp it would also make a deliberately small
- * job impossible — a 1M-token job would be refused its gates because a 9M-token job's chain does
- * not fit inside it.
- */
-export const gateChainReserveShare = 0.25
-
-/**
  * Held back from the gate chain so a green build always has enough left to actually deliver.
  * Merges plus the whole delivery (handover prose, repo, deploy, bundle) came to 93k on 86fe268f;
  * this is that with room to spare, and it is small next to any size class's budget.
  */
 export const deliveryReserveTokens = 250_000
 
-/** Ceiling on the delivery reserve as a share of the job's budget — see `gateChainReserveShare` */
-export const deliveryReserveShare = 0.05
+/**
+ * Smallest budget the two reserves above are allowed to speak about. They are measurements off
+ * 9M–15M jobs, and at 6M they already claim 28 % of the budget; applying them to a job an order of
+ * magnitude smaller extrapolates far outside the range they were taken from, and would refuse a
+ * toy job its gates on the strength of what a real one costs. Below this the gate chain runs
+ * unmetered, exactly as it did before the reserves existed — the smallest real budget is S at 9M.
+ */
+export const gateGuardMinBudgetTokens = 6_000_000
 
 /**
  * Ceiling on what a single gate may spend, as a share of the job's total budget. A runaway gate
