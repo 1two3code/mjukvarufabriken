@@ -182,6 +182,19 @@ export const budgetForSize: Record<SizeClass, JobBudget> = {
 }
 
 /**
+ * A failure the same budget cannot fix, matched on the orchestrator's two budget verdicts
+ * (`budget exceeded`, `budget exhausted before the <gate> gate`).
+ *
+ * Gate C's automatic rebuild reuses the failed attempt's own budget, so retrying one of these
+ * spends the whole ceiling again to arrive at the same wall. Run 10 did exactly that on
+ * 2026-09-03: job d0339616 rebuilt job 185c8eb5 and died at the identical limit, ~USD 12 for a
+ * foregone conclusion. Raising the ceiling automatically is not the fix either — the ceiling IS
+ * the spend control, so crossing it is a decision for a human, who gets paged instead.
+ */
+export const isBudgetFailure = (reason: string | null | undefined) =>
+	/^budget (exceeded|exhausted)\b/.test(reason?.trim() ?? '')
+
+/**
  * A voucher demo order (wave 14) builds on the S budget whatever its spec's size class: the
  * price is fixed at the demo tier, so the spend ceiling is too (≈ USD 15 against 500 kr).
  */
@@ -407,8 +420,13 @@ const plugin: FastifyPluginAsync = async app => {
 	 *
 	 * The class is the ORDER's rung first (a voucher demo retries whatever its spec was classified
 	 * as — it runs on the S budget anyway, see `budgetFor`), then the spec's size class.
+	 *
+	 * A job that ran out of BUDGET is never a candidate — see `isBudgetFailure`. `reason` defaults
+	 * to the row's, but the mail-hold in `reportEvents` runs before the container has written it,
+	 * so that caller passes the reason off the `failed` event in the same batch.
 	 */
-	const autoRetryCandidate = async (job: Job) => {
+	const autoRetryCandidate = async (job: Job, reason = job.reason) => {
+		if (isBudgetFailure(reason)) return false
 		const order = await db.orders.getOrder(job.orderId)
 		if (order?.kind !== 'demo' && (job.spec.sizeClass ?? 'S') !== 'S') return false
 		const events = await db.jobs.listEvents(job.id)
@@ -809,6 +827,11 @@ const plugin: FastifyPluginAsync = async app => {
 		}),
 		reportEvents: async (job, events) => {
 			const gateReports = parseGateReports(job, events)
+			// The container reports its terminal `failed` event in the same batch as the `notify`,
+			// and writes the row's own `reason` only afterwards (`reportUpdate`) — so the hold
+			// below has to read the reason from here to know a budget failure when it sees one.
+			const reported = events.find(event => event.type === 'failed')?.payload.reason
+			const failureReason = typeof reported === 'string' ? reported : job.reason
 			let lastEventId = 0
 			const gates: GateReport[] = []
 			for (const event of events) {
@@ -825,7 +848,10 @@ const plugin: FastifyPluginAsync = async app => {
 					// because every way the retry can then fail to happen pages instead:
 					// `retryFailedBuild` mails when it cannot create/launch the retry, and the
 					// liveness sweep mails for any job that dies without reporting.
-					if (event.payload.kind === 'job-failed' && (await autoRetryCandidate(job))) {
+					if (
+						event.payload.kind === 'job-failed' &&
+						(await autoRetryCandidate(job, failureReason))
+					) {
 						app.log.warn(
 							{ jobId: job.id },
 							'Holding the failure mail — the build will be auto-retried'
